@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "notifyme",
-    "slug": "notifyme",
+    "name": "The Notifier",
+    "slug": "thenotifier",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "notifyme",
+    "scheme": "thenotifier",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hapawillow.notifyme",
+      "bundleIdentifier": "com.hapawillow.thenotifier",
       "appleTeamId": "CW4NQJKB99"
     },
     "android": {
@@ -22,7 +22,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.hapawillow.notifyme"
+      "package": "com.hapawillow.thenotifier"
     },
     "web": {
       "output": "static",
@@ -54,14 +54,15 @@
           "channels": [
             {
               "id": "notifyme",
-              "name": "NotifyMe notifications",
+              "name": "The Notifier notifications",
               "importance": "high",
               "sound": "notifyme.wav"
             }
           ],
           "enableBackgroundRemoteNotifications": true
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -7,6 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { archiveScheduledNotifications, saveScheduledNotificationData } from '@/utils/database';
 import * as Crypto from 'expo-crypto';
 
 // Configure notification handler
@@ -138,13 +139,13 @@ export default function NotificationScreen() {
     const dateWithoutSeconds = new Date(selectedDate);
     dateWithoutSeconds.setSeconds(0, 0);
 
-    const notificationId = "notifyme-" + Crypto.randomUUID();
+    const notificationId = "thenotifier-" + Crypto.randomUUID();
     try {
 
       // Set notification channel
       if (Platform.OS === 'android') {
-        await Notifications.setNotificationChannelAsync('notifyme', {
-          name: 'NotifyMe notifications',
+        await Notifications.setNotificationChannelAsync('thenotifier', {
+          name: 'The Notifier notifications',
           importance: Notifications.AndroidImportance.HIGH,
           sound: 'notifyme.wav', // Provide ONLY the base filename
         });
@@ -157,14 +158,17 @@ export default function NotificationScreen() {
           body: shortMessage,
           data: { message: longMessage, link: link ? link : '' },
           vibrate: [0, 1000, 500, 1000],
-          sound: 'notifyme.wav',
+          sound: 'notifyme.wav'
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
           date: dateWithoutSeconds,
-          channelId: "notifyme"
+          channelId: "thenotifier"
         },
       });
+
+      await saveScheduledNotificationData(notificationId, 'Notification', shortMessage, longMessage, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString());
+      console.log('Notification data saved successfully');
 
       Alert.alert('Success', 'Notification scheduled successfully!');
       console.log('Notification scheduled with ID:', notificationId);
@@ -197,6 +201,13 @@ export default function NotificationScreen() {
       minute: '2-digit',
     });
   };
+
+  useEffect(() => {
+    // Check if we need to archive any scheduled notifications
+    (async () => {
+      await archiveScheduledNotifications();
+    })();
+  }, []);
 
   return (
     <KeyboardAvoidingView
