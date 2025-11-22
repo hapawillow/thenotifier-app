@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Animated, FlatList, StyleSheet, TouchableOpacity } from 'react-native';
+import { Alert, Animated, Dimensions, FlatList, RefreshControl, StyleSheet, TouchableOpacity } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -47,15 +47,26 @@ export default function HomeScreen() {
   const [archivedNotifications, setArchivedNotifications] = useState<ArchivedNotification[]>([]);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [animations] = useState<Map<number, Animated.Value>>(new Map());
+  const [refreshingScheduled, setRefreshingScheduled] = useState(false);
+  const [refreshingArchived, setRefreshingArchived] = useState(false);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
   const loadScheduledNotifications = async () => {
     try {
+      // Archive past notifications first
+      const { archiveScheduledNotifications } = await import('@/utils/database');
+      await archiveScheduledNotifications();
+      // Small delay to ensure database operations complete
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // Then load the updated list
       const data = await getAllScheduledNotificationData();
-      setScheduledNotifications(data);
+      // Filter out any past notifications that might still be in the database
+      const now = new Date().toISOString();
+      const futureNotifications = data.filter(item => item.scheduleDateTime > now);
+      setScheduledNotifications(futureNotifications);
       // Initialize animations for new items
-      data.forEach((item) => {
+      futureNotifications.forEach((item) => {
         if (!animations.has(item.id)) {
           animations.set(item.id, new Animated.Value(0));
         }
@@ -84,6 +95,18 @@ export default function HomeScreen() {
     await Promise.all([loadScheduledNotifications(), loadArchivedNotifications()]);
   };
 
+  const onRefreshScheduled = useCallback(async () => {
+    setRefreshingScheduled(true);
+    await loadScheduledNotifications();
+    setRefreshingScheduled(false);
+  }, []);
+
+  const onRefreshArchived = useCallback(async () => {
+    setRefreshingArchived(true);
+    await loadArchivedNotifications();
+    setRefreshingArchived(false);
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadAllNotifications();
@@ -93,7 +116,10 @@ export default function HomeScreen() {
   useEffect(() => {
     // Refresh when notifications are received
     const unsubscribe = Notifications.addNotificationReceivedListener(() => {
-      loadAllNotifications();
+      // Small delay to ensure database is updated
+      setTimeout(() => {
+        loadAllNotifications();
+      }, 100);
     });
     return () => {
       unsubscribe.remove();
@@ -378,34 +404,62 @@ export default function HomeScreen() {
       </ThemedView>
 
       {activeTab === 'scheduled' ? (
-        scheduledNotifications.length === 0 ? (
-          <ThemedView style={styles.emptyContainer}>
-            <ThemedText style={styles.emptyText}>
-              No scheduled notifications
-            </ThemedText>
-          </ThemedView>
-        ) : (
-          <FlatList
-            data={scheduledNotifications}
-            renderItem={renderScheduledNotificationItem}
-            keyExtractor={(item) => item.notificationId}
-            contentContainerStyle={styles.listContent}
-            showsVerticalScrollIndicator={false}
-          />
-        )
-      ) : archivedNotifications.length === 0 ? (
-        <ThemedView style={styles.emptyContainer}>
-          <ThemedText style={styles.emptyText}>
-            No archived notifications
-          </ThemedText>
-        </ThemedView>
+        <FlatList
+          data={scheduledNotifications}
+          renderItem={renderScheduledNotificationItem}
+          keyExtractor={(item) => item.notificationId}
+          contentContainerStyle={
+            scheduledNotifications.length === 0
+              ? styles.emptyListContent
+              : styles.listContent
+          }
+          showsVerticalScrollIndicator={false}
+          scrollEnabled={true}
+          alwaysBounceVertical={true}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshingScheduled}
+              onRefresh={onRefreshScheduled}
+              tintColor={colors.tint}
+              colors={[colors.tint]}
+            />
+          }
+          ListEmptyComponent={
+            <ThemedView style={styles.emptyContainer}>
+              <ThemedText style={styles.emptyText}>
+                No scheduled notifications
+              </ThemedText>
+            </ThemedView>
+          }
+        />
       ) : (
         <FlatList
           data={archivedNotifications}
           renderItem={renderArchivedNotificationItem}
           keyExtractor={(item) => item.notificationId}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={
+            archivedNotifications.length === 0
+              ? styles.emptyListContent
+              : styles.listContent
+          }
           showsVerticalScrollIndicator={false}
+          scrollEnabled={true}
+          alwaysBounceVertical={true}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshingArchived}
+              onRefresh={onRefreshArchived}
+              tintColor={colors.tint}
+              colors={[colors.tint]}
+            />
+          }
+          ListEmptyComponent={
+            <ThemedView style={styles.emptyContainer}>
+              <ThemedText style={styles.emptyText}>
+                No archived notifications
+              </ThemedText>
+            </ThemedView>
+          }
         />
       )}
     </ThemedView>
@@ -441,6 +495,14 @@ const styles = StyleSheet.create({
   listContent: {
     padding: 20,
     paddingTop: 0,
+    flexGrow: 1,
+  },
+  emptyListContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    minHeight: Dimensions.get('window').height - 200, // Ensure enough height for pull-to-refresh
   },
   notificationItem: {
     marginBottom: 12,

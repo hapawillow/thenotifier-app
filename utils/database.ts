@@ -175,6 +175,9 @@ export const archiveScheduledNotifications = async () => {
   try {
     const db = await openDatabase();
     await initDatabase();
+    // Get current time in ISO format for comparison
+    const now = new Date().toISOString();
+    // Archive notifications that have passed (scheduleDateTime < now)
     await db.execAsync(`INSERT OR REPLACE INTO archivedNotification (notificationId, title, shortMessage, longMessage, link, scheduleDateTime, scheduleDateTimeLocal, createdAt, updatedAt) 
       SELECT
         notificationId,
@@ -187,9 +190,10 @@ export const archiveScheduledNotifications = async () => {
         createdAt,
         updatedAt
       FROM scheduledNotification
-      WHERE scheduleDateTime > CURRENT_TIMESTAMP;`);
+      WHERE scheduleDateTime < '${now}';`);
     console.log('Archived scheduled notification data successfully');
-    await db.execAsync(`DELETE FROM scheduledNotification WHERE scheduleDateTime < CURRENT_TIMESTAMP;`);
+    // Delete past notifications from scheduled table
+    await db.execAsync(`DELETE FROM scheduledNotification WHERE scheduleDateTime < '${now}';`);
     console.log('Deleted scheduled notification data successfully');
   } catch (error: any) {
     console.error('Failed to archive scheduled notification data:', error);
