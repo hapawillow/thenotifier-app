@@ -11,7 +11,10 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.hapawillow.thenotifier",
-      "appleTeamId": "CW4NQJKB99"
+      "appleTeamId": "CW4NQJKB99",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "This app needs access to your calendar to display events and schedule notifications."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -62,7 +65,13 @@
           "enableBackgroundRemoteNotifications": true
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "This app needs access to your calendar to display events and schedule notifications."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

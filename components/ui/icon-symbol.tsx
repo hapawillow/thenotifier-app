@@ -23,6 +23,7 @@ const MAPPING = {
   'chevron.up': 'keyboard-arrow-up',
   'pencil': 'edit',
   'trash': 'delete',
+  'calendar': 'calendar-today',
 } as IconMapping;
 
 /**

@@ -260,21 +260,23 @@ export default function HomeScreen() {
             )}
 
             <ThemedView style={styles.actionButtons}>
+
               <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: colors.tint }]}
+                style={[styles.actionButton, { backgroundColor: '#bf3f2f' }]}
+                onPress={() => handleDelete(item)}
+                activeOpacity={0.7}>
+                <IconSymbol name="trash" size={20} color="#fff" />
+                <ThemedText style={styles.actionButtonText}>Delete</ThemedText>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionButton, { backgroundColor: '#59af6d' }]}
                 onPress={() => handleEdit(item)}
                 activeOpacity={0.7}>
                 <IconSymbol name="pencil" size={20} color="#fff" />
                 <ThemedText style={styles.actionButtonText}>Edit</ThemedText>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: '#d32f2f' }]}
-                onPress={() => handleDelete(item)}
-                activeOpacity={0.7}>
-                <IconSymbol name="trash" size={20} color="#fff" />
-                <ThemedText style={styles.actionButtonText}>Delete</ThemedText>
-              </TouchableOpacity>
             </ThemedView>
           </ThemedView>
         </Animated.View>
@@ -471,9 +473,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
+    marginTop: 60,
+    marginBottom: 30,
     padding: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
+    // paddingTop: 10,
+    // paddingBottom: 20,
   },
   tabContainer: {
     flexDirection: 'row',
@@ -563,6 +567,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+    textAlign: 'center',
   },
   emptyContainer: {
     flex: 1,
