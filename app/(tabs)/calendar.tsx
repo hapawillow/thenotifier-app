@@ -1,5 +1,6 @@
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as Calendar from 'expo-calendar';
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Animated, FlatList, Platform, StyleSheet, Switch, TouchableOpacity } from 'react-native';
 
@@ -11,6 +12,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 
 type CalendarEvent = {
   id: string;
+  originalEventId: string; // Store the original event ID from the calendar system
   calendarId: string;
   calendarName: string;
   title: string;
@@ -29,6 +31,8 @@ export default function CalendarScreen() {
   const [hiddenEventIds, setHiddenEventIds] = useState<Set<string>>(new Set());
   const [showCalendarSelection, setShowCalendarSelection] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<'undetermined' | 'granted' | 'denied'>('undetermined');
+  const router = useRouter();
+  const navigation = useNavigation();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
@@ -238,6 +242,7 @@ export default function CalendarScreen() {
 
             allEvents.push({
               id: uniqueId,
+              originalEventId: eventId || '', // Store original event ID for opening in calendar app
               calendarId: calendarId,
               calendarName: calendarName,
               title: titleStr,
@@ -323,8 +328,30 @@ export default function CalendarScreen() {
     setHiddenEventIds(newHidden);
   };
 
-  const handleScheduleNotification = () => {
-    Alert.alert('Coming Soon', 'This feature is coming soon');
+  const handleScheduleNotification = (event: CalendarEvent) => {
+    // Store event details in a custom URL format that we can parse later
+    // Format: thenotifier://calendar-event?eventId={eventId}&calendarId={calendarId}&startDate={startDate}
+    // This allows us to retrieve the event and open it properly in the native calendar app
+    const calendarLink = `thenotifier://calendar-event?eventId=${encodeURIComponent(event.originalEventId)}&calendarId=${encodeURIComponent(event.calendarId)}&startDate=${encodeURIComponent(event.startDate.toISOString())}`;
+
+    // Navigate to the Schedule Notification screen with pre-populated data
+    // Try using React Navigation's navigate method for tab navigation
+    const params = {
+      date: event.startDate.toISOString(),
+      shortMessage: event.title,
+      longMessage: event.description || '',
+      link: calendarLink,
+    };
+
+    // Try navigating using React Navigation's navigate method
+    // The screen name should match the tab name in _layout.tsx
+    try {
+      (navigation as any).navigate('index', params);
+    } catch (error) {
+      // Fallback: use router with href string
+      const queryParams = new URLSearchParams(params);
+      router.push(`/(tabs)/index?${queryParams.toString()}` as any);
+    }
   };
 
   const formatDateTime = (date: Date) => {
@@ -422,7 +449,7 @@ export default function CalendarScreen() {
 
               <TouchableOpacity
                 style={[styles.actionButton, { backgroundColor: '#499f5d' }]}
-                onPress={handleScheduleNotification}
+                onPress={() => handleScheduleNotification(item)}
                 activeOpacity={0.7}>
                 <ThemedText style={styles.actionButtonText}>Schedule Notification</ThemedText>
               </TouchableOpacity>

@@ -1,5 +1,6 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Notifications from 'expo-notifications';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Dimensions, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
 
@@ -21,13 +22,23 @@ Notifications.setNotificationHandler({
 });
 
 export default function NotificationScreen() {
-  const [shortMessage, setShortMessage] = useState('');
-  const [longMessage, setLongMessage] = useState('');
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const params = useLocalSearchParams<{
+    date?: string;
+    shortMessage?: string;
+    longMessage?: string;
+    link?: string;
+  }>();
+
+  // Initialize state from params if available
+  const [shortMessage, setShortMessage] = useState(params.shortMessage || '');
+  const [longMessage, setLongMessage] = useState(params.longMessage || '');
+  const [selectedDate, setSelectedDate] = useState(
+    params.date ? new Date(params.date) : new Date()
+  );
   const [showDatePicker, setShowDatePicker] = useState(false);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
-  const [link, setLink] = useState('');
+  const [link, setLink] = useState(params.link || '');
   const scrollViewRef = useRef<ScrollView>(null);
   const linkInputRef = useRef<TextInput>(null);
   const scheduleButtonRef = useRef<any>(null);
@@ -45,6 +56,22 @@ export default function NotificationScreen() {
       }
     })();
   }, []);
+
+  // Update fields when params change (e.g., when navigating from calendar)
+  useEffect(() => {
+    if (params.date) {
+      setSelectedDate(new Date(params.date));
+    }
+    if (params.shortMessage) {
+      setShortMessage(params.shortMessage);
+    }
+    if (params.longMessage) {
+      setLongMessage(params.longMessage);
+    }
+    if (params.link) {
+      setLink(params.link);
+    }
+  }, [params.date, params.shortMessage, params.longMessage, params.link]);
 
   // Helper function to scroll to show the button above keyboard
   const scrollToShowButton = (keyboardHeight: number) => {
