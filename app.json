@@ -13,7 +13,8 @@
       "bundleIdentifier": "com.hapawillow.thenotifier",
       "appleTeamId": "CW4NQJKB99",
       "infoPlist": {
-        "NSCalendarsUsageDescription": "This app needs access to your calendar to display events and schedule notifications."
+        "NSCalendarsUsageDescription": "This app needs access to your calendar to display events and schedule notifications.",
+        "NSAlarmKitUsageDescription": "This app needs access to schedule alarms so you can be notified at specific times."
       }
     },
     "android": {

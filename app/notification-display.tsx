@@ -1,16 +1,21 @@
-import * as Calendar from 'expo-calendar';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import * as Calendar from 'expo-calendar';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Alert, Linking, Platform, StyleSheet, TouchableOpacity } from 'react-native';
 
 export default function NotificationDisplayScreen() {
+
+  console.log('NotificationDisplayScreen');
+
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
   const { message, link } = useLocalSearchParams<{ message: string, link: string }>();
+  console.log('message', message);
+  console.log('link', link);
 
   const handleOpenLink = async () => {
     if (!link) return;
@@ -50,7 +55,7 @@ export default function NotificationDisplayScreen() {
                 // Fallback: try to get the event and show details
                 const startDate = startDateStr ? new Date(startDateStr) : new Date();
                 const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000); // Add 1 day
-                
+
                 const events = await Calendar.getEventsAsync(
                   [calendarId],
                   new Date(startDate.getTime() - 7 * 24 * 60 * 60 * 1000), // 7 days before

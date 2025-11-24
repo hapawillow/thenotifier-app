@@ -1,7 +1,12 @@
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
 # dependencies
-node_modules/
+/node_modules/*
+
+# Keep mods made to rn-native-alarmkit
+!/node_modules/rn-native-alarmkit/
+!/node_modules/rn-native-alarmkit/ios/
+!/node_modules/rn-native-alarmkit/ios/AlarmKitManager.swift
 
 # Expo
 .expo/
@@ -39,5 +44,16 @@ yarn-error.*
 app-example
 
 # generated native folders
-/ios
-/android
+/ios/*
+/android/*
+
+# Keep mods to info.plist and AndroidManifest.xml
+# Un-ignore parent directories first, then the specific files
+# !/ios/
+!/ios/TheNotifier/
+!/ios/TheNotifier/Info.plist
+!/android/
+!/android/app/
+!/android/app/src/
+!/android/app/src/main/
+!/android/app/src/main/AndroidManifest.xml

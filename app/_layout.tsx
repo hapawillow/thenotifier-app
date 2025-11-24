@@ -8,6 +8,7 @@ import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef } from 'react';
+import { AppState, InteractionManager } from 'react-native';
 import 'react-native-reanimated';
 
 // Keep the splash screen visible while we fetch resources
@@ -41,6 +42,7 @@ export default function RootLayout() {
     console.log('handleNotificationNavigation: Notification received:', notification);
     console.log('handleNotificationNavigation: Action identifier:', actionIdentifier);
     console.log('handleNotificationNavigation: Notification ID:', notificationId);
+    console.log('handleNotificationNavigation: App state:', AppState.currentState);
 
     // Skip if we've already handled this notification
     if (handledNotificationsRef.current.has(notificationId)) {
@@ -64,60 +66,110 @@ export default function RootLayout() {
         try {
           await updateArchivedNotificationData(notificationId);
           console.log('handleNotificationNavigation: Archived notification data updated successfully');
-          // const result = await getArchivedNotificationData(notificationId);
-          // console.log('handleNotificationNavigation: Updated archived notification data:', result);
         } catch (e) {
           console.error('handleNotificationNavigation: Failed to update archived notification data:', e);
         }
 
-        // Small delay to ensure navigation is ready
-        setTimeout(() => {
-          router.push({
-            pathname: '/notification-display',
-            params: { message: data.message as string, link: data.link as string },
-          });
-        }, 100);
+        // Wait for app to be active and interactions to complete before navigating
+        const navigateToNotification = () => {
+          try {
+            // Use replace to ensure it shows even when coming from background
+            router.replace({
+              pathname: '/notification-display',
+              params: {
+                message: data.message as string,
+                link: (data.link as string) || ''
+              },
+            });
+            console.log('handleNotificationNavigation: Navigation triggered with replace');
+          } catch (error) {
+            console.error('handleNotificationNavigation: Navigation error:', error);
+            // Fallback: try push
+            try {
+              router.push({
+                pathname: '/notification-display',
+                params: {
+                  message: data.message as string,
+                  link: (data.link as string) || ''
+                },
+              });
+              console.log('handleNotificationNavigation: Navigation triggered with push (fallback)');
+            } catch (pushError) {
+              console.error('handleNotificationNavigation: Push navigation also failed:', pushError);
+            }
+          }
+        };
+
+        // Wait for interactions to complete and navigate
+        InteractionManager.runAfterInteractions(() => {
+          setTimeout(navigateToNotification, 200);
+        });
       }
     }
   }, [router]);
 
-  // Check if app was opened from a notification (cold start)
+  // Check if app was opened from a notification (cold start or background)
   useEffect(() => {
+    console.log('=== useEffect: lastNotificationResponse changed ===');
+    console.log('lastNotificationResponse:', lastNotificationResponse);
+    console.log('Current app state:', AppState.currentState);
+
     if (lastNotificationResponse) {
       const { notification, actionIdentifier } = lastNotificationResponse;
       const notificationId = notification.request.identifier;
-
-      // handleNotificationNavigation(notification, actionIdentifier);
+      console.log('=== LAST NOTIFICATION RESPONSE DETECTED ===');
+      console.log('Notification ID:', notificationId);
+      console.log('Action identifier:', actionIdentifier);
+      console.log('Notification data:', notification.request.content.data);
+      console.log('Already handled?', handledNotificationsRef.current.has(notificationId));
 
       // Only process if we haven't already handled this notification
       if (!handledNotificationsRef.current.has(notificationId)) {
-        handleNotificationNavigation(notification, actionIdentifier);
+        console.log('Processing lastNotificationResponse - calling handleNotificationNavigation');
+        // Add a small delay to ensure app is ready
+        setTimeout(() => {
+          handleNotificationNavigation(notification, actionIdentifier);
+        }, 100);
+      } else {
+        console.log('LastNotificationResponse already handled, skipping');
       }
 
     }
   }, [lastNotificationResponse, handleNotificationNavigation]);
 
   useEffect(() => {
-    // Handle notification taps (when app is running)
+    console.log('Setting up notification response listener...');
+    // Handle notification taps (when app is running or in background)
+    // This listener should fire when app is in foreground
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
+      console.log('=== NOTIFICATION RESPONSE RECEIVED (listener) ===');
+      console.log('Response:', JSON.stringify(response, null, 2));
       const { notification, actionIdentifier } = response;
       const notificationId = notification.request.identifier;
-
-      // handleNotificationNavigation(notification, actionIdentifier);
+      console.log('Notification ID:', notificationId);
+      console.log('Action identifier:', actionIdentifier);
+      console.log('App state:', AppState.currentState);
+      console.log('Notification data:', notification.request.content.data);
 
       // Only process if we haven't already handled this notification
       if (!handledNotificationsRef.current.has(notificationId)) {
+        console.log('Processing notification from listener - calling handleNotificationNavigation');
         handleNotificationNavigation(notification, actionIdentifier);
+      } else {
+        console.log('Notification already handled, skipping');
       }
-
     });
+    console.log('Notification response listener set up, listener ref:', responseListener.current);
 
     return () => {
+      console.log('Cleaning up notification response listener');
       if (responseListener.current) {
         responseListener.current.remove();
+        responseListener.current = null;
       }
     };
   }, [handleNotificationNavigation]);
+
 
   useEffect(() => {
     const init = async () => {

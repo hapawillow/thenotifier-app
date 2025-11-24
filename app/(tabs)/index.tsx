@@ -2,7 +2,8 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Notifications from 'expo-notifications';
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Dimensions, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
+import { Alert, Dimensions, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
+import { NativeAlarmManager } from 'rn-native-alarmkit';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -13,12 +14,17 @@ import * as Crypto from 'expo-crypto';
 
 // Configure notification handler
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notification) => {
+    // When notification is received while app is in foreground,
+    // we still want to show it and allow user to interact with it
+    return {
+      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 export default function NotificationScreen() {
@@ -39,6 +45,8 @@ export default function NotificationScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const [link, setLink] = useState(params.link || '');
+  const [scheduleAlarm, setScheduleAlarm] = useState(false);
+  const [alarmSupported, setAlarmSupported] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
   const linkInputRef = useRef<TextInput>(null);
   const scheduleButtonRef = useRef<any>(null);
@@ -53,6 +61,24 @@ export default function NotificationScreen() {
       const { status } = await Notifications.requestPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Required', 'Please enable notifications in your device settings.');
+      }
+
+      // Check if alarm module is available (don't request permission yet - wait for user action)
+      try {
+        const capability = await NativeAlarmManager.checkCapability();
+        console.log('Alarm capability check:', capability);
+
+        if (capability.capability !== 'none') {
+          setAlarmSupported(true);
+          // Don't request permission here - wait until user actually tries to schedule an alarm
+          // This ensures the permission dialog appears at the right time
+        } else {
+          setAlarmSupported(false);
+          console.log('Alarms are not supported on this device');
+        }
+      } catch (error) {
+        console.error('Alarm module error:', error);
+        setAlarmSupported(false);
       }
     })();
   }, []);
@@ -178,12 +204,20 @@ export default function NotificationScreen() {
         });
       }
 
+      // Create deep link URL for notification tap (works when app is backgrounded)
+      const deepLinkUrl = `thenotifier://notification?message=${encodeURIComponent(longMessage)}&link=${encodeURIComponent(link || '')}`;
+
       await Notifications.scheduleNotificationAsync({
         identifier: notificationId,
         content: {
           title: 'Notification',
           body: shortMessage,
-          data: { message: longMessage, link: link ? link : '' },
+          data: {
+            message: longMessage,
+            link: link ? link : '',
+            // Add deep link URL for background notification taps
+            url: deepLinkUrl
+          },
           vibrate: [0, 1000, 500, 1000],
           sound: 'notifyme.wav'
         },
@@ -197,6 +231,145 @@ export default function NotificationScreen() {
       await saveScheduledNotificationData(notificationId, 'Notification', shortMessage, longMessage, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString());
       console.log('Notification data saved successfully');
 
+      // Schedule alarm if enabled
+      if (scheduleAlarm && alarmSupported) {
+        try {
+          // Check capability before scheduling
+          const capability = await NativeAlarmManager.checkCapability();
+          console.log('Alarm capability before scheduling:', capability);
+
+          // Check authorization status
+          let authStatus = capability.platformDetails?.alarmKitAuthStatus;
+          console.log('AlarmKit auth status:', authStatus);
+
+          // Request permission if needed
+          if (capability.requiresPermission) {
+            // If permission is not determined, try to request it
+            if (authStatus === 'notDetermined' && capability.canRequestPermission) {
+              try {
+                console.log('Requesting alarm permission...');
+                const granted = await NativeAlarmManager.requestPermission();
+                console.log('Alarm permission granted:', granted);
+
+                if (!granted) {
+                  // Permission was denied by user
+                  Alert.alert(
+                    'Alarm Permission Denied',
+                    'Alarm permission was denied. To schedule alarms, please grant permission when prompted. You may need to delete and reinstall the app to be prompted again.',
+                    [{ text: 'OK' }]
+                  );
+                  return; // Don't schedule alarm if permission denied
+                }
+
+                // Re-check capability after permission request to verify it's authorized
+                const postRequestCapability = await NativeAlarmManager.checkCapability();
+                const postRequestAuthStatus = postRequestCapability.platformDetails?.alarmKitAuthStatus;
+                console.log('Updated auth status after permission request:', postRequestAuthStatus);
+
+                if (postRequestAuthStatus !== 'authorized') {
+                  Alert.alert(
+                    'Alarm Permission Not Granted',
+                    'Alarm permission was not granted. Please try again or delete and reinstall the app to be prompted again.',
+                    [{ text: 'OK' }]
+                  );
+                  return;
+                }
+
+                // Make sure to update the auth status to the new value
+                authStatus = postRequestAuthStatus;
+              } catch (permissionError) {
+                console.error('Failed to request alarm permission:', permissionError);
+                const errorMsg = permissionError instanceof Error ? permissionError.message : String(permissionError);
+
+                // If permission request fails, check if it's because permission was already denied
+                const errorCheckCapability = await NativeAlarmManager.checkCapability();
+                const errorCheckAuthStatus = errorCheckCapability.platformDetails?.alarmKitAuthStatus;
+
+                if (errorCheckAuthStatus === 'denied') {
+                  Alert.alert(
+                    'Alarm Permission Denied',
+                    'Alarm permission was denied. To schedule alarms, please delete and reinstall the app to be prompted for permission again.',
+                    [{ text: 'OK' }]
+                  );
+                  return;
+                } else {
+                  // Permission request failed for another reason - show the error
+                  Alert.alert(
+                    'Alarm Permission Error',
+                    `Unable to request alarm permission: ${errorMsg}\n\nThis may be a system issue. Please try again or restart the app.`,
+                    [{ text: 'OK' }]
+                  );
+                  return;
+                }
+              }
+            } else if (authStatus === 'denied') {
+              // Permission was previously denied
+              Alert.alert(
+                'Alarm Permission Denied',
+                'Alarm permission was previously denied. To schedule alarms, please delete and reinstall the app to be prompted for permission again.',
+                [{ text: 'OK' }]
+              );
+              return;
+            } else if (authStatus !== 'authorized') {
+              // Permission status is unknown or not authorized
+              Alert.alert(
+                'Alarm Permission Required',
+                'Alarm permission is required but not granted. Please try scheduling again to be prompted for permission.',
+                [{ text: 'OK' }]
+              );
+              return;
+            }
+
+            // Only proceed if permission is authorized
+            if (authStatus !== 'authorized') {
+              console.log('Alarm permission not authorized, cannot schedule');
+              return;
+            }
+          }
+
+          // Extract hour and minutes from the selected date
+          const hour = dateWithoutSeconds.getHours();
+          const minutes = dateWithoutSeconds.getMinutes();
+
+          // Use 'fixed' type for one-time alarm with specific date and time
+          const alarmId = `alarm-${notificationId}`;
+
+          await NativeAlarmManager.scheduleAlarm(
+            {
+              id: alarmId,
+              type: 'fixed',
+              date: dateWithoutSeconds,
+              time: {
+                hour: hour,
+                minute: minutes,
+              },
+            },
+            {
+              title: shortMessage,
+              body: longMessage || shortMessage,
+              sound: 'default',
+              category: 'notifications',
+            }
+          );
+          console.log('Alarm scheduled successfully for:', dateWithoutSeconds);
+        } catch (error) {
+          console.error('Failed to schedule alarm:', error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+
+          // AlarmKit permissions don't appear in Settings - they're handled by system dialogs
+          // If permission was denied, the system dialog should have appeared
+          if (errorMessage.includes('permission') || errorMessage.includes('Permission') || errorMessage.includes('authorization')) {
+            Alert.alert(
+              'Alarm Permission Required',
+              'Unable to schedule alarm. AlarmKit requires permission to schedule alarms. If you denied the permission dialog, you may need to delete and reinstall the app to be prompted again, or the system may prompt you when you try to schedule an alarm.',
+              [{ text: 'OK' }]
+            );
+          } else {
+            Alert.alert('Warning', `Notification scheduled, but failed to schedule alarm: ${errorMessage}`);
+          }
+        }
+      }
+
       Alert.alert('Success', 'Notification scheduled successfully!');
       console.log('Notification scheduled with ID:', notificationId);
       console.log('Notification short message:', shortMessage);
@@ -207,6 +380,7 @@ export default function NotificationScreen() {
       setLongMessage('');
       setLink('');
       setSelectedDate(new Date());
+      setScheduleAlarm(false);
 
     } catch (error) {
       Alert.alert('Error', 'Failed to schedule notification');
@@ -365,6 +539,23 @@ export default function NotificationScreen() {
               />
             </ThemedView>
 
+            {alarmSupported && (
+              <ThemedView style={styles.inputGroup}>
+                <ThemedView style={styles.switchContainer}>
+                  <ThemedText type="subtitle">Also Set System Alarm</ThemedText>
+                  <Switch
+                    value={scheduleAlarm}
+                    onValueChange={setScheduleAlarm}
+                    trackColor={{ false: colors.icon + '40', true: colors.tint + '80' }}
+                    thumbColor={scheduleAlarm ? colors.tint : colors.icon}
+                  />
+                </ThemedView>
+                <ThemedText style={[styles.switchDescription, { color: colors.icon }]}>
+                  Schedule a system alarm using the same date, time, and title. Works on both iOS (AlarmKit) and Android (AlarmManager).
+                </ThemedText>
+              </ThemedView>
+            )}
+
             <TouchableOpacity
               ref={scheduleButtonRef}
               style={[styles.button, { backgroundColor: colors.tint }]}
@@ -435,5 +626,15 @@ const styles = StyleSheet.create({
     color: '#605678',
     fontSize: 16,
     fontWeight: '600',
+  },
+  switchContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  switchDescription: {
+    fontSize: 12,
+    marginTop: 4,
+    fontStyle: 'italic',
   },
 });
