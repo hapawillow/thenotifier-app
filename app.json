@@ -53,7 +53,6 @@
           "color": "#ffffff",
           "vibrate": false,
           "sounds": [
-            "./assets/sounds/notifyme.wav",
             "./assets/sounds/thenotifier.wav"
           ],
           "channels": [
