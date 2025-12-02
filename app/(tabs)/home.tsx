@@ -367,7 +367,7 @@ export default function HomeScreen() {
   return (
     <ThemedView style={styles.container}>
       <ThemedView style={styles.header}>
-        <ThemedText type="title">Notifications</ThemedText>
+        {/* <ThemedText type="title">Notifications</ThemedText> */}
       </ThemedView>
 
       <ThemedView style={[styles.tabContainer, { borderBottomColor: colors.icon + '40' }]}>
@@ -474,10 +474,8 @@ const styles = StyleSheet.create({
   },
   header: {
     marginTop: 60,
-    marginBottom: 30,
+    // marginBottom: 30,
     padding: 20,
-    // paddingTop: 10,
-    // paddingBottom: 20,
   },
   tabContainer: {
     flexDirection: 'row',

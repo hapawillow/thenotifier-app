@@ -499,7 +499,7 @@ export default function CalendarScreen() {
     return (
       <ThemedView style={styles.container}>
         <ThemedView style={styles.header}>
-          <ThemedText type="title">Calendar Events</ThemedText>
+          {/* <ThemedText type="title">Calendar Events</ThemedText> */}
         </ThemedView>
         <ThemedView style={styles.emptyContainer}>
           <ThemedText style={styles.emptyText}>(Permission denied)</ThemedText>
@@ -517,22 +517,22 @@ export default function CalendarScreen() {
   return (
     <ThemedView style={styles.container}>
       <ThemedView style={styles.header}>
-        <ThemedText type="title">Calendar Events</ThemedText>
+        {/* <ThemedText type="title">Calendar Events</ThemedText> */}
         <TouchableOpacity
           style={[styles.calendarButton]}
           onPress={() => setShowCalendarSelection(!showCalendarSelection)}
           activeOpacity={0.7}>
           <ThemedText style={styles.calendarButtonText}>
-            {showCalendarSelection ? 'Hide Calendars' : 'Select Calendars'}
+            {showCalendarSelection ? 'Hide Calendar List' : 'Select Calendars'}
           </ThemedText>
         </TouchableOpacity>
       </ThemedView>
 
       {showCalendarSelection && (
         <ThemedView style={[styles.calendarSelection, { borderBottomColor: colors.icon + '40' }]}>
-          <ThemedText type="subtitle" style={styles.calendarSelectionTitle}>
+          {/* <ThemedText type="subtitle" style={styles.calendarSelectionTitle}>
             Select Calendars:
-          </ThemedText>
+          </ThemedText> */}
           <FlatList
             data={calendars}
             keyExtractor={(item) => item.id}
@@ -608,20 +608,24 @@ const styles = StyleSheet.create({
   calendarSelection: {
     padding: 20,
     borderBottomWidth: 1,
-    maxHeight: 300,
+    // maxHeight: 300,
+    backgroundColor: '#070700',
   },
   calendarSelectionTitle: {
     marginBottom: 12,
   },
   calendarList: {
-    maxHeight: 200,
+    backgroundColor: '#070700',
+    // maxHeight: 200,
   },
   calendarItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 12,
-    borderBottomWidth: 1,
+    // borderBottomWidth: 1,
+    backgroundColor: '#070700',
+
   },
   calendarItemText: {
     fontSize: 18,

@@ -219,6 +219,8 @@ export default function NotificationScreen() {
     dateWithoutSeconds.setSeconds(0, 0);
 
     const notificationId = "thenotifier-" + Crypto.randomUUID();
+    const notificationTitle = title || 'Personal';
+
     try {
 
       // Set notification channel
@@ -237,7 +239,7 @@ export default function NotificationScreen() {
       console.log('=== SCHEDULE NOTIFICATION ASYNC ===');
 
       let notificationContent: Notifications.NotificationContentInput = {
-        title: title,
+        title: notificationTitle,
         body: message,
         data: {
           title: title,
@@ -263,7 +265,7 @@ export default function NotificationScreen() {
         },
       });
 
-      await saveScheduledNotificationData(notificationId, title, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString());
+      await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString());
       console.log('Notification data saved successfully');
 
       // Schedule alarm if enabled
@@ -424,7 +426,7 @@ export default function NotificationScreen() {
       Alert.alert('Success', 'Notification scheduled successfully!');
       console.log('Notification scheduled with ID:', notificationId);
       console.log('Notification selected date:', dateWithoutSeconds);
-      console.log('Notification title:', title);
+      console.log('Notification title:', notificationTitle);
       console.log('Notification message:', message);
       console.log('Notification note:', note);
       console.log('Notification link:', link);
@@ -433,7 +435,7 @@ export default function NotificationScreen() {
       console.error(error);
       console.error('Failed to schedule notification with ID:', notificationId);
       console.error('Failed selected date:', dateWithoutSeconds);
-      console.error('Failed title:', title);
+      console.error('Failed title:', notificationTitle);
       console.error('Failed message:', message);
       console.error('Failed note:', note);
       console.error('Failed link:', link);
@@ -460,6 +462,10 @@ export default function NotificationScreen() {
 
   return (
     <ThemedView style={styles.container}>
+      <ThemedView style={styles.header}>
+        {/* <ThemedText type="title">Schedule Notification</ThemedText> */}
+      </ThemedView>
+
       <KeyboardAwareScrollView
         ref={scrollViewRef}
         style={styles.scrollView}
@@ -476,9 +482,6 @@ export default function NotificationScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             scrollEventThrottle={16}>
-            <ThemedView style={styles.header}>
-              <ThemedText type="title">Schedule Notification</ThemedText>
-            </ThemedView>
 
             <ThemedView
               style={styles.form}
@@ -642,12 +645,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    padding: 20,
+    padding: 10,
     // paddingBottom: 400, // Extra padding to ensure link input has space above keyboard
   },
   header: {
-    marginBottom: 30,
+    // marginBottom: 30,
     marginTop: 60,
+    padding: 20,
   },
   form: {
     gap: 20,
