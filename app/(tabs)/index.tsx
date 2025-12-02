@@ -532,7 +532,7 @@ export default function NotificationScreen() {
                 <TextInput
                   ref={messageInputRef}
                   style={[styles.input, { color: colors.text, borderColor: colors.icon }]}
-                  placeholder="Enter a short notification message"
+                  placeholder="Notification message"
                   placeholderTextColor={colors.icon}
                   value={message}
                   onChangeText={setMessage}
@@ -546,7 +546,7 @@ export default function NotificationScreen() {
                 <TextInput
                   ref={noteInputRef}
                   style={[styles.input, styles.textArea, { color: colors.text, borderColor: colors.icon }]}
-                  placeholder="Enter a note to display when notification is opened"
+                  placeholder="A short note"
                   placeholderTextColor={colors.icon}
                   value={note}
                   onChangeText={setNote}
@@ -560,7 +560,7 @@ export default function NotificationScreen() {
                 <TextInput
                   ref={linkInputRef}
                   style={[styles.input, { color: colors.text, borderColor: colors.icon }]}
-                  placeholder="Enter link to open when notification is tapped"
+                  placeholder="Link to open for this notification"
                   placeholderTextColor={colors.icon}
                   value={link}
                   onChangeText={setLink}
@@ -597,17 +597,17 @@ export default function NotificationScreen() {
               {alarmSupported && (
                 <ThemedView style={styles.inputGroup}>
                   <ThemedView style={styles.switchContainer}>
-                    <ThemedText type="subtitle">Also Set System Alarm</ThemedText>
+                    <ThemedText type="subtitle">Create Alarm</ThemedText>
                     <Switch
                       value={scheduleAlarm}
                       onValueChange={setScheduleAlarm}
-                      trackColor={{ false: colors.icon + '40', true: colors.tint + '80' }}
-                      thumbColor={scheduleAlarm ? colors.tint : colors.icon}
+                      trackColor={{ false: '#888', true: '#499f5d' }}
+                      thumbColor={Platform.OS === 'ios' ? '#499f5d' : colors.background}
                     />
                   </ThemedView>
-                  <ThemedText style={[styles.switchDescription, { color: colors.icon }]}>
-                    Schedule a system alarm using the same date, time, and title.
-                  </ThemedText>
+                  {/* <ThemedText style={[styles.switchDescription, { color: colors.icon }]}>
+                    Schedule a system alarm.
+                  </ThemedText> */}
                 </ThemedView>
               )}
 
@@ -659,11 +659,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 8,
     padding: 12,
-    fontSize: 16,
-    minHeight: 50,
+    fontSize: 18,
+    minHeight: 48,
   },
   textArea: {
-    minHeight: 120,
+    minHeight: 80,
     textAlignVertical: 'top',
   },
   dateButton: {
@@ -681,7 +681,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#605678',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
   },
   switchContainer: {
@@ -690,7 +690,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   switchDescription: {
-    fontSize: 12,
+    fontSize: 14,
     marginTop: 4,
     fontStyle: 'italic',
   },

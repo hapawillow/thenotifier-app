@@ -31,6 +31,7 @@ export default function CalendarScreen() {
   const [hiddenEventIds, setHiddenEventIds] = useState<Set<string>>(new Set());
   const [showCalendarSelection, setShowCalendarSelection] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<'undetermined' | 'granted' | 'denied'>('undetermined');
+  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
   const navigation = useNavigation();
   const colorScheme = useColorScheme();
@@ -297,6 +298,18 @@ export default function CalendarScreen() {
     }
   }, [selectedCalendarIds]);
 
+  const onRefresh = useCallback(async () => {
+    if (selectedCalendarIds.size === 0) {
+      return;
+    }
+    setRefreshing(true);
+    try {
+      await loadEvents();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [selectedCalendarIds]);
+
   const toggleExpand = (id: string) => {
     const isExpanded = expandedIds.has(id);
     const newExpandedIds = new Set(expandedIds);
@@ -523,7 +536,7 @@ export default function CalendarScreen() {
                 <Switch
                   value={selectedCalendarIds.has(item.id)}
                   onValueChange={() => toggleCalendarSelection(item.id)}
-                  trackColor={{ false: '#ddd', true: colors.tint }}
+                  trackColor={{ false: '#888', true: '#499f5d' }}
                   thumbColor={Platform.OS === 'ios' ? '#499f5d' : colors.background}
                 />
               </ThemedView>
@@ -550,6 +563,8 @@ export default function CalendarScreen() {
           showsVerticalScrollIndicator={false}
           scrollEnabled={true}
           alwaysBounceVertical={true}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
         />
       )}
     </ThemedView>
@@ -580,7 +595,7 @@ const styles = StyleSheet.create({
   },
   calendarButtonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
   },
@@ -603,7 +618,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   calendarItemText: {
-    fontSize: 16,
+    fontSize: 18,
     flex: 1,
   },
   listContent: {
@@ -629,7 +644,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   calendarName: {
-    fontSize: 12,
+    fontSize: 14,
     opacity: 0.7,
     textTransform: 'uppercase',
   },
@@ -638,7 +653,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   dateTime: {
-    fontSize: 14,
+    fontSize: 18,
     opacity: 0.8,
   },
   drawer: {
@@ -652,11 +667,11 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   detailLabel: {
-    fontSize: 14,
+    fontSize: 18,
     opacity: 0.7,
   },
   detailValue: {
-    fontSize: 16,
+    fontSize: 18,
   },
   actionButtons: {
     flexDirection: 'row',
@@ -672,7 +687,7 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
   },
@@ -683,7 +698,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   emptyText: {
-    fontSize: 16,
+    fontSize: 18,
     opacity: 0.6,
   },
 });

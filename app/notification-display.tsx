@@ -13,7 +13,7 @@ export default function NotificationDisplayScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
-  const { message, link } = useLocalSearchParams<{ message: string, link: string }>();
+  const { title, message, note, link } = useLocalSearchParams<{ title: string, message: string, note: string, link: string }>();
   console.log('message', message);
   console.log('link', link);
 
@@ -106,7 +106,7 @@ export default function NotificationDisplayScreen() {
   return (
     <ThemedView style={styles.container}>
       <ThemedView style={styles.content}>
-        <ThemedText type="title" style={styles.title}>Notification</ThemedText>
+        <ThemedText type="title" style={styles.title}>title</ThemedText>
         <ThemedView style={styles.messageContainer}>
           <ThemedText type="subtitle">Message:</ThemedText>
           <ThemedText style={styles.message}>{message || 'No message available'}</ThemedText>
@@ -152,12 +152,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(56, 76, 121, 0.45)',
   },
   message: {
-    fontSize: 16,
+    fontSize: 18,
     lineHeight: 24,
     marginBottom: 14,
   },
   note: {
-    fontSize: 16,
+    fontSize: 18,
     lineHeight: 24,
   },
   closeButton: {
@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#605678',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
   },
 

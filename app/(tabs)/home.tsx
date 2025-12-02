@@ -494,7 +494,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
   },
   tabText: {
-    fontSize: 16,
+    fontSize: 18,
   },
   listContent: {
     padding: 20,
@@ -529,7 +529,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   message: {
-    fontSize: 14,
+    fontSize: 18,
     opacity: 0.8,
   },
   drawer: {
@@ -543,11 +543,11 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   detailLabel: {
-    fontSize: 14,
+    fontSize: 18,
     opacity: 0.7,
   },
   detailValue: {
-    fontSize: 16,
+    fontSize: 18,
   },
   actionButtons: {
     flexDirection: 'row',
@@ -565,7 +565,7 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
   },
@@ -576,7 +576,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   emptyText: {
-    fontSize: 16,
+    fontSize: 18,
     opacity: 0.6,
   },
 });
