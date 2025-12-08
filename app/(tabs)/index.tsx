@@ -1,6 +1,8 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { Picker } from '@react-native-picker/picker';
+import { useFocusEffect } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Dimensions, Keyboard, Platform, StyleSheet, Switch, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
 import { NativeAlarmManager } from 'rn-native-alarmkit';
@@ -9,9 +11,15 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { archiveScheduledNotifications, saveScheduledNotificationData } from '@/utils/database';
+import { archiveScheduledNotifications, getAllScheduledNotificationData, saveScheduledNotificationData } from '@/utils/database';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
+
+
+// Maximum number of scheduled notifications allowed on the device
+// const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 64 : 25);
+const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 4 : 25);
+console.log('Maximum scheduled notification count for', Platform.OS, ':', MAX_SCHEDULED_NOTIFICATION_COUNT);
 
 // Configure notification handler
 Notifications.setNotificationHandler({
@@ -22,6 +30,7 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
+
 
 // Listen for alarm events
 // Listen for alarm fired events
@@ -57,12 +66,14 @@ const theme: KeyboardToolbarProps["theme"] = {
 };
 
 export default function NotificationScreen() {
+  const router = useRouter();
   const params = useLocalSearchParams<{
     date?: string;
     title?: string;
     message?: string;
     note?: string;
     link?: string;
+    repeat?: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
   }>();
 
   // Initialize state from params if available
@@ -74,6 +85,7 @@ export default function NotificationScreen() {
     params.date ? new Date(params.date) : new Date()
   );
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showRepeatPicker, setShowRepeatPicker] = useState(false);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const scrollViewRef = useRef<any>(null);
@@ -87,9 +99,58 @@ export default function NotificationScreen() {
   const hasScrolledForFocus = useRef<boolean>(false);
   const [scheduleAlarm, setScheduleAlarm] = useState(false);
   const [alarmSupported, setAlarmSupported] = useState(false);
+  const [repeatOption, setRepeatOption] = useState<'none' | 'daily' | 'weekly' | 'monthly' | 'yearly'>(
+    (params.repeat as 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly') || 'none'
+  );
 
   // Memoize minimum date to prevent creating new Date object on each render
   const minimumDate = useMemo(() => new Date(), []);
+
+  // Check if scheduled notifications count has reached the maximum
+  const checkNotificationLimit = useCallback(async (): Promise<boolean> => {
+    try {
+      // Archive past notifications first
+      await archiveScheduledNotifications();
+      // Get all scheduled notifications
+      const scheduledNotifications = await getAllScheduledNotificationData();
+      // Filter for future notifications only
+      const now = new Date().toISOString();
+      const futureNotifications = scheduledNotifications.filter(
+        item => item.scheduleDateTime > now
+      );
+      const count = futureNotifications.length;
+
+      // Check if we've reached the maximum
+      if (count >= MAX_SCHEDULED_NOTIFICATION_COUNT) {
+        console.log('Maximum notifications reached:', count);
+        Alert.alert(
+          'Maximum Notifications Reached',
+          `Uh oh, you've reached the maximum of ${MAX_SCHEDULED_NOTIFICATION_COUNT} scheduled notifications. You can delete an upcoming notification if you need to schedule a new notification.`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Navigate to home screen with "Upcoming" tab (default is 'scheduled')
+                router.push('/(tabs)/home');
+              },
+            },
+          ]
+        );
+        return true; // Limit reached
+      }
+      return false; // Limit not reached
+    } catch (error) {
+      console.error('Failed to check scheduled notifications count:', error);
+      return false;
+    }
+  }, [router]);
+
+  // Check scheduled notifications count when screen is focused (switching from another tab)
+  useFocusEffect(
+    useCallback(() => {
+      checkNotificationLimit();
+    }, [checkNotificationLimit])
+  );
 
   useEffect(() => {
     // Request permissions
@@ -136,7 +197,10 @@ export default function NotificationScreen() {
     if (params.link) {
       setLink(params.link);
     }
-  }, [params.date, params.title, params.message, params.note, params.link]);
+    if (params.repeat) {
+      setRepeatOption(params.repeat as 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly');
+    }
+  }, [params.date, params.title, params.message, params.note, params.link, params.repeat]);
 
   // Memoize form onLayout handler
   const handleFormLayout = useCallback((event: any) => {
@@ -234,17 +298,84 @@ export default function NotificationScreen() {
     { color: colors.buttonText }
   ], [colors.buttonText]);
 
+  const repeatButtonStyle = useMemo(() => [
+    styles.dateButton,
+    { borderColor: colors.icon, backgroundColor: colors.background }
+  ], [colors.icon, colors.background]);
+
   // Memoize callbacks
-  const handleDateButtonPress = useCallback(() => {
+  const handleDateButtonPress = useCallback(async () => {
+    const limitReached = await checkNotificationLimit();
+    if (limitReached) {
+      return; // Don't show date picker if limit is reached
+    }
     Keyboard.dismiss();
     setShowDatePicker(true);
+  }, [checkNotificationLimit]);
+
+  const handleRepeatButtonPress = useCallback(async () => {
+    const limitReached = await checkNotificationLimit();
+    if (limitReached) {
+      return; // Don't show repeat picker if limit is reached
+    }
+    Keyboard.dismiss();
+    setShowRepeatPicker(true);
+  }, [checkNotificationLimit]);
+
+  const handleRepeatDonePress = useCallback(() => {
+    setShowRepeatPicker(false);
+  }, []);
+
+  const handleRepeatChange = useCallback((value: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly') => {
+    setRepeatOption(value);
+    if (Platform.OS === 'android') {
+      setShowRepeatPicker(false);
+    }
+  }, []);
+
+  const formatRepeatOption = useCallback((option: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly') => {
+    switch (option) {
+      case 'none':
+        return 'Do not repeat';
+      case 'daily':
+        return 'Repeat every day';
+      case 'weekly':
+        return 'Repeat every week';
+      case 'monthly':
+        return 'Repeat every month';
+      case 'yearly':
+        return 'Repeat every year';
+      default:
+        return 'Do not repeat';
+    }
   }, []);
 
   const handleDonePress = useCallback(() => {
     setShowDatePicker(false);
   }, []);
 
-  const handleLinkFocus = useCallback(() => {
+  const handleMessageFocus = useCallback(async () => {
+    const limitReached = await checkNotificationLimit();
+    if (limitReached) {
+      messageInputRef.current?.blur();
+      return;
+    }
+  }, [checkNotificationLimit]);
+
+  const handleNoteFocus = useCallback(async () => {
+    const limitReached = await checkNotificationLimit();
+    if (limitReached) {
+      noteInputRef.current?.blur();
+      return;
+    }
+  }, [checkNotificationLimit]);
+
+  const handleLinkFocus = useCallback(async () => {
+    const limitReached = await checkNotificationLimit();
+    if (limitReached) {
+      linkInputRef.current?.blur();
+      return;
+    }
     // Mark that we're about to scroll for focus
     hasScrolledForFocus.current = true;
 
@@ -258,7 +389,7 @@ export default function NotificationScreen() {
         scrollToShowButton(estimatedKeyboardHeight);
       }
     }, Platform.OS === 'ios' ? 400 : 500);
-  }, [scrollToShowButton]);
+  }, [checkNotificationLimit, scrollToShowButton]);
 
   const handleLinkBlur = useCallback(() => {
     // When input loses focus, scroll to top
@@ -316,6 +447,8 @@ export default function NotificationScreen() {
     setTitle('');
     setSelectedDate(new Date());
     setScheduleAlarm(false);
+    setRepeatOption('none');
+    setShowRepeatPicker(false);
   };
 
   const scheduleNotification = async () => {
@@ -376,25 +509,72 @@ export default function NotificationScreen() {
       }
       console.log('notificationContent:', notificationContent);
 
-      // Build trigger - channelId is Android-only
-      const trigger: Notifications.NotificationTriggerInput = {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: dateWithoutSeconds,
-      };
-      if (Platform.OS === 'android') {
-        (trigger as any).channelId = "thenotifier";
+      let notificationTrigger: Notifications.NotificationTriggerInput;
+      const hour = dateWithoutSeconds.getHours();
+      const minute = dateWithoutSeconds.getMinutes();
+      const day = dateWithoutSeconds.getDate();
+      const dayOfWeek = dateWithoutSeconds.getDay();
+      const month = dateWithoutSeconds.getMonth();
+      switch (repeatOption) {
+        case 'none':
+          notificationTrigger = {
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: dateWithoutSeconds,
+          };
+          break;
+        case 'daily':
+          notificationTrigger = {
+            type: Notifications.SchedulableTriggerInputTypes.DAILY,
+            hour: hour,
+            minute: minute,
+          };
+          break;
+        case 'weekly':
+          notificationTrigger = {
+            type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+            weekday: dayOfWeek,
+            hour: hour,
+            minute: minute,
+          };
+          break;
+        case 'monthly':
+          notificationTrigger = {
+            type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
+            day: day,
+            hour: hour,
+            minute: minute,
+          };
+          break;
+        case 'yearly':
+          notificationTrigger = {
+            type: Notifications.SchedulableTriggerInputTypes.YEARLY,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute,
+          };
+          break;
       }
-      console.log('trigger:', trigger);
+
+      // Build trigger - channelId is Android-only
+      // const trigger: Notifications.NotificationTriggerInput = {
+      //   type: triggerType,
+      //   date: dateWithoutSeconds,
+      // };
+      if (Platform.OS === 'android') {
+        (notificationTrigger as any).channelId = "thenotifier";
+      }
+      console.log('notificationTrigger:', notificationTrigger);
 
       console.log('=== SCHEDULE NOTIFICATION ASYNC ===');
       await Notifications.scheduleNotificationAsync({
         identifier: notificationId,
         content: notificationContent,
-        trigger: trigger,
+        trigger: notificationTrigger,
       });
 
       console.log('Notification scheduled successfully, saving notification data...');
-      await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString());
+      await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported);
       console.log('Notification data saved successfully');
 
       // Schedule alarm if enabled
@@ -633,6 +813,36 @@ export default function NotificationScreen() {
             )}
 
             <ThemedView style={styles.inputGroup}>
+              <TouchableOpacity
+                style={repeatButtonStyle}
+                onPress={handleRepeatButtonPress}>
+                <ThemedText>{formatRepeatOption(repeatOption)}</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+
+            {showRepeatPicker && (
+              <Picker
+                selectedValue={repeatOption}
+                onValueChange={handleRepeatChange}
+                style={[styles.picker, { color: colors.text, borderColor: colors.icon, backgroundColor: colors.background }]}
+                itemStyle={{ color: colors.text }}
+              >
+                <Picker.Item label="Do not repeat" value="none" />
+                <Picker.Item label="Repeat every day" value="daily" />
+                <Picker.Item label="Repeat every week" value="weekly" />
+                <Picker.Item label="Repeat every month" value="monthly" />
+                <Picker.Item label="Repeat every year" value="yearly" />
+              </Picker>
+            )}
+            {Platform.OS === 'ios' && showRepeatPicker && (
+              <TouchableOpacity
+                style={doneButtonStyle}
+                onPress={handleRepeatDonePress}>
+                <ThemedText style={doneButtonTextStyle}>Done</ThemedText>
+              </TouchableOpacity>
+            )}
+
+            <ThemedView style={styles.inputGroup}>
               <ThemedText type="subtitle">Message</ThemedText>
               <TextInput
                 ref={messageInputRef}
@@ -641,6 +851,7 @@ export default function NotificationScreen() {
                 placeholderTextColor={colors.placeholderText}
                 value={message}
                 onChangeText={setMessage}
+                onFocus={handleMessageFocus}
                 multiline
                 numberOfLines={2}
               />
@@ -655,6 +866,7 @@ export default function NotificationScreen() {
                 placeholderTextColor={colors.placeholderText}
                 value={note}
                 onChangeText={setNote}
+                onFocus={handleNoteFocus}
                 multiline
                 numberOfLines={6}
               />
@@ -743,7 +955,7 @@ const styles = StyleSheet.create({
   },
   dateButton: {
     borderWidth: 1,
-    borderRadius: 50,
+    borderRadius: 8,
     padding: 12,
     minHeight: 50,
     justifyContent: 'center',
@@ -770,5 +982,11 @@ const styles = StyleSheet.create({
   },
   keyboardToolbar: {
     width: '100%',
+  },
+  picker: {
+    // borderWidth: 1,
+    // borderRadius: 8,
+    padding: 12,
+    minHeight: 50,
   },
 });

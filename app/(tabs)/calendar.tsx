@@ -22,6 +22,7 @@ type CalendarEvent = {
   description?: string;
   location?: string;
   isRecurring?: boolean;
+  recurrenceRule?: Calendar.RecurrenceRule | null;
 };
 
 export default function CalendarScreen() {
@@ -287,6 +288,7 @@ export default function CalendarScreen() {
               description: (event as any).description || undefined,
               location: (event as any).location || undefined,
               isRecurring: event.recurrenceRule !== null && event.recurrenceRule !== undefined,
+              recurrenceRule: event.recurrenceRule || undefined,
             });
           }
         } catch (error) {
@@ -377,20 +379,52 @@ export default function CalendarScreen() {
     setHiddenEventIds(newHidden);
   };
 
+  // Map calendar recurrence frequency to repeat option
+  const mapRecurrenceToRepeatOption = (recurrenceRule: Calendar.RecurrenceRule | null | undefined): 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly' => {
+    if (!recurrenceRule) {
+      return 'none';
+    }
+
+    // Handle string format (iCal format like "FREQ=DAILY") - check this first
+    // Use type assertion since Calendar.RecurrenceRule may not include string in its type definition
+    if (typeof recurrenceRule === 'string') {
+      const ruleStr = (recurrenceRule as string).toUpperCase();
+      if (ruleStr.includes('FREQ=DAILY') || ruleStr.includes('FREQ=DAY')) return 'daily';
+      if (ruleStr.includes('FREQ=WEEKLY') || ruleStr.includes('FREQ=WEEK')) return 'weekly';
+      if (ruleStr.includes('FREQ=MONTHLY') || ruleStr.includes('FREQ=MONTH')) return 'monthly';
+      if (ruleStr.includes('FREQ=YEARLY') || ruleStr.includes('FREQ=YEAR')) return 'yearly';
+    }
+
+    // Handle object format (expo-calendar may return an object)
+    if (typeof recurrenceRule === 'object' && recurrenceRule !== null && 'frequency' in recurrenceRule) {
+      const frequency = (recurrenceRule as any).frequency?.toLowerCase();
+      if (frequency === 'daily') return 'daily';
+      if (frequency === 'weekly') return 'weekly';
+      if (frequency === 'monthly') return 'monthly';
+      if (frequency === 'yearly' || frequency === 'year') return 'yearly';
+    }
+
+    return 'none';
+  };
+
   const handleScheduleNotification = (event: CalendarEvent) => {
     // Store event details in a custom URL format that we can parse later
     // Format: thenotifier://calendar-event?eventId={eventId}&calendarId={calendarId}&startDate={startDate}
     // This allows us to retrieve the event and open it properly in the native calendar app
     const calendarLink = `thenotifier://calendar-event?eventId=${encodeURIComponent(event.originalEventId)}&calendarId=${encodeURIComponent(event.calendarId)}&startDate=${encodeURIComponent(event.startDate.toISOString())}`;
 
+    // Map recurrence frequency to repeat option
+    const repeatOption = event.isRecurring ? mapRecurrenceToRepeatOption(event.recurrenceRule) : 'none';
+
     // Navigate to the Schedule Notification screen with pre-populated data
     // Try using React Navigation's navigate method for tab navigation
-    const params = {
+    const params: any = {
       date: event.startDate.toISOString(),
       title: '📅 ' + event.calendarName,
       message: event.title,
       note: '(click the button to open your calendar)',
       link: calendarLink,
+      repeat: repeatOption, // Always include repeat parameter to ensure it's set correctly
     };
 
     // Try navigating using React Navigation's navigate method

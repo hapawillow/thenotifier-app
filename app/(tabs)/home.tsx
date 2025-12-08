@@ -19,6 +19,9 @@ type ScheduledNotification = {
   link: string;
   scheduleDateTime: string;
   scheduleDateTimeLocal: string;
+  repeatOption: string | null;
+  notificationTrigger: any; // Notifications.NotificationTriggerInput | undefined
+  hasAlarm: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -32,6 +35,9 @@ type ArchivedNotification = {
   link: string;
   scheduleDateTime: string;
   scheduleDateTimeLocal: string;
+  repeatOption: string | null;
+  notificationTrigger: any; // Notifications.NotificationTriggerInput | undefined
+  hasAlarm: boolean;
   createdAt: string;
   updatedAt: string;
   handledAt: string | null;
@@ -184,6 +190,70 @@ export default function HomeScreen() {
     Alert.alert('Edit Notification', 'Edit functionality will be implemented soon');
   };
 
+  // Format date string to remove seconds
+  const formatDateTimeWithoutSeconds = (dateTimeString: string): string => {
+    try {
+      const date = new Date(dateTimeString);
+      // If date is invalid, try parsing as locale string
+      if (isNaN(date.getTime())) {
+        // Try to parse common formats and remove seconds
+        // Handle formats like "12/7/2024, 3:45:30 PM"
+        return dateTimeString.replace(/:\d{2}(?=\s*(?:AM|PM|$))/i, '');
+      }
+      // Format without seconds
+      return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    } catch (error) {
+      // Fallback: try to remove seconds pattern from string
+      return dateTimeString.replace(/:\d{2}(?=\s*(?:AM|PM|$))/i, '');
+    }
+  };
+
+  // Format repeat option text for display
+  const formatRepeatOption = (repeatOption: string | null, scheduleDateTime: string): string => {
+    if (!repeatOption || repeatOption === 'none') {
+      return '';
+    }
+
+    try {
+      const date = new Date(scheduleDateTime);
+      if (isNaN(date.getTime())) {
+        return '';
+      }
+
+      switch (repeatOption) {
+        case 'daily': {
+          const timeStr = date.toLocaleString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+          });
+          return `Repeats every day at ${timeStr}`;
+        }
+        case 'weekly': {
+          const dayOfWeek = date.toLocaleString('en-US', { weekday: 'long' });
+          return `Repeats every week on ${dayOfWeek}`;
+        }
+        case 'monthly': {
+          const day = date.getDate();
+          const suffix = day === 1 ? 'st' : day === 2 ? 'nd' : day === 3 ? 'rd' : 'th';
+          return `Repeats every month on the ${day}${suffix}`;
+        }
+        case 'yearly':
+          return 'Repeats every year';
+        default:
+          return '';
+      }
+    } catch (error) {
+      console.error('Error formatting repeat option:', error);
+      return '';
+    }
+  };
+
   const renderScheduledNotificationItem = ({ item }: { item: ScheduledNotification }) => {
     const isExpanded = expandedIds.has(item.id);
     const animValue = animations.get(item.id) || new Animated.Value(0);
@@ -211,6 +281,27 @@ export default function HomeScreen() {
             <ThemedText style={styles.message} numberOfLines={2}>
               {item.message}
             </ThemedText>
+            <ThemedView style={styles.dateTimeRow}>
+              <ThemedText style={styles.message} numberOfLines={1}>
+                {formatDateTimeWithoutSeconds(item.scheduleDateTimeLocal)}
+              </ThemedText>
+              {item.hasAlarm && (
+                <IconSymbol
+                  name="bell.fill"
+                  size={16}
+                  color={colors.icon}
+                  style={styles.icon}
+                />
+              )}
+              {item.repeatOption && item.repeatOption !== 'none' && (
+                <IconSymbol
+                  name="repeat"
+                  size={16}
+                  color={colors.icon}
+                  style={styles.icon}
+                />
+              )}
+            </ThemedView>
           </ThemedView>
           <IconSymbol
             name={isExpanded ? 'chevron.up' : 'chevron.down'}
@@ -230,14 +321,16 @@ export default function HomeScreen() {
             },
           ]}>
           <ThemedView style={styles.drawerContent}>
-            <ThemedView style={styles.detailRow}>
-              <ThemedText type="subtitle" style={styles.detailLabel}>
-                Scheduled Time:
-              </ThemedText>
-              <ThemedText style={styles.detailValue}>
-                {item.scheduleDateTimeLocal}
-              </ThemedText>
-            </ThemedView>
+            {item.repeatOption && item.repeatOption !== 'none' && (
+              <ThemedView style={styles.detailRow}>
+                <ThemedText type="subtitle" style={styles.detailLabel}>
+                  Repeat:
+                </ThemedText>
+                <ThemedText style={styles.detailValue}>
+                  {formatRepeatOption(item.repeatOption, item.scheduleDateTime)}
+                </ThemedText>
+              </ThemedView>
+            )}
 
             <ThemedView style={styles.detailRow}>
               <ThemedText type="subtitle" style={styles.detailLabel}>
@@ -311,6 +404,27 @@ export default function HomeScreen() {
             <ThemedText style={styles.message} numberOfLines={2}>
               {item.message}
             </ThemedText>
+            <ThemedView style={styles.dateTimeRow}>
+              <ThemedText style={styles.message} numberOfLines={1}>
+                {formatDateTimeWithoutSeconds(item.scheduleDateTimeLocal)}
+              </ThemedText>
+              {item.hasAlarm && (
+                <IconSymbol
+                  name="bell.fill"
+                  size={16}
+                  color={colors.icon}
+                  style={styles.icon}
+                />
+              )}
+              {item.repeatOption && item.repeatOption !== 'none' && (
+                <IconSymbol
+                  name="repeat"
+                  size={16}
+                  color={colors.icon}
+                  style={styles.icon}
+                />
+              )}
+            </ThemedView>
           </ThemedView>
           <IconSymbol
             name={isExpanded ? 'chevron.up' : 'chevron.down'}
@@ -330,14 +444,16 @@ export default function HomeScreen() {
             },
           ]}>
           <ThemedView style={styles.drawerContent}>
-            <ThemedView style={styles.detailRow}>
-              <ThemedText type="subtitle" style={styles.detailLabel}>
-                Scheduled Time:
-              </ThemedText>
-              <ThemedText style={styles.detailValue}>
-                {item.scheduleDateTimeLocal}
-              </ThemedText>
-            </ThemedView>
+            {item.repeatOption && item.repeatOption !== 'none' && (
+              <ThemedView style={styles.detailRow}>
+                <ThemedText type="subtitle" style={styles.detailLabel}>
+                  Repeat:
+                </ThemedText>
+                <ThemedText style={styles.detailValue}>
+                  {formatRepeatOption(item.repeatOption, item.scheduleDateTime)}
+                </ThemedText>
+              </ThemedView>
+            )}
 
             <ThemedView style={styles.detailRow}>
               <ThemedText type="subtitle" style={styles.detailLabel}>
@@ -577,5 +693,13 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 18,
     opacity: 0.6,
+  },
+  dateTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  icon: {
+    marginLeft: 4,
   },
 });
