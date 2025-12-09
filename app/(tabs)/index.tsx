@@ -17,8 +17,8 @@ import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, 
 
 
 // Maximum number of scheduled notifications allowed on the device
-// const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 64 : 25);
-const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 4 : 25);
+const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 64 : 25);
+// const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 4 : 25);
 console.log('Maximum scheduled notification count for', Platform.OS, ':', MAX_SCHEDULED_NOTIFICATION_COUNT);
 
 // Configure notification handler
@@ -32,8 +32,17 @@ Notifications.setNotificationHandler({
 });
 
 
+/**
+ * NOTE: Alarm listener maybe be interfering with the notification listener.
+ * We probably don't need to listen for alarm events anymore and should
+ * rely on the notification listener to direct the user to the notification display screen.
+ * 
+ * Whenever we confirm that alarm listener is not needed anymore, we can remove it.
+ */
+
 // Listen for alarm events
 // Listen for alarm fired events
+/*
 const unsubscribe = NativeAlarmManager.onAlarmFired((event) => {
   console.log('Alarm fired:', event.alarm.id);
 
@@ -51,6 +60,8 @@ const unsubscribe = NativeAlarmManager.onAlarmFired((event) => {
 
 // Later: cleanup
 unsubscribe();
+*/
+
 
 const theme: KeyboardToolbarProps["theme"] = {
   dark: {
@@ -146,10 +157,15 @@ export default function NotificationScreen() {
   }, [router]);
 
   // Check scheduled notifications count when screen is focused (switching from another tab)
+  // Also reset selectedDate to current date/time unless a date parameter is provided
   useFocusEffect(
     useCallback(() => {
       checkNotificationLimit();
-    }, [checkNotificationLimit])
+      // Reset selectedDate to current date/time if no date parameter is provided
+      if (!params.date) {
+        setSelectedDate(new Date());
+      }
+    }, [checkNotificationLimit, params.date])
   );
 
   useEffect(() => {
@@ -460,14 +476,20 @@ export default function NotificationScreen() {
     }
 
     console.log('Selected date:', selectedDate);
-    if (selectedDate <= new Date()) {
-      Alert.alert('Error', 'Please select a future date and time');
-      return;
-    }
 
     // Remove seconds from the selected date
     const dateWithoutSeconds = new Date(selectedDate);
     dateWithoutSeconds.setSeconds(0, 0);
+
+    // Check if date is at least 1 minute from now
+    const now = new Date();
+    const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000); // Add 1 minute (60 seconds * 1000 ms)
+
+    if (dateWithoutSeconds <= oneMinuteFromNow) {
+      Alert.alert('Error', 'Please select a future date and time at least 1 minute from now');
+      return;
+    }
+
 
     const notificationId = "thenotifier-" + Crypto.randomUUID();
     const notificationTitle = title || 'Personal';
@@ -484,7 +506,7 @@ export default function NotificationScreen() {
       }
 
       // Create deep link URL for notification tap (works when app is backgrounded)
-      const deepLinkUrl = (link) ? `thenotifier://notification?message=${encodeURIComponent(message)}&link=${encodeURIComponent(link)}` : `thenotifier://notification?message=${encodeURIComponent(message)}`;
+      const deepLinkUrl = (link) ? `thenotifier://notification?title=${encodeURIComponent(title)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=${encodeURIComponent(link)}` : `thenotifier://notification?title=${encodeURIComponent(title)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}`;
       console.log('deepLinkUrl:', deepLinkUrl);
 
 
@@ -492,7 +514,7 @@ export default function NotificationScreen() {
         title: notificationTitle,
         body: message,
         data: {
-          title: title,
+          title: notificationTitle,
           message: message,
           note: note,
           link: link ? link : '',
@@ -699,16 +721,31 @@ export default function NotificationScreen() {
               },
             },
             {
-              title: 'The Notifier',
-              body: message,
-              sound: 'default',
-              category: 'notifications',
+              title: message,
+              color: '#8ddaff',
               data: {
                 notificationId: notificationId,
               },
               actions: [
-                { id: 'dismiss', title: 'Dismiss', behavior: 'dismiss' },
-                { id: 'snooze', title: 'Snooze 10m', behavior: 'snooze', snoozeDuration: 10 },
+                {
+                  id: 'dismiss',
+                  title: 'Dismiss',
+                  behavior: 'dismiss',
+                  icon: Platform.select({
+                    ios: 'xmark',    // SF Symbol
+                    android: 'ic_cancel'        // Material Icon
+                  })
+                },
+                {
+                  id: 'snooze',
+                  title: 'Snooze 10m',
+                  behavior: 'snooze',
+                  snoozeDuration: 5,
+                  icon: Platform.select({
+                    ios: 'zzz',    // SF Symbol
+                    android: 'ic_snooze'        // Material Icon
+                  })
+                },
               ]
             },
           );
@@ -739,6 +776,9 @@ export default function NotificationScreen() {
       console.log('Notification message:', message);
       console.log('Notification note:', note);
       console.log('Notification link:', link);
+
+      // Reset form after successful scheduling
+      resetForm();
     } catch (error) {
       Alert.alert('Error', 'Failed to schedule notification');
       console.error(error);
@@ -749,7 +789,6 @@ export default function NotificationScreen() {
       console.error('Failed note:', note);
       console.error('Failed link:', link);
     }
-    resetForm();
   };
 
   const formatDateTime = useCallback((date: Date) => {
@@ -769,9 +808,25 @@ export default function NotificationScreen() {
     })();
   }, []);
 
+  const clearButtonStyle = useMemo(() => [
+    styles.clearButton,
+    { borderColor: colors.tint }
+  ], [colors.tint]);
+
+  const clearButtonTextStyle = useMemo(() => [
+    styles.clearButtonText,
+    { color: colors.tint }
+  ], [colors.tint]);
+
   return (
     <ThemedView style={styles.container}>
       <ThemedView style={styles.header}>
+        {/* <TouchableOpacity
+          style={clearButtonStyle}
+          onPress={resetForm}
+          activeOpacity={0.7}>
+          <ThemedText style={clearButtonTextStyle}>Clear</ThemedText>
+        </TouchableOpacity> */}
         {/* <ThemedText type="title">Schedule Notification</ThemedText> */}
       </ThemedView>
 
@@ -783,9 +838,20 @@ export default function NotificationScreen() {
         showsVerticalScrollIndicator={false}>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
 
+
           <ThemedView
             style={styles.form}
             onLayout={handleFormLayout}>
+
+            <ThemedView style={styles.clearButtonContainer}>
+              <TouchableOpacity
+                style={clearButtonStyle}
+                onPress={resetForm}
+                activeOpacity={0.7}>
+                <ThemedText style={clearButtonTextStyle}>Clear</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+
             <ThemedView style={styles.inputGroup}>
               <ThemedText type="subtitle">Date & Time</ThemedText>
               <TouchableOpacity
@@ -889,7 +955,7 @@ export default function NotificationScreen() {
             {alarmSupported && (
               <ThemedView style={styles.inputGroup}>
                 <ThemedView style={styles.switchContainer}>
-                  <ThemedText type="subtitle">Create Alarm</ThemedText>
+                  <ThemedText type="subtitle">Add an Alarm</ThemedText>
                   <Switch
                     value={scheduleAlarm}
                     onValueChange={setScheduleAlarm}
@@ -934,13 +1000,34 @@ const styles = StyleSheet.create({
   header: {
     // marginBottom: 30,
     marginTop: 40,
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  clearButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginBottom: -10,
+  },
+  clearButton: {
+    borderWidth: 1,
+    borderRadius: 50,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   form: {
     gap: 20,
   },
   inputGroup: {
-    gap: 8,
+    gap: 6,
   },
   input: {
     borderWidth: 1,

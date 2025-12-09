@@ -4,6 +4,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import * as Calendar from 'expo-calendar';
 import { router, useLocalSearchParams } from 'expo-router';
+import { useMemo } from 'react';
 import { Alert, Linking, Platform, StyleSheet, TouchableOpacity } from 'react-native';
 
 export default function NotificationDisplayScreen() {
@@ -12,9 +13,29 @@ export default function NotificationDisplayScreen() {
 
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
+  const closeButtonStyle = useMemo(() => [
+    styles.closeButton,
+    { backgroundColor: colors.tint }
+  ], [colors.tint]);
+  const closeButtonTextStyle = useMemo(() => [
+    styles.closeButtonText,
+    { color: colors.buttonText }
+  ], [colors.buttonText]);
+  const linkButtonStyle = useMemo(() => [
+    styles.linkButton,
+    { borderColor: colors.tint }
+  ], [colors.tint]);
+  const linkButtonTextStyle = useMemo(() => [
+    styles.linkButtonText,
+    { color: colors.tint }
+  ], [colors.tint]);
+
+
 
   const { title, message, note, link } = useLocalSearchParams<{ title: string, message: string, note: string, link: string }>();
+  console.log('title', title);
   console.log('message', message);
+  console.log('note', note);
   console.log('link', link);
 
   const handleOpenLink = async () => {
@@ -106,31 +127,37 @@ export default function NotificationDisplayScreen() {
   return (
     <ThemedView style={styles.container}>
       <ThemedView style={styles.content}>
-        <ThemedText type="title" style={styles.title}>title</ThemedText>
         <ThemedView style={styles.messageContainer}>
-          <ThemedText type="subtitle">Message:</ThemedText>
-          <ThemedText style={styles.message}>{message || 'No message available'}</ThemedText>
-          <ThemedText type="subtitle">Note:</ThemedText>
-          <ThemedText style={styles.note} selectable>{note || 'No note available'}</ThemedText>
+          <ThemedText type="title" style={styles.title}>{title}</ThemedText>
+          <ThemedText type="message" style={styles.message}>{message}</ThemedText>
+          {note && (
+            <>
+              <ThemedText type="subtitle">Note:</ThemedText>
+              <ThemedText style={styles.note} selectable>{note}</ThemedText>
+            </>
+          )}
+          {link && (
+            <TouchableOpacity
+              style={linkButtonStyle}
+              onPress={handleOpenLink}>
+              <ThemedText style={linkButtonTextStyle}>
+                {link.startsWith('thenotifier://calendar-event') ? 'Open Calendar Event' : 'Open Link'}
+              </ThemedText>
+            </TouchableOpacity>
+          )}
         </ThemedView>
-        {link && (
-          <TouchableOpacity
-            style={[styles.button, { backgroundColor: colors.tint }]}
-            onPress={handleOpenLink}>
-            <ThemedText style={styles.buttonText}>
-              {link.startsWith('thenotifier://calendar-event') ? 'Open Calendar Event' : 'Open Link'}
-            </ThemedText>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={() => router.back()}>
-          <ThemedText type="link" style={styles.closeButton}>
+        <TouchableOpacity style={closeButtonStyle} onPress={() => router.back()}>
+          <ThemedText type="link" style={closeButtonTextStyle}>
             Close
           </ThemedText>
         </TouchableOpacity>
       </ThemedView>
     </ThemedView>
   );
+
 }
+
+
 
 const styles = StyleSheet.create({
   container: {
@@ -152,8 +179,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(56, 76, 121, 0.45)',
   },
   message: {
-    fontSize: 18,
-    lineHeight: 24,
+    textAlign: 'left',
     marginBottom: 14,
   },
   note: {
@@ -161,19 +187,23 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   closeButton: {
-    textAlign: 'center',
-    marginTop: 20,
-    padding: 10,
-  },
-  button: {
     borderRadius: 50,
     padding: 16,
     alignItems: 'center',
-    marginTop: 20,
+    marginTop: 30,
   },
-  buttonText: {
-    color: '#605678',
-    fontSize: 18,
+  closeButtonText: {
+    textAlign: 'center',
+  },
+  linkButton: {
+    borderRadius: 50,
+    borderWidth: 1,
+    padding: 16,
+    alignItems: 'center',
+    marginTop: 30,
+  },
+  linkButtonText: {
+    textAlign: 'center',
     fontWeight: '600',
   },
 

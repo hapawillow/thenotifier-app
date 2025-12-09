@@ -332,14 +332,16 @@ export default function HomeScreen() {
               </ThemedView>
             )}
 
-            <ThemedView style={styles.detailRow}>
-              <ThemedText type="subtitle" style={styles.detailLabel}>
-                Note:
-              </ThemedText>
-              <ThemedText style={styles.detailValue}>
-                {item.note}
-              </ThemedText>
-            </ThemedView>
+            {item.note && (
+              <ThemedView style={styles.detailRow}>
+                <ThemedText type="subtitle" style={styles.detailLabel}>
+                  Note:
+                </ThemedText>
+                <ThemedText style={styles.detailValue}>
+                  {item.note}
+                </ThemedText>
+              </ThemedView>
+            )}
 
             {item.link && (
               <ThemedView style={styles.detailRow}>
@@ -455,14 +457,16 @@ export default function HomeScreen() {
               </ThemedView>
             )}
 
-            <ThemedView style={styles.detailRow}>
-              <ThemedText type="subtitle" style={styles.detailLabel}>
-                Note:
-              </ThemedText>
-              <ThemedText style={styles.detailValue}>
-                {item.note}
-              </ThemedText>
-            </ThemedView>
+            {item.note && (
+              <ThemedView style={styles.detailRow}>
+                <ThemedText type="subtitle" style={styles.detailLabel}>
+                  Note:
+                </ThemedText>
+                <ThemedText style={styles.detailValue}>
+                  {item.note}
+                </ThemedText>
+              </ThemedView>
+            )}
 
             {item.link && (
               <ThemedView style={styles.detailRow}>

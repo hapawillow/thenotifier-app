@@ -363,10 +363,11 @@ export const archiveScheduledNotifications = async () => {
         createdAt,
         updatedAt
       FROM scheduledNotification
-      WHERE scheduleDateTime < '${now}';`);
+      WHERE scheduleDateTime < '${now}'
+      and (repeatOption IS NULL OR repeatOption = 'none');`);
     console.log('Archived scheduled notification data successfully');
     // Delete past notifications from scheduled table
-    await db.execAsync(`DELETE FROM scheduledNotification WHERE scheduleDateTime < '${now}';`);
+    await db.execAsync(`DELETE FROM scheduledNotification WHERE scheduleDateTime < '${now}' and (repeatOption IS NULL OR repeatOption = 'none');`);
     console.log('Deleted scheduled notification data successfully');
   } catch (error: any) {
     console.error('Failed to archive scheduled notification data:', error);
