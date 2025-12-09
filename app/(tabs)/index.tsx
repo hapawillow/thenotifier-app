@@ -88,6 +88,8 @@ export default function NotificationScreen() {
     editMode?: string;
     notificationId?: string;
     hasAlarm?: string;
+    calendarId?: string;
+    originalEventId?: string;
   }>();
 
   // Initialize state from params if available
@@ -690,7 +692,7 @@ export default function NotificationScreen() {
       });
 
       console.log('Notification scheduled successfully, saving notification data...');
-      await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported);
+      await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, params.calendarId, params.originalEventId);
       console.log('Notification data saved successfully');
 
       // Schedule alarm if enabled

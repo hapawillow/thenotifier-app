@@ -67,6 +67,22 @@ export const initDatabase = async () => {
         console.log('Note: hasAlarm column may already exist');
       }
     }
+    try {
+      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN calendarId TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: calendarId column may already exist');
+      }
+    }
+    try {
+      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventId TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: originalEventId column may already exist');
+      }
+    }
 
     // Create indexes for scheduledNotification table
     await db.execAsync(`
@@ -75,6 +91,10 @@ export const initDatabase = async () => {
 
     await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_scheduledNotification_scheduleDateTime ON scheduledNotification (scheduleDateTime);
+    `);
+
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_scheduledNotification_calendar_event ON scheduledNotification (calendarId, originalEventId);
     `);
 
     // Create archivedNotification table if it doesn't exist
@@ -124,6 +144,22 @@ export const initDatabase = async () => {
         console.log('Note: hasAlarm column may already exist');
       }
     }
+    try {
+      await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN calendarId TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: calendarId column may already exist');
+      }
+    }
+    try {
+      await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN originalEventId TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: originalEventId column may already exist');
+      }
+    }
 
     // Create indexes for archivedNotification table
     await db.execAsync(`
@@ -168,7 +204,9 @@ export const saveScheduledNotificationData = async (
   scheduleDateTimeLocal: string,
   repeatOption?: string,
   notificationTrigger?: Notifications.NotificationTriggerInput,
-  hasAlarm?: boolean
+  hasAlarm?: boolean,
+  calendarId?: string,
+  originalEventId?: string
 ) => {
   console.log('Saving scheduled notification data:', { notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger });
   try {
@@ -185,11 +223,13 @@ export const saveScheduledNotificationData = async (
     const escapeSql = (str: string) => str.replace(/'/g, "''");
     const notificationTriggerSql = notificationTriggerJson ? `'${escapeSql(notificationTriggerJson)}'` : 'NULL';
     const repeatOptionSql = repeatOptionValue ? `'${escapeSql(repeatOptionValue)}'` : 'NULL';
+    const calendarIdSql = calendarId ? `'${escapeSql(calendarId)}'` : 'NULL';
+    const originalEventIdSql = originalEventId ? `'${escapeSql(originalEventId)}'` : 'NULL';
 
     // Use INSERT OR REPLACE to either insert new or update existing notification
     await db.execAsync(
-      `INSERT OR REPLACE INTO scheduledNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, updatedAt)
-      VALUES ('${escapeSql(notificationId)}', '${escapeSql(title)}', '${escapeSql(message)}', '${escapeSql(note)}', '${escapeSql(link)}', '${scheduleDateTime}', '${escapeSql(scheduleDateTimeLocal)}', ${repeatOptionSql}, ${notificationTriggerSql}, ${hasAlarmValue}, CURRENT_TIMESTAMP);`
+      `INSERT OR REPLACE INTO scheduledNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, updatedAt)
+      VALUES ('${escapeSql(notificationId)}', '${escapeSql(title)}', '${escapeSql(message)}', '${escapeSql(note)}', '${escapeSql(link)}', '${scheduleDateTime}', '${escapeSql(scheduleDateTimeLocal)}', ${repeatOptionSql}, ${notificationTriggerSql}, ${hasAlarmValue}, ${calendarIdSql}, ${originalEventIdSql}, CURRENT_TIMESTAMP);`
     );
     console.log('Notification data saved successfully');
     const result = await getScheduledNotificationData(notificationId);
@@ -205,8 +245,8 @@ export const getScheduledNotificationData = async (notificationId: string) => {
     const db = await openDatabase();
     // First ensure table exists
     await initDatabase();
-    const result = await db.getFirstAsync<{ notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; createdAt: string; updatedAt: string }>(
-      `SELECT notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, createdAt, updatedAt FROM scheduledNotification WHERE notificationId = '${notificationId.replace(/'/g, "''")}';`
+    const result = await db.getFirstAsync<{ notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; calendarId: string | null; originalEventId: string | null; createdAt: string; updatedAt: string }>(
+      `SELECT notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, createdAt, updatedAt FROM scheduledNotification WHERE notificationId = '${notificationId.replace(/'/g, "''")}';`
     );
     if (!result) return null;
 
@@ -236,8 +276,8 @@ export const getAllScheduledNotificationData = async () => {
     const db = await openDatabase();
     // First ensure table exists
     await initDatabase();
-    const result = await db.getAllAsync<{ id: number; notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; createdAt: string; updatedAt: string }>(
-      `SELECT id, notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, createdAt, updatedAt FROM scheduledNotification ORDER BY scheduleDateTime ASC;`
+    const result = await db.getAllAsync<{ id: number; notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; calendarId: string | null; originalEventId: string | null; createdAt: string; updatedAt: string }>(
+      `SELECT id, notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, createdAt, updatedAt FROM scheduledNotification ORDER BY scheduleDateTime ASC;`
     );
     if (!result) return [];
 
@@ -348,7 +388,7 @@ export const archiveScheduledNotifications = async () => {
     // Get current time in ISO format for comparison
     const now = new Date().toISOString();
     // Archive notifications that have passed (scheduleDateTime < now)
-    await db.execAsync(`INSERT OR REPLACE INTO archivedNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, createdAt, updatedAt) 
+    await db.execAsync(`INSERT OR REPLACE INTO archivedNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, createdAt, updatedAt) 
       SELECT
         notificationId,
         title,
@@ -360,6 +400,8 @@ export const archiveScheduledNotifications = async () => {
         repeatOption,
         notificationTrigger,
         hasAlarm,
+        calendarId,
+        originalEventId,
         createdAt,
         updatedAt
       FROM scheduledNotification
@@ -394,8 +436,8 @@ export const getAllArchivedNotificationData = async () => {
   try {
     const db = await openDatabase();
     await initDatabase();
-    const result = await db.getAllAsync<{ id: number; notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; createdAt: string; updatedAt: string; handledAt: string | null; cancelledAt: string | null; archivedAt: string }>(
-      `SELECT id, notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, createdAt, updatedAt, handledAt, cancelledAt, archivedAt FROM archivedNotification ORDER BY archivedAt DESC;`
+    const result = await db.getAllAsync<{ id: number; notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; calendarId: string | null; originalEventId: string | null; createdAt: string; updatedAt: string; handledAt: string | null; cancelledAt: string | null; archivedAt: string }>(
+      `SELECT id, notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, createdAt, updatedAt, handledAt, cancelledAt, archivedAt FROM archivedNotification ORDER BY archivedAt DESC;`
     );
     if (!result) return [];
 
@@ -514,6 +556,36 @@ export const saveCalendarSelections = async (selectedCalendarIds: Set<string>) =
   } catch (error: any) {
     console.error('Failed to save calendar selections:', error);
     throw new Error(`Failed to save calendar selections: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Check if there are any upcoming scheduled notifications for a calendar event
+export const checkUpcomingNotificationForCalendarEvent = async (calendarId: string, originalEventId: string): Promise<boolean> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+
+    // Get current time in ISO format for comparison
+    const now = new Date().toISOString();
+
+    // Escape single quotes to prevent SQL injection
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const escapedCalendarId = escapeSql(calendarId);
+    const escapedOriginalEventId = escapeSql(originalEventId);
+
+    // Query for upcoming notifications matching calendarId AND originalEventId
+    const result = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) as count FROM scheduledNotification 
+       WHERE calendarId = '${escapedCalendarId}' 
+       AND originalEventId = '${escapedOriginalEventId}' 
+       AND scheduleDateTime > '${now}';`
+    );
+
+    return result ? result.count > 0 : false;
+  } catch (error: any) {
+    console.error('Failed to check upcoming notification for calendar event:', error);
+    // Return false on error to allow user to proceed
+    return false;
   }
 };
 

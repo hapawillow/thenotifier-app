@@ -9,7 +9,7 @@ import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { getAllCalendarSelections, saveCalendarSelections } from '@/utils/database';
+import { checkUpcomingNotificationForCalendarEvent, getAllCalendarSelections, saveCalendarSelections } from '@/utils/database';
 
 type CalendarEvent = {
   id: string;
@@ -407,7 +407,39 @@ export default function CalendarScreen() {
     return 'none';
   };
 
-  const handleScheduleNotification = (event: CalendarEvent) => {
+  const handleScheduleNotification = async (event: CalendarEvent) => {
+    // Check if there's an upcoming notification for this calendar event
+    const hasUpcomingNotification = await checkUpcomingNotificationForCalendarEvent(event.calendarId, event.originalEventId);
+
+    if (hasUpcomingNotification) {
+      // Show alert asking if user wants to create another notification
+      Alert.alert(
+        'Existing Notification',
+        "There's an upcoming notification for this. Do you want to create another one?",
+        [
+          {
+            text: 'No',
+            style: 'cancel',
+            onPress: () => {
+              // Do nothing, remain on calendar screen
+            },
+          },
+          {
+            text: 'Yes',
+            onPress: () => {
+              // Proceed with navigation
+              navigateToScheduleScreen(event);
+            },
+          },
+        ]
+      );
+    } else {
+      // No upcoming notification, proceed normally
+      navigateToScheduleScreen(event);
+    }
+  };
+
+  const navigateToScheduleScreen = (event: CalendarEvent) => {
     // Store event details in a custom URL format that we can parse later
     // Format: thenotifier://calendar-event?eventId={eventId}&calendarId={calendarId}&startDate={startDate}
     // This allows us to retrieve the event and open it properly in the native calendar app
@@ -425,6 +457,8 @@ export default function CalendarScreen() {
       note: '(click the button to open your calendar)',
       link: calendarLink,
       repeat: repeatOption, // Always include repeat parameter to ensure it's set correctly
+      calendarId: event.calendarId,
+      originalEventId: event.originalEventId,
     };
 
     // Try navigating using React Navigation's navigate method

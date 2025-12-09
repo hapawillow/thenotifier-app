@@ -23,6 +23,8 @@ type ScheduledNotification = {
   repeatOption: string | null;
   notificationTrigger: any; // Notifications.NotificationTriggerInput | undefined
   hasAlarm: boolean;
+  calendarId?: string | null;
+  originalEventId?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -39,6 +41,8 @@ type ArchivedNotification = {
   repeatOption: string | null;
   notificationTrigger: any; // Notifications.NotificationTriggerInput | undefined
   hasAlarm: boolean;
+  calendarId?: string | null;
+  originalEventId?: string | null;
   createdAt: string;
   updatedAt: string;
   handledAt: string | null;
