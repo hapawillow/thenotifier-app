@@ -28,13 +28,13 @@
         <key>CFBundleURLSchemes</key>
         <array>
           <string>thenotifier</string>
-          <string>com.hapawillow.thenotifier</string>
+          <string>app.thenotifier.thenotifier</string>
         </array>
       </dict>
       <dict>
         <key>CFBundleURLSchemes</key>
         <array>
-          <string>exp+thenotifier</string>
+          <string>exp+the-notifier-basic</string>
         </array>
       </dict>
     </array>

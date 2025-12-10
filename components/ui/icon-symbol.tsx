@@ -25,6 +25,8 @@ const MAPPING = {
   'trash': 'delete',
   'calendar': 'calendar-today',
   'repeat': 'repeat',
+  'xmark': 'cancel',
+  'zzz': 'snooze'
 } as IconMapping;
 
 /**

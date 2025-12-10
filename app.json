@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "The Notifier",
-    "slug": "thenotifier",
+    "slug": "the-notifier-basic",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/app-icon.png",
@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hapawillow.thenotifier",
+      "bundleIdentifier": "app.thenotifier.thenotifier",
       "appleTeamId": "CW4NQJKB99",
       "infoPlist": {
         "NSCalendarsUsageDescription": "This app needs access to your calendar to display events and schedule notifications.",
@@ -26,7 +26,11 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.hapawillow.thenotifier"
+      "package": "com.hapawillow.thenotifier",
+      "permissions": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ]
     },
     "web": {
       "output": "static",
@@ -81,8 +85,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "68632d89-5de5-4cc2-9a59-7021ce29fb6d"
+        "projectId": "3b7f8e4e-93ca-43d0-b13d-0b7fff31a815"
       }
-    }
+    },
+    "owner": "hapa-willow"
   }
 }

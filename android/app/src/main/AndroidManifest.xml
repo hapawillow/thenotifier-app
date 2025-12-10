@@ -31,7 +31,7 @@
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="thenotifier"/>
-        <data android:scheme="exp+thenotifier"/>
+        <data android:scheme="exp+the-notifier-basic"/>
       </intent-filter>
     </activity>
   </application>
