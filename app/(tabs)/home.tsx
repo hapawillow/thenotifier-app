@@ -72,16 +72,16 @@ export default function HomeScreen() {
       // Archive past notifications first
       const { archiveScheduledNotifications } = await import('@/utils/database');
       await archiveScheduledNotifications();
+
       // Small delay to ensure database operations complete
       await new Promise(resolve => setTimeout(resolve, 50));
+
       // Then load the updated list
-      const data = await getAllScheduledNotificationData();
-      // Filter out any past notifications that might still be in the database
-      const now = new Date().toISOString();
-      const futureNotifications = data.filter(item => item.scheduleDateTime > now);
-      setScheduledNotifications(futureNotifications);
+      const notifications = await getAllScheduledNotificationData();
+      setScheduledNotifications(notifications);
+
       // Initialize animations for new items
-      futureNotifications.forEach((item) => {
+      notifications.forEach((item) => {
         if (!animations.has(item.id)) {
           animations.set(item.id, new Animated.Value(0));
         }

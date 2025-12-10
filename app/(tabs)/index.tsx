@@ -175,10 +175,10 @@ export default function NotificationScreen() {
   useFocusEffect(
     useCallback(() => {
       checkNotificationLimit();
-      
+
       // Re-read params to ensure they're applied even if useLocalSearchParams() didn't update
       // This fixes the bug where params don't populate when navigating to the same route
-      
+
       // Handle edit mode
       if (params.editMode === 'true') {
         setIsEditMode(true);
@@ -197,7 +197,7 @@ export default function NotificationScreen() {
         setEditingNotificationId(null);
         setEditingHasAlarm(false);
       }
-      
+
       // Apply params if they exist (only update if param is present to avoid clearing fields unnecessarily)
       if (params.date) {
         setSelectedDate(new Date(params.date));
@@ -205,7 +205,7 @@ export default function NotificationScreen() {
         // Reset selectedDate to current date/time if no date parameter is provided
         setSelectedDate(new Date());
       }
-      
+
       if (params.title) {
         setTitle(params.title);
       }
@@ -569,7 +569,7 @@ export default function NotificationScreen() {
     console.log('=== SCHEDULE NOTIFICATION ===');
 
     if (!message.trim()) {
-      Alert.alert('Error', 'Please fill in the message');
+      Alert.alert('Error', 'You forgot the message');
       return;
     }
 
@@ -584,7 +584,7 @@ export default function NotificationScreen() {
     const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000); // Add 1 minute (60 seconds * 1000 ms)
 
     if (dateWithoutSeconds <= oneMinuteFromNow) {
-      Alert.alert('Error', 'Please select a future date and time at least 1 minute from now');
+      Alert.alert('Error', 'Select a future date and time more than 1 minute from now');
       return;
     }
 
@@ -733,7 +733,7 @@ export default function NotificationScreen() {
         trigger: notificationTrigger,
       });
 
-      console.log('Notification scheduled successfully, saving notification data...');
+      console.log('Notification scheduled successfully, saving notification data...', notificationId, notificationTitle, message, note, link, dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, params.calendarId, params.originalEventId);
       await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, params.calendarId, params.originalEventId);
       console.log('Notification data saved successfully');
 
@@ -907,11 +907,11 @@ export default function NotificationScreen() {
           if (errorMessage.includes('permission') || errorMessage.includes('Permission') || errorMessage.includes('authorization')) {
             Alert.alert(
               'Alarm Permission Required',
-              'Unable to schedule alarm. AlarmKit requires permission to schedule alarms. If you denied the permission dialog, you may need to delete and reinstall the app to be prompted again, or the system may prompt you when you try to schedule an alarm.',
+              'You won\'t be able to add an alarm until you give this app permission to set alarms. If you denied the alarm permission dialog, you can allow this app to set alarms in your system settings. If that doesn\'t work then you may need to delete and reinstall the app.',
               [{ text: 'OK' }]
             );
           } else {
-            Alert.alert('Warning', `Notification scheduled, but failed to schedule alarm: ${errorMessage}`);
+            Alert.alert('Warning', `The notification was scheduled, but there was a problem scheduling the alarm: ${errorMessage}`);
           }
         }
       }
@@ -920,7 +920,7 @@ export default function NotificationScreen() {
       if (isEditMode) {
         Alert.alert(
           'Success',
-          'Existing notification has been changed.',
+          'Your existing notification has been changed.',
           [
             {
               text: 'OK',
@@ -931,7 +931,7 @@ export default function NotificationScreen() {
           ]
         );
       } else {
-        Alert.alert('Success', 'Notification scheduled successfully!');
+        Alert.alert('Success', 'Your notification has been scheduled!');
       }
 
       console.log('Notification scheduled with ID:', notificationId);
@@ -944,7 +944,11 @@ export default function NotificationScreen() {
       // Reset form after successful scheduling
       resetForm();
     } catch (error) {
-      Alert.alert('Error', 'Failed to schedule notification');
+      if (isEditMode) {
+        Alert.alert('Error', 'Sorry, your notification could not be updated.');
+      } else {
+        Alert.alert('Error', 'Sorry, your notification could not be scheduled.');
+      }
       console.error(error);
       console.error('Failed to schedule notification with ID:', notificationId);
       console.error('Failed selected date:', dateWithoutSeconds);
@@ -1135,7 +1139,7 @@ export default function NotificationScreen() {
               style={scheduleButtonStyle}
               onPress={scheduleNotification}
               onLayout={handleButtonLayout}>
-              <ThemedText style={scheduleButtonTextStyle}>Schedule Notification</ThemedText>
+              <ThemedText style={scheduleButtonTextStyle}>{isEditMode ? 'Update' : 'Schedule'} Notification</ThemedText>
             </TouchableOpacity>
           </ThemedView>
 
