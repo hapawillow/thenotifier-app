@@ -171,15 +171,57 @@ export default function NotificationScreen() {
   }, [router, isEditMode]);
 
   // Check scheduled notifications count when screen is focused (switching from another tab)
-  // Also reset selectedDate to current date/time unless a date parameter is provided
+  // Also apply params and reset selectedDate to current date/time unless a date parameter is provided
   useFocusEffect(
     useCallback(() => {
       checkNotificationLimit();
-      // Reset selectedDate to current date/time if no date parameter is provided
-      if (!params.date) {
+      
+      // Re-read params to ensure they're applied even if useLocalSearchParams() didn't update
+      // This fixes the bug where params don't populate when navigating to the same route
+      
+      // Handle edit mode
+      if (params.editMode === 'true') {
+        setIsEditMode(true);
+        if (params.notificationId) {
+          setEditingNotificationId(params.notificationId);
+        }
+        if (params.hasAlarm === 'true') {
+          setEditingHasAlarm(true);
+          setScheduleAlarm(true);
+        } else {
+          setEditingHasAlarm(false);
+          setScheduleAlarm(false);
+        }
+      } else {
+        setIsEditMode(false);
+        setEditingNotificationId(null);
+        setEditingHasAlarm(false);
+      }
+      
+      // Apply params if they exist (only update if param is present to avoid clearing fields unnecessarily)
+      if (params.date) {
+        setSelectedDate(new Date(params.date));
+      } else {
+        // Reset selectedDate to current date/time if no date parameter is provided
         setSelectedDate(new Date());
       }
-    }, [checkNotificationLimit, params.date])
+      
+      if (params.title) {
+        setTitle(params.title);
+      }
+      if (params.message) {
+        setMessage(params.message);
+      }
+      if (params.note) {
+        setNote(params.note);
+      }
+      if (params.link) {
+        setLink(params.link);
+      }
+      if (params.repeat) {
+        setRepeatOption(params.repeat as 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly');
+      }
+    }, [checkNotificationLimit, params.date, params.title, params.message, params.note, params.link, params.repeat, params.editMode, params.notificationId, params.hasAlarm])
   );
 
   useEffect(() => {
