@@ -464,13 +464,13 @@ export default function CalendarScreen() {
     // Try navigating using React Navigation's navigate method
     // The screen name should match the tab name in _layout.tsx
     try {
-      (navigation as any).navigate('index', params);
-      console.log('handleScheduleNotification: Navigating to index screen with params using navigate:', params);
+      (navigation as any).navigate('schedule', params);
+      console.log('handleScheduleNotification: Navigating to schedule screen with params using navigate:', params);
     } catch (error) {
       // Fallback: use router with href string
-      console.log('handleScheduleNotification: Navigating to index screen with params using router:', params);
+      console.log('handleScheduleNotification: Navigating to schedule screen with params using router:', params);
       const queryParams = new URLSearchParams(params);
-      router.push(`/(tabs)/index?${queryParams.toString()}` as any);
+      router.push(`/(tabs)/schedule?${queryParams.toString()}` as any);
     }
   };
 
