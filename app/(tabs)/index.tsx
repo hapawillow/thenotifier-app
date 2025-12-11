@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
-import { useNavigation, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Animated, Dimensions, FlatList, RefreshControl, StyleSheet, TouchableOpacity } from 'react-native';
 
@@ -63,7 +63,6 @@ export default function HomeScreen() {
   const [drawerHeightUpdateTrigger, setDrawerHeightUpdateTrigger] = useState(0);
   const [refreshingScheduled, setRefreshingScheduled] = useState(false);
   const [refreshingArchived, setRefreshingArchived] = useState(false);
-  const navigation = useNavigation();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
@@ -195,7 +194,7 @@ export default function HomeScreen() {
   };
 
   const handleEdit = (notification: ScheduledNotification) => {
-    const params: any = {
+    const params = {
       editMode: 'true',
       notificationId: notification.notificationId,
       title: notification.title,
@@ -207,18 +206,13 @@ export default function HomeScreen() {
       hasAlarm: notification.hasAlarm.toString(),
     };
 
-    try {
-      (navigation as any).navigate('schedule', params);
-      console.log('handleEdit: Navigating to schedule screen with params using navigate:', params);
-    } catch (error) {
-      // Fallback: use router with href string
-      console.log('handleEdit: Navigating to schedule screen with params using router:', params);
-      const queryParams = new URLSearchParams(params);
-      router.push(`/(tabs)/schedule?${queryParams.toString()}` as any);
-    }
-
-    //   const queryParams = new URLSearchParams(params);
-    //   router.push(`/(tabs)/schedule?${queryParams.toString()}` as any);
+    router.push({
+      pathname: '/schedule/[formId]' as any,
+      params: {
+        formId: notification.notificationId,
+        ...params,
+      },
+    });
   };
 
   // Format date string to remove seconds

@@ -210,6 +210,12 @@ export default function RootLayout() {
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen
+            name="schedule"
+            options={{
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen
             name="notification-display"
             options={{
               presentation: 'modal',

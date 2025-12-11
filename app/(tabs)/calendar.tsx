@@ -1,4 +1,4 @@
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import * as Calendar from 'expo-calendar';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -36,7 +36,6 @@ export default function CalendarScreen() {
   const [permissionStatus, setPermissionStatus] = useState<'undetermined' | 'granted' | 'denied'>('undetermined');
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
-  const navigation = useNavigation();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
@@ -449,29 +448,24 @@ export default function CalendarScreen() {
     const repeatOption = event.isRecurring ? mapRecurrenceToRepeatOption(event.recurrenceRule) : 'none';
 
     // Navigate to the Schedule Notification screen with pre-populated data
-    // Try using React Navigation's navigate method for tab navigation
-    const params: any = {
+    const params = {
       date: event.startDate.toISOString(),
       title: '📅 ' + event.calendarName,
       message: event.title,
       note: '(click the button to open your calendar)',
       link: calendarLink,
-      repeat: repeatOption, // Always include repeat parameter to ensure it's set correctly
+      repeat: repeatOption,
       calendarId: event.calendarId,
       originalEventId: event.originalEventId,
     };
 
-    // Try navigating using React Navigation's navigate method
-    // The screen name should match the tab name in _layout.tsx
-    try {
-      (navigation as any).navigate('schedule', params);
-      console.log('handleScheduleNotification: Navigating to schedule screen with params using navigate:', params);
-    } catch (error) {
-      // Fallback: use router with href string
-      console.log('handleScheduleNotification: Navigating to schedule screen with params using router:', params);
-      const queryParams = new URLSearchParams(params);
-      router.push(`/(tabs)/schedule?${queryParams.toString()}` as any);
-    }
+    router.push({
+      pathname: '/schedule/[formId]' as any,
+      params: {
+        formId: event.originalEventId,
+        ...params,
+      },
+    });
   };
 
   const formatDateTime = (date: Date) => {
