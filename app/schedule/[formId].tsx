@@ -2,7 +2,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect } from 'react';
 
-import { ScheduleForm, ScheduleFormParams } from '../components/scheduleForm';
+import { ScheduleForm, ScheduleFormParams } from '@/components/scheduleForm';
 
 export default function ScheduleFormScreen() {
   const router = useRouter();

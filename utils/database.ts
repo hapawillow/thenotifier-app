@@ -388,50 +388,8 @@ export const archiveScheduledNotifications = async () => {
     // Get current time in ISO format for comparison
     const now = new Date().toISOString();
 
-    const result = await db.getAllAsync<{ id: number; notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; calendarId: string | null; originalEventId: string | null; createdAt: string; updatedAt: string }>(
-      `SELECT id, notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, createdAt, updatedAt FROM scheduledNotification ORDER BY scheduleDateTime ASC;`
-    );
-
-    const debug_allScheduledNotificationData = await getAllScheduledNotificationData();
-    console.log('Debug all scheduled notification data:', debug_allScheduledNotificationData);
-
-    // const debug_archiveQueryResult = await db.getAllAsync<{
-    //   now: string;
-    //   notificationId: string;
-    //   title: string;
-    //   message: string;
-    //   note: string;
-    //   link: string;
-    //   scheduleDateTime: string;
-    //   scheduleDateTimeLocal: string;
-    //   repeatOption: string | null;
-    //   notificationTrigger: string | null;
-    //   hasAlarm: number;
-    //   calendarId: string | null;
-    //   originalEventId: string | null;
-    //   createdAt: string;
-    //   updatedAt: string;
-    // }>(
-    //   `SELECT
-    //     '${now}' as now,
-    //     notificationId,
-    //     title,
-    //     message,
-    //     note,
-    //     link,
-    //     scheduleDateTime,
-    //     scheduleDateTimeLocal,
-    //     repeatOption,
-    //     notificationTrigger,
-    //     hasAlarm,
-    //     calendarId,
-    //     originalEventId,
-    //     createdAt,
-    //     updatedAt
-    //   FROM scheduledNotification
-    // WHERE scheduleDateTime < '${now}'
-    // and (repeatOption IS NULL OR repeatOption = 'none')`);
-    // console.log('Debug archive query result:', debug_archiveQueryResult);
+    // const debug_allScheduledNotificationData = await getAllScheduledNotificationData();
+    // console.log('Debug all scheduled notification data:', debug_allScheduledNotificationData);
 
     // Archive notifications that have passed (scheduleDateTime < now)
     await db.execAsync(`INSERT OR REPLACE INTO archivedNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, createdAt, updatedAt) 
@@ -454,44 +412,6 @@ export const archiveScheduledNotifications = async () => {
       WHERE scheduleDateTime < '${now}'
       and (repeatOption IS NULL OR repeatOption = 'none');`);
     console.log('Archived scheduled notification data successfully');
-
-    // const debug_deleteQueryResult = await db.getAllAsync<{
-    //   now: string;
-    //   notificationId: string;
-    //   title: string;
-    //   message: string;
-    //   note: string;
-    //   link: string;
-    //   scheduleDateTime: string;
-    //   scheduleDateTimeLocal: string;
-    //   repeatOption: string | null;
-    //   notificationTrigger: string | null;
-    //   hasAlarm: number;
-    //   calendarId: string | null;
-    //   originalEventId: string | null;
-    //   createdAt: string;
-    //   updatedAt: string;
-    // }>(
-    //   `SELECT
-    //     notificationId,
-    //     title,
-    //     message,
-    //     note,
-    //     link,
-    //     scheduleDateTime,
-    //     scheduleDateTimeLocal,
-    //     repeatOption,
-    //     notificationTrigger,
-    //     hasAlarm,
-    //     calendarId,
-    //     originalEventId,
-    //     createdAt,
-    //     updatedAt
-    //   FROM scheduledNotification
-    //   WHERE scheduleDateTime < '${now}' 
-    //   and (repeatOption IS NULL OR repeatOption = 'none');`);
-    // console.log('Debug delete query result:', debug_deleteQueryResult);
-
 
     // Delete past notifications from scheduled table
     await db.execAsync(

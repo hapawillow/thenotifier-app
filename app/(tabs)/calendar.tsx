@@ -301,7 +301,7 @@ export default function CalendarScreen() {
       for (const event of allEvents) {
         if (uniqueEventsMap.has(event.id)) {
           duplicateIds.push(event.id);
-          console.warn(`Duplicate event ID found: ${event.id}`);
+          // console.warn(`Duplicate event ID found: ${event.id}`);
         } else {
           uniqueEventsMap.set(event.id, event);
         }
@@ -309,7 +309,7 @@ export default function CalendarScreen() {
       const uniqueEvents = Array.from(uniqueEventsMap.values());
 
       if (duplicateIds.length > 0) {
-        console.warn(`Found ${duplicateIds.length} duplicate event IDs:`, duplicateIds);
+        // console.warn(`Found ${duplicateIds.length} duplicate event IDs:`, duplicateIds);
       }
 
       // Sort by start date (earliest first)
