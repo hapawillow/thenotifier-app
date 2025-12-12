@@ -31,6 +31,9 @@ export default function CalendarScreen() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [animations] = useState<Map<string, Animated.Value>>(new Map());
+  const [drawerHeights] = useState<Map<string, number>>(new Map());
+  const [buttonHeights] = useState<Map<string, number>>(new Map());
+  const [drawerHeightUpdateTrigger, setDrawerHeightUpdateTrigger] = useState(0);
   const [hiddenEventIds, setHiddenEventIds] = useState<Set<string>>(new Set());
   const [showCalendarSelection, setShowCalendarSelection] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<'undetermined' | 'granted' | 'denied'>('undetermined');
@@ -486,18 +489,56 @@ export default function CalendarScreen() {
     const isExpanded = expandedIds.has(item.id);
     const animValue = animations.get(item.id) || new Animated.Value(0);
 
-    const maxDrawerHeight = item.location ? 170 : 92;
+    // Get measured button height, fallback to 56px (accommodates larger text sizes)
+    // Ensure minimum of 56px to account for text scaling that might not be captured in measurement
+    const measuredButtonHeight = Math.max(buttonHeights.get(item.id) || 0, 56);
+
+    // Calculate dynamic minimum height for drawer
+    // paddingTop (16) + location height (if present) + marginTop (8) + buttonHeight (measured, min 56px) + paddingBottom (16)
+    // For events without location, minimum is: 16 + 8 + 56 + 16 = 96px
+    // For events with location, location height will be measured dynamically
+    const DYNAMIC_MINIMUM_DRAWER_HEIGHT = 16 + 8 + measuredButtonHeight + 16;
+
+    // Use dynamic minimum height as default fallback, otherwise use measured height
+    const defaultFallbackHeight = DYNAMIC_MINIMUM_DRAWER_HEIGHT;
+    const measuredHeight = drawerHeights.get(item.id) || defaultFallbackHeight;
 
     const drawerHeight = animValue.interpolate({
       inputRange: [0, 1],
-      outputRange: [0, maxDrawerHeight],
+      outputRange: [0, measuredHeight],
     });
-
 
     const opacity = animValue.interpolate({
       inputRange: [0, 1],
       outputRange: [0, 1],
     });
+
+    const handleDrawerContentLayout = (event: any) => {
+      const { height } = event.nativeEvent.layout;
+      // The measured height already includes padding (16px top, 16px bottom)
+      // For calendar events, enforce dynamic minimum height based on measured button height
+      // to ensure buttons are fully visible even with large text sizes
+      let finalHeight = height;
+
+      // Always enforce minimum height to ensure button is fully visible
+      const currentButtonHeight = buttonHeights.get(item.id);
+      if (currentButtonHeight && currentButtonHeight > 0) {
+        // Use measured button height to calculate minimum
+        const dynamicMinimum = 16 + 8 + currentButtonHeight + 16;
+        finalHeight = Math.max(height, dynamicMinimum);
+      } else {
+        // Button hasn't been measured yet, use fallback minimum
+        finalHeight = Math.max(height, DYNAMIC_MINIMUM_DRAWER_HEIGHT);
+      }
+
+      // Store the height for use in animation
+      const currentHeight = drawerHeights.get(item.id);
+      if (currentHeight !== finalHeight) {
+        drawerHeights.set(item.id, finalHeight);
+        // Trigger re-render to update animation with new height
+        setDrawerHeightUpdateTrigger(prev => prev + 1);
+      }
+    };
 
     return (
       <ThemedView style={[styles.eventItem, { borderColor: colors.icon + '40' }]}>
@@ -543,7 +584,9 @@ export default function CalendarScreen() {
               borderTopColor: colors.icon + '40',
             },
           ]}>
-          <ThemedView style={styles.drawerContent}>
+          <ThemedView
+            style={styles.drawerContent}
+            onLayout={handleDrawerContentLayout}>
 
             {item.location && (
               <ThemedView style={styles.detailRow}>
@@ -571,7 +614,32 @@ export default function CalendarScreen() {
               <TouchableOpacity
                 style={[styles.actionButton, { backgroundColor: colors.tint }]}
                 onPress={() => handleScheduleNotification(item)}
-                activeOpacity={0.7}>
+                activeOpacity={0.7}
+                onLayout={(event) => {
+                  const { height } = event.nativeEvent.layout;
+                  // Store the measured button height to calculate dynamic minimum drawer height
+                  // Measure the actual button height (not container) for accurate measurement
+                  // Ensure minimum of 56px to account for text scaling
+                  const measuredHeight = Math.max(height, 56);
+                  const currentButtonHeight = buttonHeights.get(item.id);
+                  // Only update if height is valid and different, or if we don't have a measurement yet
+                  if (measuredHeight > 0 && currentButtonHeight !== measuredHeight) {
+                    buttonHeights.set(item.id, measuredHeight);
+
+                    // Immediately recalculate drawer height
+                    const dynamicMinimum = 16 + 8 + measuredHeight + 16;
+                    const currentDrawerHeight = drawerHeights.get(item.id);
+                    // Always update if we don't have a drawer height, or if current is less than minimum
+                    if (!currentDrawerHeight || currentDrawerHeight < dynamicMinimum) {
+                      drawerHeights.set(item.id, dynamicMinimum);
+                      // Trigger re-render to update drawer height calculation
+                      setDrawerHeightUpdateTrigger(prev => prev + 1);
+                    } else {
+                      // Even if drawer height is already set, trigger re-render to ensure consistency
+                      setDrawerHeightUpdateTrigger(prev => prev + 1);
+                    }
+                  }
+                }}>
                 <ThemedText maxFontSizeMultiplier={1.4} style={[styles.actionButtonText, { color: colors.buttonText }]}>Schedule Notification</ThemedText>
               </TouchableOpacity>
             </ThemedView>
@@ -785,7 +853,7 @@ const styles = StyleSheet.create({
   drawerContent: {
     paddingTop: 16,
     paddingHorizontal: 16,
-    paddingBottom: 0,
+    paddingBottom: 16,
     gap: 12,
   },
   detailRow: {
