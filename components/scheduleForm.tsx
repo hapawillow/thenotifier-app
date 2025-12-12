@@ -878,11 +878,11 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
             </ThemedView>
 
             <ThemedView style={styles.inputGroup}>
-              <ThemedText type="subtitle" maxFontSizeMultiplier={1.8}>Date & Time</ThemedText>
+              <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>Date & Time</ThemedText>
               <TouchableOpacity
                 style={dateButtonStyle}
                 onPress={handleDateButtonPress}>
-                <ThemedText maxFontSizeMultiplier={1.8}>{formatDateTime(selectedDate)}</ThemedText>
+                <ThemedText maxFontSizeMultiplier={1.6}>{formatDateTime(selectedDate)}</ThemedText>
               </TouchableOpacity>
             </ThemedView>
 
@@ -899,7 +899,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
               <TouchableOpacity
                 style={doneButtonStyle}
                 onPress={handleDonePress}>
-                <ThemedText maxFontSizeMultiplier={1.8} style={doneButtonTextStyle}>Done</ThemedText>
+                <ThemedText maxFontSizeMultiplier={1.6} style={doneButtonTextStyle}>Done</ThemedText>
               </TouchableOpacity>
             )}
 
@@ -907,34 +907,38 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
               <TouchableOpacity
                 style={repeatButtonStyle}
                 onPress={handleRepeatButtonPress}>
-                <ThemedText maxFontSizeMultiplier={1.8}>{formatRepeatOption(repeatOption)}</ThemedText>
+                <ThemedText maxFontSizeMultiplier={1.6}>{formatRepeatOption(repeatOption)}</ThemedText>
               </TouchableOpacity>
             </ThemedView>
 
-            {showRepeatPicker && (
-              <Picker
-                selectedValue={repeatOption}
-                onValueChange={handleRepeatChange}
-                style={[styles.picker, { color: colors.text, borderColor: colors.icon, backgroundColor: colors.background }]}
-                itemStyle={{ color: colors.text }}
-              >
-                <Picker.Item label="Do not repeat" value="none" />
-                <Picker.Item label="Repeat every day" value="daily" />
-                <Picker.Item label="Repeat every week" value="weekly" />
-                <Picker.Item label="Repeat every month" value="monthly" />
-                <Picker.Item label="Repeat every year" value="yearly" />
-              </Picker>
-            )}
-            {Platform.OS === 'ios' && showRepeatPicker && (
-              <TouchableOpacity
-                style={doneButtonStyle}
-                onPress={handleRepeatDonePress}>
-                <ThemedText maxFontSizeMultiplier={1.8} style={doneButtonTextStyle}>Done</ThemedText>
-              </TouchableOpacity>
-            )}
+            {
+              showRepeatPicker && (
+                <Picker
+                  selectedValue={repeatOption}
+                  onValueChange={handleRepeatChange}
+                  style={[styles.picker, { color: colors.text, borderColor: colors.icon, backgroundColor: colors.background }]}
+                  itemStyle={{ color: colors.text }}
+                >
+                  <Picker.Item label="Do not repeat" value="none" />
+                  <Picker.Item label="Repeat every day" value="daily" />
+                  <Picker.Item label="Repeat every week" value="weekly" />
+                  <Picker.Item label="Repeat every month" value="monthly" />
+                  <Picker.Item label="Repeat every year" value="yearly" />
+                </Picker>
+              )
+            }
+            {
+              Platform.OS === 'ios' && showRepeatPicker && (
+                <TouchableOpacity
+                  style={doneButtonStyle}
+                  onPress={handleRepeatDonePress}>
+                  <ThemedText maxFontSizeMultiplier={1.6} style={doneButtonTextStyle}>Done</ThemedText>
+                </TouchableOpacity >
+              )
+            }
 
             <ThemedView style={styles.inputGroup}>
-              <ThemedText type="subtitle" maxFontSizeMultiplier={1.8}>Message</ThemedText>
+              <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>Message</ThemedText>
               <TextInput
                 ref={messageInputRef}
                 style={inputStyle}
@@ -945,12 +949,12 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
                 onFocus={handleMessageFocus}
                 multiline
                 numberOfLines={2}
-                maxFontSizeMultiplier={1.8}
+                maxFontSizeMultiplier={1.6}
               />
-            </ThemedView>
+            </ThemedView >
 
             <ThemedView style={styles.inputGroup}>
-              <ThemedText type="subtitle" maxFontSizeMultiplier={1.8}>Note (optional)</ThemedText>
+              <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>Note (optional)</ThemedText>
               <TextInput
                 ref={noteInputRef}
                 style={textAreaStyle}
@@ -961,12 +965,12 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
                 onFocus={handleNoteFocus}
                 multiline
                 numberOfLines={6}
-                maxFontSizeMultiplier={1.8}
+                maxFontSizeMultiplier={1.6}
               />
-            </ThemedView>
+            </ThemedView >
 
             <ThemedView style={styles.inputGroup}>
-              <ThemedText type="subtitle" maxFontSizeMultiplier={1.8}>Link (optional)</ThemedText>
+              <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>Link (optional)</ThemedText>
               <TextInput
                 ref={linkInputRef}
                 style={inputStyle}
@@ -976,15 +980,15 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
                 onChangeText={setLink}
                 onFocus={handleLinkFocus}
                 onBlur={handleLinkBlur}
-                maxFontSizeMultiplier={1.8}
+                maxFontSizeMultiplier={1.6}
 
               />
-            </ThemedView>
+            </ThemedView >
 
             {alarmSupported && (
               <ThemedView style={styles.inputGroup}>
                 <ThemedView style={styles.switchContainer}>
-                  <ThemedText type="subtitle" maxFontSizeMultiplier={1.8}>Add an Alarm</ThemedText>
+                  <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>Alarm</ThemedText>
                   <Switch
                     value={scheduleAlarm}
                     onValueChange={setScheduleAlarm}
@@ -992,7 +996,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
                     thumbColor={Platform.OS === 'ios' ? '#f0f0f0' : colors.background}
                   />
                 </ThemedView>
-              </ThemedView>
+              </ThemedView >
             )}
 
             <TouchableOpacity
@@ -1001,21 +1005,21 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
               onPress={scheduleNotification}
               onLayout={handleButtonLayout}>
               <ThemedText
-                maxFontSizeMultiplier={1.8}
+                maxFontSizeMultiplier={1.6}
                 style={scheduleButtonTextStyle}>
                 {isEditMode ? 'Update' : 'Schedule'} Notification
               </ThemedText>
-            </TouchableOpacity>
-          </ThemedView>
+            </TouchableOpacity >
+          </ThemedView >
 
-        </TouchableWithoutFeedback>
-      </KeyboardAwareScrollView>
+        </TouchableWithoutFeedback >
+      </KeyboardAwareScrollView >
       <KeyboardToolbar opacity="CF" offset={{ opened: 94, closed: 0 }} theme={theme}>
         <KeyboardToolbar.Prev />
         <KeyboardToolbar.Next />
         <KeyboardToolbar.Done />
       </KeyboardToolbar>
-    </ThemedView>
+    </ThemedView >
   );
 }
 

@@ -506,14 +506,14 @@ export default function CalendarScreen() {
           onPress={() => toggleExpand(item.id)}
           activeOpacity={0.7}>
           <ThemedView style={styles.eventContent}>
-            <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.8} style={styles.calendarName}>
+            <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.6} style={styles.calendarName}>
               {item.calendarName}
             </ThemedText>
-            <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.8} style={styles.title}>
+            <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.6} style={styles.title}>
               {item.title}
             </ThemedText>
             <ThemedView style={styles.dateTimeContainer}>
-              <ThemedText maxFontSizeMultiplier={1.8} style={styles.dateTime}>
+              <ThemedText maxFontSizeMultiplier={1.6} style={styles.dateTime}>
                 {formatDateTime(item.startDate)}
               </ThemedText>
               {item.isRecurring && (
@@ -547,11 +547,11 @@ export default function CalendarScreen() {
 
             {item.location && (
               <ThemedView style={styles.detailRow}>
-                <ThemedText type="subtitle" maxFontSizeMultiplier={1.8} style={styles.detailLabel}>
+                <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
                   Location:
                 </ThemedText>
                 <ThemedText
-                  maxFontSizeMultiplier={1.8}
+                  maxFontSizeMultiplier={1.6}
                   style={styles.detailValue}
                   numberOfLines={2}
                   ellipsizeMode="tail">
@@ -587,10 +587,10 @@ export default function CalendarScreen() {
     return (
       <ThemedView style={styles.container}>
         <ThemedView style={styles.header}>
-          <ThemedText type="title" maxFontSizeMultiplier={1.8}>Calendar Events</ThemedText>
+          <ThemedText type="title" maxFontSizeMultiplier={1.6}>Calendar Events</ThemedText>
         </ThemedView>
         <ThemedView style={styles.emptyContainer}>
-          <ThemedText maxFontSizeMultiplier={1.8} style={styles.emptyText}>Checking calendar permissions...</ThemedText>
+          <ThemedText maxFontSizeMultiplier={1.6} style={styles.emptyText}>Checking calendar permissions...</ThemedText>
         </ThemedView>
       </ThemedView>
     );
@@ -603,12 +603,12 @@ export default function CalendarScreen() {
           {/* <ThemedText type="title">Calendar Events</ThemedText> */}
         </ThemedView>
         <ThemedView style={styles.emptyContainer}>
-          <ThemedText maxFontSizeMultiplier={1.8} style={styles.emptyText}>(Permission denied)</ThemedText>
+          <ThemedText maxFontSizeMultiplier={1.6} style={styles.emptyText}>(Permission denied)</ThemedText>
           <TouchableOpacity
             style={[styles.calendarButton, { backgroundColor: '#499f5d', marginTop: 20 }]}
             onPress={requestCalendarPermissions}
             activeOpacity={0.7}>
-            <ThemedText maxFontSizeMultiplier={1.8} style={styles.calendarButtonText}>Request Calendar Access</ThemedText>
+            <ThemedText maxFontSizeMultiplier={1.6} style={styles.calendarButtonText}>Request Calendar Access</ThemedText>
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -626,7 +626,7 @@ export default function CalendarScreen() {
           activeOpacity={0.7}>
           {/* <ThemedText style={styles.calendarButtonText}> */}
           <ThemedText
-            maxFontSizeMultiplier={1.8}
+            maxFontSizeMultiplier={1.6}
             style={[styles.calendarButtonText, { color: colors.buttonText }]}>
             {showCalendarSelection ? 'Hide Calendar List' : 'Select Calendars'}
           </ThemedText>
@@ -643,7 +643,7 @@ export default function CalendarScreen() {
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
               <ThemedView style={[styles.calendarItem, { borderBottomColor: colors.icon + '20' }]}>
-                <ThemedText maxFontSizeMultiplier={1.8} style={styles.calendarItemText}>{item.title}</ThemedText>
+                <ThemedText maxFontSizeMultiplier={1.6} style={styles.calendarItemText}>{item.title}</ThemedText>
                 <Switch
                   value={selectedCalendarIds.has(item.id)}
                   onValueChange={() => toggleCalendarSelection(item.id)}
@@ -660,7 +660,7 @@ export default function CalendarScreen() {
 
       {visibleEvents.length === 0 ? (
         <ThemedView style={styles.emptyContainer}>
-          <ThemedText maxFontSizeMultiplier={1.8} style={styles.emptyText}>
+          <ThemedText maxFontSizeMultiplier={1.6} style={styles.emptyText}>
             {selectedCalendarIds.size === 0
               ? 'Select calendars to view events'
               : 'No events found for the next 30 days'}
