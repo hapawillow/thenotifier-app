@@ -1014,7 +1014,13 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
 
         </TouchableWithoutFeedback >
       </KeyboardAwareScrollView >
-      <KeyboardToolbar opacity="CF" offset={{ opened: 94, closed: 0 }} theme={theme}>
+      <KeyboardToolbar
+        opacity="CF"
+        offset={{
+          opened: source === 'tab' ? 100 : 20,
+          closed: 0
+        }}
+        theme={theme}>
         <KeyboardToolbar.Prev />
         <KeyboardToolbar.Next />
         <KeyboardToolbar.Done />
