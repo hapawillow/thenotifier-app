@@ -417,7 +417,7 @@ export default function HomeScreen() {
                 <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
                   Note:
                 </ThemedText>
-                <ThemedText maxFontSizeMultiplier={1.8} style={styles.detailValue}>
+                <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
                   {item.note}
                 </ThemedText>
               </ThemedView>
@@ -525,14 +525,14 @@ export default function HomeScreen() {
     const headerContent = (
       <>
         <ThemedView style={styles.notificationContent}>
-          <ThemedText type="defaultSemiBold" style={styles.title}>
+          <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.6} style={styles.title}>
             {item.title}
           </ThemedText>
-          <ThemedText style={styles.message} numberOfLines={2}>
+          <ThemedText maxFontSizeMultiplier={1.6} style={styles.message} numberOfLines={2}>
             {item.message}
           </ThemedText>
           <ThemedView style={styles.dateTimeRow}>
-            <ThemedText style={styles.message} numberOfLines={1}>
+            <ThemedText maxFontSizeMultiplier={1.6} style={styles.message} numberOfLines={1}>
               {formatDateTimeWithoutSeconds(item.scheduleDateTimeLocal)}
             </ThemedText>
             {item.hasAlarm && (
@@ -594,10 +594,10 @@ export default function HomeScreen() {
               onLayout={handleDrawerContentLayout}>
               {hasRepeatOption && (
                 <ThemedView style={styles.detailRow}>
-                  <ThemedText type="subtitle" style={styles.detailLabel}>
+                  <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
                     Repeat:
                   </ThemedText>
-                  <ThemedText style={styles.detailValue}>
+                  <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
                     {formatRepeatOption(item.repeatOption!, item.scheduleDateTime)}
                   </ThemedText>
                 </ThemedView>
@@ -605,10 +605,10 @@ export default function HomeScreen() {
 
               {hasNote && (
                 <ThemedView style={styles.detailRow}>
-                  <ThemedText type="subtitle" style={styles.detailLabel}>
+                  <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
                     Note:
                   </ThemedText>
-                  <ThemedText style={styles.detailValue}>
+                  <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
                     {item.note}
                   </ThemedText>
                 </ThemedView>
@@ -616,10 +616,10 @@ export default function HomeScreen() {
 
               {hasLink && (
                 <ThemedView style={styles.detailRow}>
-                  <ThemedText type="subtitle" style={styles.detailLabel}>
+                  <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
                     Link:
                   </ThemedText>
-                  <ThemedText style={styles.detailValue} numberOfLines={1}>
+                  <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue} numberOfLines={1}>
                     {item.link}
                   </ThemedText>
                 </ThemedView>
