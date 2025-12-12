@@ -481,7 +481,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
       try {
         await Notifications.cancelScheduledNotificationAsync(editingNotificationId);
         console.log('Cancelled existing notification:', editingNotificationId);
-        const alarmId = `alarm-${editingNotificationId}`;
+        const alarmId = editingNotificationId.substring("thenotifier-".length);
         console.log('Cancelling existing alarm with ID:', alarmId);
         if (editingHasAlarm) {
           try {
@@ -703,10 +703,12 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
           const hour = dateWithoutSeconds.getHours();
           const minutes = dateWithoutSeconds.getMinutes();
 
-          const alarmId = `alarm-${notificationId}`;
+          // Remove the "thenotifier-" prefix from the notificationId to get the alarmId
+          // because AlarmKit expects the alarm ID to be a UUID
+          const alarmId = notificationId.substring("thenotifier-".length);
           console.log('Scheduling alarm with ID:', alarmId);
           console.log('Alarm date:', dateWithoutSeconds.toISOString());
-          await NativeAlarmManager.scheduleAlarm(
+          const alarmResult = await NativeAlarmManager.scheduleAlarm(
             {
               id: alarmId,
               type: 'fixed',
@@ -747,6 +749,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
           );
 
           console.log('Alarm scheduled successfully for:', dateWithoutSeconds);
+          console.log('Alarm result:', alarmResult);
           setTimeout(async () => {
             const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
             if (existingAlarm) {
