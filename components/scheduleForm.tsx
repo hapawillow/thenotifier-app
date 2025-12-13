@@ -9,7 +9,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { archiveScheduledNotifications, deleteScheduledNotification, saveScheduledNotificationData } from '@/utils/database';
+import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, saveAlarmPermissionDenied, saveScheduledNotificationData } from '@/utils/database';
+import { getPermissionInstructions } from '@/utils/permissions';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
 
@@ -56,12 +57,12 @@ export interface ScheduleFormParams {
 export interface ScheduleFormProps {
   initialParams?: ScheduleFormParams;
   isEditMode: boolean;
-  source?: 'home' | 'calendar' | 'tab';
+  source?: 'home' | 'calendar' | 'tab' | 'schedule';
   onSuccess?: () => void;
   onCancel?: () => void;
 }
 
-export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSuccess, onCancel }: ScheduleFormProps) {
+export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', onSuccess, onCancel }: ScheduleFormProps) {
   // Initialize state from initialParams if available
   const [title, setTitle] = useState(initialParams?.title || '');
   const [message, setMessage] = useState(initialParams?.message || '');
@@ -83,8 +84,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
   const buttonBottomInForm = useRef<number>(0);
   const keyboardHeightRef = useRef<number>(0);
   const hasScrolledForFocus = useRef<boolean>(false);
-  const [scheduleAlarm, setScheduleAlarm] = useState(false);
+  const [scheduleAlarm, setScheduleAlarm] = useState(false); // Will be set correctly in useEffect
   const [alarmSupported, setAlarmSupported] = useState(false);
+  const [alarmPermissionDenied, setAlarmPermissionDenied] = useState(false);
   const [repeatOption, setRepeatOption] = useState<'none' | 'daily' | 'weekly' | 'monthly' | 'yearly'>(
     (initialParams?.repeat as 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly') || 'none'
   );
@@ -97,6 +99,73 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
 
   // Memoize minimum date to prevent creating new Date object on each render
   const minimumDate = useMemo(() => new Date(), []);
+
+  // Check stored alarm permission denial state on mount and set initial scheduleAlarm state
+  useEffect(() => {
+    (async () => {
+      try {
+        const denied = await getAlarmPermissionDenied();
+        let currentDenied = denied;
+
+        // Always check current alarm permission status directly
+        try {
+          const capability = await NativeAlarmManager.checkCapability();
+          const authStatus = capability.platformDetails?.alarmKitAuthStatus;
+
+          // Update denial state based on current permission status
+          if (capability.requiresPermission) {
+            if (authStatus === 'denied') {
+              currentDenied = true;
+              if (!denied) {
+                // Permissions were revoked, update stored state
+                await saveAlarmPermissionDenied(true);
+              }
+            } else if (authStatus === 'authorized') {
+              currentDenied = false;
+              if (denied) {
+                // Permissions were re-enabled, clear stored state
+                await saveAlarmPermissionDenied(false);
+              }
+            }
+          } else {
+            // No permission required, not denied
+            currentDenied = false;
+            if (denied) {
+              await saveAlarmPermissionDenied(false);
+            }
+          }
+        } catch (capabilityError) {
+          console.error('Failed to check alarm capability:', capabilityError);
+          // If we can't check, use stored state
+        }
+
+        setAlarmPermissionDenied(currentDenied);
+
+        // For new notifications (not edit mode), set default based on source and current denial state
+        if (!isEditMode) {
+          // Only set to true if permissions are NOT denied
+          if ((source === 'tab' || source === 'calendar' || source === 'schedule') && !currentDenied) {
+            setScheduleAlarm(true);
+          } else {
+            setScheduleAlarm(false);
+          }
+        } else {
+          // For edit mode, use initialParams.hasAlarm if provided
+          if (initialParams?.hasAlarm === 'true') {
+            setScheduleAlarm(true);
+          } else if (initialParams?.hasAlarm === 'false') {
+            setScheduleAlarm(false);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to check alarm permission denied state:', error);
+        // Default to false on error
+        if (!isEditMode) {
+          setScheduleAlarm(false);
+        }
+      }
+    })();
+  }, [isEditMode, source]);
 
   // Update state when initialParams change
   useEffect(() => {
@@ -124,13 +193,56 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
       }
       if (initialParams.hasAlarm === 'true') {
         setEditingHasAlarm(true);
-        setScheduleAlarm(true);
+        // For edit mode, check if alarm permissions are denied
+        if (isEditMode) {
+          (async () => {
+            try {
+              const capability = await NativeAlarmManager.checkCapability();
+              const authStatus = capability.platformDetails?.alarmKitAuthStatus;
+
+              if (authStatus === 'denied' || (capability.requiresPermission && authStatus !== 'authorized')) {
+                // Alarm permissions are denied, remove alarm from notification
+                Alert.alert(
+                  'Alarm Permission Required',
+                  'The alarm will be removed from this upcoming notification because this app no longer has permission to set alarms.'
+                );
+
+                // Cancel the existing alarm
+                if (initialParams.notificationId) {
+                  const alarmId = initialParams.notificationId.substring("thenotifier-".length);
+                  try {
+                    const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
+                    if (existingAlarm) {
+                      await NativeAlarmManager.cancelAlarm(alarmId);
+                      console.log('Cancelled existing alarm due to denied permissions:', alarmId);
+                    }
+                  } catch (alarmError) {
+                    const errorMessage = alarmError instanceof Error ? alarmError.message : String(alarmError);
+                    if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+                      console.error('Failed to cancel existing alarm:', alarmId, ', error:', alarmError);
+                    }
+                  }
+                }
+
+                setScheduleAlarm(false);
+                setEditingHasAlarm(false);
+              } else {
+                setScheduleAlarm(true);
+              }
+            } catch (error) {
+              console.error('Failed to check alarm capability in edit mode:', error);
+              setScheduleAlarm(true);
+            }
+          })();
+        } else {
+          setScheduleAlarm(true);
+        }
       } else if (initialParams.hasAlarm === 'false') {
         setEditingHasAlarm(false);
         setScheduleAlarm(false);
       }
     }
-  }, [initialParams]);
+  }, [initialParams, isEditMode]);
 
   // Check if scheduled notifications count has reached the maximum
   // Skip check if in edit mode since we're replacing an existing notification
@@ -175,16 +287,82 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
     (async () => {
       const { status } = await Notifications.requestPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Required', 'Please enable notifications in your device settings.');
+        // Don't show alert here - will be handled when user tries to schedule
       }
 
-      // Check if alarm module is available (don't request permission yet - wait for user action)
+      // Check if alarm module is available
       try {
         const capability = await NativeAlarmManager.checkCapability();
         console.log('Alarm capability check:', capability);
 
         if (capability.capability !== 'none') {
           setAlarmSupported(true);
+
+          // Always check and update current permission status
+          if (capability.requiresPermission) {
+            const authStatus = capability.platformDetails?.alarmKitAuthStatus;
+
+            // Update denial state based on current status
+            if (authStatus === 'denied') {
+              await saveAlarmPermissionDenied(true);
+              setAlarmPermissionDenied(true);
+              if (!isEditMode) {
+                setScheduleAlarm(false);
+              }
+            } else if (authStatus === 'authorized') {
+              await saveAlarmPermissionDenied(false);
+              setAlarmPermissionDenied(false);
+              // If creating new notification, set scheduleAlarm to true
+              if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+                setScheduleAlarm(true);
+              }
+            }
+
+            // Request alarm permissions immediately after notification permissions if not determined
+            if (status === 'granted' && authStatus === 'notDetermined' && capability.canRequestPermission) {
+              try {
+                console.log('Requesting alarm permission proactively...');
+                const granted = await NativeAlarmManager.requestPermission();
+                console.log('Alarm permission granted:', granted);
+
+                if (granted) {
+                  // Clear denial state if permission was granted
+                  await saveAlarmPermissionDenied(false);
+                  setAlarmPermissionDenied(false);
+                  // If creating new notification, set scheduleAlarm to true
+                  if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+                    setScheduleAlarm(true);
+                  }
+                } else {
+                  // Permission denied, save state
+                  await saveAlarmPermissionDenied(true);
+                  setAlarmPermissionDenied(true);
+                  if (!isEditMode) {
+                    setScheduleAlarm(false);
+                  }
+                }
+              } catch (permissionError) {
+                console.error('Failed to request alarm permission:', permissionError);
+                const errorCheckCapability = await NativeAlarmManager.checkCapability();
+                const errorCheckAuthStatus = errorCheckCapability.platformDetails?.alarmKitAuthStatus;
+
+                if (errorCheckAuthStatus === 'denied') {
+                  await saveAlarmPermissionDenied(true);
+                  setAlarmPermissionDenied(true);
+                  if (!isEditMode) {
+                    setScheduleAlarm(false);
+                  }
+                }
+              }
+            }
+          } else {
+            // No permission required, clear denial state
+            await saveAlarmPermissionDenied(false);
+            setAlarmPermissionDenied(false);
+            if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+              setScheduleAlarm(true);
+            }
+          }
         } else {
           setAlarmSupported(false);
           console.log('Alarms are not supported on this device');
@@ -194,7 +372,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
         setAlarmSupported(false);
       }
     })();
-  }, []);
+  }, [isEditMode, source]);
 
   // Memoize form onLayout handler
   const handleFormLayout = useCallback((event: any) => {
@@ -382,6 +560,84 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
     }
   }, []);
 
+  // Handle alarm switch toggle with permission check
+  const handleAlarmSwitchChange = useCallback(async (value: boolean) => {
+    if (value) {
+      // User is trying to enable alarm - check permissions
+      try {
+        const capability = await NativeAlarmManager.checkCapability();
+        const authStatus = capability.platformDetails?.alarmKitAuthStatus;
+
+        if (capability.requiresPermission && authStatus === 'denied') {
+          // Permissions denied, show alert with instructions
+          Alert.alert(
+            'Alarm Permission Required',
+            getPermissionInstructions('alarm'),
+            [{ text: 'OK' }]
+          );
+          // Don't change the switch value
+          return;
+        } else if (capability.requiresPermission && authStatus === 'notDetermined' && capability.canRequestPermission) {
+          // Try to request permission
+          try {
+            const granted = await NativeAlarmManager.requestPermission();
+            if (!granted) {
+              Alert.alert(
+                'Alarm Permission Required',
+                getPermissionInstructions('alarm'),
+                [{ text: 'OK' }]
+              );
+              await saveAlarmPermissionDenied(true);
+              setAlarmPermissionDenied(true);
+              return;
+            } else {
+              // Permission granted, clear denial state
+              await saveAlarmPermissionDenied(false);
+              setAlarmPermissionDenied(false);
+            }
+          } catch (permissionError) {
+            console.error('Failed to request alarm permission:', permissionError);
+            const errorCheckCapability = await NativeAlarmManager.checkCapability();
+            const errorCheckAuthStatus = errorCheckCapability.platformDetails?.alarmKitAuthStatus;
+
+            if (errorCheckAuthStatus === 'denied') {
+              Alert.alert(
+                'Alarm Permission Required',
+                getPermissionInstructions('alarm'),
+                [{ text: 'OK' }]
+              );
+              await saveAlarmPermissionDenied(true);
+              setAlarmPermissionDenied(true);
+              return;
+            }
+          }
+        } else if (capability.requiresPermission && authStatus !== 'authorized') {
+          // Not authorized, show alert
+          Alert.alert(
+            'Alarm Permission Required',
+            getPermissionInstructions('alarm'),
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+
+        // Permission check passed, allow the switch to be enabled
+        setScheduleAlarm(true);
+      } catch (error) {
+        console.error('Failed to check alarm capability:', error);
+        Alert.alert(
+          'Alarm Permission Required',
+          getPermissionInstructions('alarm'),
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    } else {
+      // User is disabling alarm, just update the state
+      setScheduleAlarm(false);
+    }
+  }, []);
+
   useEffect(() => {
     const keyboardWillShowListener = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
@@ -416,13 +672,48 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
     };
   }, [scrollToShowButton]);
 
-  const resetForm = () => {
+  const resetForm = async () => {
     setMessage('');
     setNote('');
     setLink('');
     setTitle('');
     setSelectedDate(new Date());
-    setScheduleAlarm(false);
+
+    // Check current alarm permission status before setting scheduleAlarm
+    let shouldEnableAlarm = false;
+    if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+      try {
+        // Check stored denial state
+        const denied = await getAlarmPermissionDenied();
+
+        // Also check current permission status
+        try {
+          const capability = await NativeAlarmManager.checkCapability();
+          const authStatus = capability.platformDetails?.alarmKitAuthStatus;
+
+          if (capability.requiresPermission && authStatus === 'denied') {
+            shouldEnableAlarm = false;
+            // Update stored state if needed
+            if (!denied) {
+              await saveAlarmPermissionDenied(true);
+              setAlarmPermissionDenied(true);
+            }
+          } else if (!denied && (authStatus === 'authorized' || !capability.requiresPermission)) {
+            shouldEnableAlarm = true;
+          } else {
+            shouldEnableAlarm = false;
+          }
+        } catch (capabilityError) {
+          // If we can't check capability, use stored denial state
+          shouldEnableAlarm = !denied;
+        }
+      } catch (error) {
+        console.error('Failed to check alarm permission in resetForm:', error);
+        shouldEnableAlarm = false;
+      }
+    }
+
+    setScheduleAlarm(shouldEnableAlarm);
     setRepeatOption('none');
     setShowRepeatPicker(false);
     setEditingNotificationId(null);
@@ -457,6 +748,27 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
 
   const scheduleNotification = async () => {
     console.log('=== SCHEDULE NOTIFICATION ===');
+
+    // Check notification permissions first
+    try {
+      const notificationPermissions = await Notifications.getPermissionsAsync();
+      if (notificationPermissions.status !== 'granted') {
+        Alert.alert(
+          'Notification Permission Required',
+          'This app will not work until notifications are enabled.\n\n' + getPermissionInstructions('notification'),
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to check notification permissions:', error);
+      Alert.alert(
+        'Notification Permission Required',
+        'This app will not work until notifications are enabled.\n\n' + getPermissionInstructions('notification'),
+        [{ text: 'OK' }]
+      );
+      return;
+    }
 
     if (!message.trim()) {
       Alert.alert('Error', 'You forgot the message');
@@ -626,28 +938,40 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
                 console.log('Alarm permission granted:', granted);
 
                 if (!granted) {
+                  await saveAlarmPermissionDenied(true);
+                  setAlarmPermissionDenied(true);
                   Alert.alert(
                     'Alarm Permission Denied',
-                    'Alarm permission was denied. To schedule alarms, please grant permission when prompted. You may need to delete and reinstall the app to be prompted again.',
+                    getPermissionInstructions('alarm'),
                     [{ text: 'OK' }]
                   );
                   resetForm();
                   return;
                 }
+
+                // Permission granted, clear denial state
+                await saveAlarmPermissionDenied(false);
+                setAlarmPermissionDenied(false);
 
                 const postRequestCapability = await NativeAlarmManager.checkCapability();
                 const postRequestAuthStatus = postRequestCapability.platformDetails?.alarmKitAuthStatus;
                 console.log('Updated auth status after permission request:', postRequestAuthStatus);
 
                 if (postRequestAuthStatus !== 'authorized') {
+                  await saveAlarmPermissionDenied(true);
+                  setAlarmPermissionDenied(true);
                   Alert.alert(
-                    'Alarm Permission Not Granted',
-                    'Alarm permission was not granted. Please try again or delete and reinstall the app to be prompted again.',
+                    'Alarm Permission Required',
+                    getPermissionInstructions('alarm'),
                     [{ text: 'OK' }]
                   );
                   resetForm();
                   return;
                 }
+
+                // Permission authorized, clear denial state
+                await saveAlarmPermissionDenied(false);
+                setAlarmPermissionDenied(false);
 
                 authStatus = postRequestAuthStatus;
               } catch (permissionError) {
@@ -658,9 +982,11 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
                 const errorCheckAuthStatus = errorCheckCapability.platformDetails?.alarmKitAuthStatus;
 
                 if (errorCheckAuthStatus === 'denied') {
+                  await saveAlarmPermissionDenied(true);
+                  setAlarmPermissionDenied(true);
                   Alert.alert(
                     'Alarm Permission Denied',
-                    'Alarm permission was denied. To schedule alarms, please delete and reinstall the app to be prompted for permission again.',
+                    getPermissionInstructions('alarm'),
                     [{ text: 'OK' }]
                   );
                   resetForm();
@@ -676,9 +1002,11 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
                 }
               }
             } else if (authStatus === 'denied') {
+              await saveAlarmPermissionDenied(true);
+              setAlarmPermissionDenied(true);
               Alert.alert(
                 'Alarm Permission Denied',
-                'Alarm permission was previously denied. To schedule alarms, please delete and reinstall the app to be prompted for permission again.',
+                getPermissionInstructions('alarm'),
                 [{ text: 'OK' }]
               );
               resetForm();
@@ -686,12 +1014,16 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
             } else if (authStatus !== 'authorized') {
               Alert.alert(
                 'Alarm Permission Required',
-                'Alarm permission is required but not granted. Please try scheduling again to be prompted for permission.',
+                getPermissionInstructions('alarm'),
                 [{ text: 'OK' }]
               );
               resetForm();
               return;
             }
+
+            // Permission authorized, clear denial state
+            await saveAlarmPermissionDenied(false);
+            setAlarmPermissionDenied(false);
 
             if (authStatus !== 'authorized') {
               console.log('Alarm permission not authorized, cannot schedule');
@@ -764,9 +1096,11 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
           const errorMessage = error instanceof Error ? error.message : String(error);
 
           if (errorMessage.includes('permission') || errorMessage.includes('Permission') || errorMessage.includes('authorization')) {
+            await saveAlarmPermissionDenied(true);
+            setAlarmPermissionDenied(true);
             Alert.alert(
               'Alarm Permission Required',
-              'You won\'t be able to add an alarm until you give this app permission to set alarms. If you denied the alarm permission dialog, you can allow this app to set alarms in your system settings. If that doesn\'t work then you may need to delete and reinstall the app.',
+              getPermissionInstructions('alarm'),
               [{ text: 'OK' }]
             );
           } else {
@@ -994,7 +1328,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
                   <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>Alarm</ThemedText>
                   <Switch
                     value={scheduleAlarm}
-                    onValueChange={setScheduleAlarm}
+                    onValueChange={handleAlarmSwitchChange}
                     trackColor={{ false: '#888', true: '#68CFAF' }}
                     thumbColor={Platform.OS === 'ios' ? '#f0f0f0' : colors.background}
                   />
@@ -1020,7 +1354,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'tab', onSucc
       <KeyboardToolbar
         opacity="CF"
         offset={{
-          opened: source === 'tab' ? 100 : 20,
+          opened: (source === 'tab' || source === 'schedule') ? 100 : 20,
           closed: 0
         }}
         theme={theme}>

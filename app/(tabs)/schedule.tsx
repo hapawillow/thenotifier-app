@@ -46,6 +46,7 @@ export default function ScheduleTabScreen() {
   return (
     <ScheduleForm
       isEditMode={false}
+      source="schedule"
       onSuccess={handleSuccess}
       onCancel={handleCancel}
     />

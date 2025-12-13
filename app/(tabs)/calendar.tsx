@@ -10,6 +10,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkUpcomingNotificationForCalendarEvent, getAllCalendarSelections, saveCalendarSelections } from '@/utils/database';
+import { getPermissionInstructions } from '@/utils/permissions';
 
 type CalendarEvent = {
   id: string;
@@ -95,6 +96,22 @@ export default function CalendarScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Check calendar permissions when tab is focused
+      (async () => {
+        try {
+          const { status } = await Calendar.getCalendarPermissionsAsync();
+          if (status === 'denied') {
+            Alert.alert(
+              'Calendar Permission Required',
+              getPermissionInstructions('calendar'),
+              [{ text: 'OK' }]
+            );
+          }
+        } catch (error) {
+          console.error('Failed to check calendar permissions:', error);
+        }
+      })();
+      
       if (calendars.length > 0 && selectedCalendarIds.size > 0) {
         loadEvents();
       }

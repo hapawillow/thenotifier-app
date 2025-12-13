@@ -185,6 +185,21 @@ export const initDatabase = async () => {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_calendarSelection_calendarId ON calendarSelection (calendarId);
     `);
 
+    // Create appPreferences table if it doesn't exist (for storing app-level preferences like alarm permission denial state)
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS appPreferences (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL UNIQUE,
+        value TEXT NOT NULL,
+        updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create index for appPreferences table
+    await db.execAsync(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_appPreferences_key ON appPreferences (key);
+    `);
+
     isInitialized = true;
     console.log('Database initialized successfully');
   } catch (error: any) {
@@ -643,6 +658,39 @@ export const getSelectedCalendarIds = async (): Promise<Set<string>> => {
   } catch (error: any) {
     console.error('Failed to get selected calendar IDs:', error);
     return new Set();
+  }
+};
+
+// Save alarm permission denied state
+export const saveAlarmPermissionDenied = async (denied: boolean): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const value = denied ? 'true' : 'false';
+    await db.execAsync(
+      `INSERT OR REPLACE INTO appPreferences (key, value, updatedAt)
+      VALUES ('alarmPermissionDenied', '${escapeSql(value)}', CURRENT_TIMESTAMP);`
+    );
+    console.log(`Alarm permission denied state saved: ${denied}`);
+  } catch (error: any) {
+    console.error('Failed to save alarm permission denied state:', error);
+    throw new Error(`Failed to save alarm permission denied state: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Get alarm permission denied state
+export const getAlarmPermissionDenied = async (): Promise<boolean> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const result = await db.getFirstAsync<{ value: string }>(
+      `SELECT value FROM appPreferences WHERE key = 'alarmPermissionDenied';`
+    );
+    return result ? result.value === 'true' : false;
+  } catch (error: any) {
+    console.error('Failed to get alarm permission denied state:', error);
+    return false;
   }
 };
 
