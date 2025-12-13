@@ -9,6 +9,7 @@ import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { checkUpcomingNotificationForCalendarEvent, getAllCalendarSelections, saveCalendarSelections } from '@/utils/database';
 import { getPermissionInstructions } from '@/utils/permissions';
 
@@ -111,10 +112,18 @@ export default function CalendarScreen() {
           console.error('Failed to check calendar permissions:', error);
         }
       })();
-      
+
       if (calendars.length > 0 && selectedCalendarIds.size > 0) {
         loadEvents();
       }
+
+      // Check for calendar event changes when Calendar screen is focused
+      // Delay to avoid blocking UI
+      setTimeout(() => {
+        checkCalendarEventChanges().catch((error) => {
+          console.error('Failed to check calendar changes:', error);
+        });
+      }, 1000);
     }, [selectedCalendarIds, calendars])
   );
 
@@ -362,6 +371,12 @@ export default function CalendarScreen() {
     setRefreshing(true);
     try {
       await loadEvents();
+      // Check for calendar event changes after refresh
+      setTimeout(() => {
+        checkCalendarEventChanges().catch((error) => {
+          console.error('Failed to check calendar changes:', error);
+        });
+      }, 500);
     } finally {
       setRefreshing(false);
     }
@@ -477,6 +492,12 @@ export default function CalendarScreen() {
       repeat: repeatOption,
       calendarId: event.calendarId,
       originalEventId: event.originalEventId,
+      location: event.location,
+      originalEventTitle: event.title,
+      originalEventStartDate: event.startDate.toISOString(),
+      originalEventEndDate: event.endDate.toISOString(),
+      originalEventLocation: event.location || undefined,
+      originalEventRecurring: repeatOption,
     };
 
     router.push({

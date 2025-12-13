@@ -83,6 +83,54 @@ export const initDatabase = async () => {
         console.log('Note: originalEventId column may already exist');
       }
     }
+    try {
+      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN location TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: location column may already exist');
+      }
+    }
+    try {
+      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventTitle TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: originalEventTitle column may already exist');
+      }
+    }
+    try {
+      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventStartDate TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: originalEventStartDate column may already exist');
+      }
+    }
+    try {
+      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventEndDate TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: originalEventEndDate column may already exist');
+      }
+    }
+    try {
+      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventLocation TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: originalEventLocation column may already exist');
+      }
+    }
+    try {
+      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventRecurring TEXT DEFAULT NULL;`);
+    } catch (error: any) {
+      // Column might already exist, ignore error
+      if (!error.message?.includes('duplicate column')) {
+        console.log('Note: originalEventRecurring column may already exist');
+      }
+    }
 
     // Create indexes for scheduledNotification table
     await db.execAsync(`
@@ -200,6 +248,22 @@ export const initDatabase = async () => {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_appPreferences_key ON appPreferences (key);
     `);
 
+    // Create ignoredCalendarEvents table if it doesn't exist (for storing ignored calendar events)
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS ignoredCalendarEvents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        calendarId TEXT NOT NULL,
+        originalEventId TEXT NOT NULL,
+        createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(calendarId, originalEventId)
+      );
+    `);
+
+    // Create index for ignoredCalendarEvents table
+    await db.execAsync(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_ignoredCalendarEvents_composite ON ignoredCalendarEvents (calendarId, originalEventId);
+    `);
+
     isInitialized = true;
     console.log('Database initialized successfully');
   } catch (error: any) {
@@ -221,7 +285,13 @@ export const saveScheduledNotificationData = async (
   notificationTrigger?: Notifications.NotificationTriggerInput,
   hasAlarm?: boolean,
   calendarId?: string,
-  originalEventId?: string
+  originalEventId?: string,
+  location?: string,
+  originalEventTitle?: string,
+  originalEventStartDate?: string,
+  originalEventEndDate?: string,
+  originalEventLocation?: string,
+  originalEventRecurring?: string
 ) => {
   console.log('Saving scheduled notification data:', { notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger });
   try {
@@ -240,11 +310,17 @@ export const saveScheduledNotificationData = async (
     const repeatOptionSql = repeatOptionValue ? `'${escapeSql(repeatOptionValue)}'` : 'NULL';
     const calendarIdSql = calendarId ? `'${escapeSql(calendarId)}'` : 'NULL';
     const originalEventIdSql = originalEventId ? `'${escapeSql(originalEventId)}'` : 'NULL';
+    const locationSql = location ? `'${escapeSql(location)}'` : 'NULL';
+    const originalEventTitleSql = originalEventTitle ? `'${escapeSql(originalEventTitle)}'` : 'NULL';
+    const originalEventStartDateSql = originalEventStartDate ? `'${escapeSql(originalEventStartDate)}'` : 'NULL';
+    const originalEventEndDateSql = originalEventEndDate ? `'${escapeSql(originalEventEndDate)}'` : 'NULL';
+    const originalEventLocationSql = originalEventLocation ? `'${escapeSql(originalEventLocation)}'` : 'NULL';
+    const originalEventRecurringSql = originalEventRecurring ? `'${escapeSql(originalEventRecurring)}'` : 'NULL';
 
     // Use INSERT OR REPLACE to either insert new or update existing notification
     await db.execAsync(
-      `INSERT OR REPLACE INTO scheduledNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, updatedAt)
-      VALUES ('${escapeSql(notificationId)}', '${escapeSql(title)}', '${escapeSql(message)}', '${escapeSql(note)}', '${escapeSql(link)}', '${scheduleDateTime}', '${escapeSql(scheduleDateTimeLocal)}', ${repeatOptionSql}, ${notificationTriggerSql}, ${hasAlarmValue}, ${calendarIdSql}, ${originalEventIdSql}, CURRENT_TIMESTAMP);`
+      `INSERT OR REPLACE INTO scheduledNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, location, originalEventTitle, originalEventStartDate, originalEventEndDate, originalEventLocation, originalEventRecurring, updatedAt)
+      VALUES ('${escapeSql(notificationId)}', '${escapeSql(title)}', '${escapeSql(message)}', '${escapeSql(note)}', '${escapeSql(link)}', '${scheduleDateTime}', '${escapeSql(scheduleDateTimeLocal)}', ${repeatOptionSql}, ${notificationTriggerSql}, ${hasAlarmValue}, ${calendarIdSql}, ${originalEventIdSql}, ${locationSql}, ${originalEventTitleSql}, ${originalEventStartDateSql}, ${originalEventEndDateSql}, ${originalEventLocationSql}, ${originalEventRecurringSql}, CURRENT_TIMESTAMP);`
     );
     console.log('Notification data saved successfully');
     const result = await getScheduledNotificationData(notificationId);
@@ -330,6 +406,44 @@ export const getScheduledNotificationCount = async () => {
     return result || [];
   } catch (error: any) {
     console.error('Failed to get all scheduled notification data:', error);
+    return [];
+  }
+};
+
+// Get all upcoming calendar notifications
+export const getUpcomingCalendarNotifications = async () => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+
+    // Get current time in ISO format for comparison
+    const now = new Date().toISOString();
+
+    // Query for notifications with calendar events that are upcoming
+    const result = await db.getAllAsync<{ id: number; notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; calendarId: string | null; originalEventId: string | null; location: string | null; originalEventTitle: string | null; originalEventStartDate: string | null; originalEventEndDate: string | null; originalEventLocation: string | null; originalEventRecurring: string | null; createdAt: string; updatedAt: string }>(
+      `SELECT id, notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, location, originalEventTitle, originalEventStartDate, originalEventEndDate, originalEventLocation, originalEventRecurring, createdAt, updatedAt FROM scheduledNotification WHERE calendarId IS NOT NULL AND originalEventId IS NOT NULL AND scheduleDateTime > '${now}' ORDER BY scheduleDateTime ASC;`
+    );
+
+    if (!result) return [];
+
+    // Parse notificationTrigger JSON for each result
+    return result.map(item => {
+      let parsedTrigger: Notifications.NotificationTriggerInput | undefined;
+      if (item.notificationTrigger) {
+        try {
+          parsedTrigger = JSON.parse(item.notificationTrigger) as Notifications.NotificationTriggerInput;
+        } catch (e) {
+          console.error('Failed to parse notificationTrigger JSON:', e);
+        }
+      }
+      return {
+        ...item,
+        notificationTrigger: parsedTrigger,
+        hasAlarm: item.hasAlarm === 1,
+      };
+    });
+  } catch (error: any) {
+    console.error('Failed to get upcoming calendar notifications:', error);
     return [];
   }
 };
@@ -608,6 +722,52 @@ export const checkUpcomingNotificationForCalendarEvent = async (calendarId: stri
   } catch (error: any) {
     console.error('Failed to check upcoming notification for calendar event:', error);
     // Return false on error to allow user to proceed
+    return false;
+  }
+};
+
+// Save ignored calendar event
+export const saveIgnoredCalendarEvent = async (calendarId: string, originalEventId: string): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+
+    // Escape single quotes to prevent SQL injection
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const escapedCalendarId = escapeSql(calendarId);
+    const escapedOriginalEventId = escapeSql(originalEventId);
+
+    await db.execAsync(`
+      INSERT OR IGNORE INTO ignoredCalendarEvents (calendarId, originalEventId)
+      VALUES ('${escapedCalendarId}', '${escapedOriginalEventId}');
+    `);
+  } catch (error: any) {
+    console.error('Failed to save ignored calendar event:', error);
+    throw error;
+  }
+};
+
+// Check if a calendar event is ignored
+export const isCalendarEventIgnored = async (calendarId: string, originalEventId: string): Promise<boolean> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+
+    // Escape single quotes to prevent SQL injection
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const escapedCalendarId = escapeSql(calendarId);
+    const escapedOriginalEventId = escapeSql(originalEventId);
+
+    const result = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) as count FROM ignoredCalendarEvents 
+       WHERE calendarId = '${escapedCalendarId}' 
+       AND originalEventId = '${escapedOriginalEventId}';`
+    );
+
+    return result ? result.count > 0 : false;
+  } catch (error: any) {
+    console.error('Failed to check if calendar event is ignored:', error);
+    // Return false on error to allow checking
     return false;
   }
 };

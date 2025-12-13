@@ -1,5 +1,8 @@
+import { CalendarChangeModal } from '@/components/calendar-change-modal';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { archiveScheduledNotifications, initDatabase, updateArchivedNotificationData } from '@/utils/database';
+import { ChangedCalendarEvent, checkCalendarEventChanges } from '@/utils/calendar-check';
+import { calendarCheckEvents } from '@/utils/calendar-check-events';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { EventSubscription } from 'expo-modules-core';
@@ -7,8 +10,8 @@ import * as Notifications from 'expo-notifications';
 import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef } from 'react';
-import { AppState } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
 import ToastManager from 'toastify-react-native';
@@ -27,6 +30,9 @@ export default function RootLayout() {
   const responseListener = useRef<EventSubscription | null>(null);
   const lastNotificationResponse = Notifications.useLastNotificationResponse();
   const handledNotificationsRef = useRef<Set<string>>(new Set());
+  const [changedEvents, setChangedEvents] = useState<ChangedCalendarEvent[]>([]);
+  const [showCalendarChangeModal, setShowCalendarChangeModal] = useState(false);
+  const lastCheckTimeRef = useRef<number>(0);
   const [loaded] = useFonts({
     InterRegular: require('../assets/fonts/Inter_18pt-Regular.ttf'),
     InterItalic: require('../assets/fonts/Inter_18pt-Italic.ttf'),
@@ -182,10 +188,36 @@ export default function RootLayout() {
   }, [handleNotificationNavigation]);
 
 
+  // Calendar change check function
+  const performCalendarCheck = useCallback(async () => {
+    // Debounce: don't check if we checked within the last 5 seconds
+    const now = Date.now();
+    if (now - lastCheckTimeRef.current < 5000) {
+      return;
+    }
+    lastCheckTimeRef.current = now;
+
+    try {
+      const changes = await checkCalendarEventChanges();
+      console.log('[Calendar Check] Received changes:', changes.length);
+      if (changes.length > 0) {
+        console.log('[Calendar Check] Setting modal state with', changes.length, 'changed events');
+        setChangedEvents(changes);
+        setShowCalendarChangeModal(true);
+      } else {
+        console.log('[Calendar Check] No changes found, modal not shown');
+      }
+    } catch (error) {
+      console.error('Failed to check calendar changes:', error);
+    }
+  }, []);
+
   useEffect(() => {
     const init = async () => {
       try {
         await initDatabase();
+        // Don't perform calendar check on app startup - it can cause hangs
+        // Calendar check will happen on app focus and screen refresh instead
       } catch (e) {
         console.error('Failed to initialize database:', e);
       }
@@ -193,6 +225,34 @@ export default function RootLayout() {
 
     init();
   }, []);
+
+  // Listen for calendar check events from other components
+  useEffect(() => {
+    const unsubscribe = calendarCheckEvents.subscribe((changedEvents) => {
+      if (changedEvents.length > 0) {
+        setChangedEvents(changedEvents);
+        setShowCalendarChangeModal(true);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // AppState listener for focus detection
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        // App came to foreground, check for calendar changes
+        performCalendarCheck();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [performCalendarCheck]);
 
 
   useEffect(() => {
@@ -228,6 +288,11 @@ export default function RootLayout() {
         </Stack>
         <StatusBar style="auto" />
         <ToastManager />
+        <CalendarChangeModal
+          visible={showCalendarChangeModal}
+          changedEvents={changedEvents}
+          onClose={() => setShowCalendarChangeModal(false)}
+        />
       </ThemeProvider>
     </KeyboardProvider>
   );

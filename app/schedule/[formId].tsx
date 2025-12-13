@@ -42,6 +42,12 @@ export default function ScheduleFormScreen() {
     hasAlarm: params.hasAlarm,
     calendarId: params.calendarId,
     originalEventId: params.originalEventId,
+    location: params.location,
+    originalEventTitle: params.originalEventTitle,
+    originalEventStartDate: params.originalEventStartDate,
+    originalEventEndDate: params.originalEventEndDate,
+    originalEventLocation: params.originalEventLocation,
+    originalEventRecurring: params.originalEventRecurring,
   } : undefined;
 
   // Determine source: home if editMode, calendar if params exist but not editMode, tab otherwise

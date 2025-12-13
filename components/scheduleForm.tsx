@@ -52,6 +52,12 @@ export interface ScheduleFormParams {
   hasAlarm?: string;
   calendarId?: string;
   originalEventId?: string;
+  location?: string;
+  originalEventTitle?: string;
+  originalEventStartDate?: string;
+  originalEventEndDate?: string;
+  originalEventLocation?: string;
+  originalEventRecurring?: string;
 }
 
 export interface ScheduleFormProps {
@@ -917,8 +923,8 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         trigger: notificationTrigger,
       });
 
-      console.log('Notification scheduled successfully, saving notification data...', notificationId, notificationTitle, message, note, link, dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId);
-      await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId);
+      console.log('Notification scheduled successfully, saving notification data...', notificationId, notificationTitle, message, note, link, dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location);
+      await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location, initialParams?.originalEventTitle, initialParams?.originalEventStartDate, initialParams?.originalEventEndDate, initialParams?.originalEventLocation, initialParams?.originalEventRecurring);
       console.log('Notification data saved successfully');
 
       // Schedule alarm if enabled

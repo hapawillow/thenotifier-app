@@ -9,6 +9,7 @@ import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { deleteScheduledNotification, getAllArchivedNotificationData, getAllScheduledNotificationData } from '@/utils/database';
 import { Toast } from 'toastify-react-native';
 
@@ -87,6 +88,9 @@ export default function HomeScreen() {
           animations.set(item.id, new Animated.Value(0));
         }
       });
+
+      // Don't check calendar changes immediately after loading - it can cause hangs
+      // Calendar check will happen on focus via useFocusEffect instead
     } catch (error) {
       console.error('Failed to load scheduled notifications:', error);
     }
@@ -113,8 +117,17 @@ export default function HomeScreen() {
 
   const onRefreshScheduled = useCallback(async () => {
     setRefreshingScheduled(true);
-    await loadScheduledNotifications();
-    setRefreshingScheduled(false);
+    try {
+      await loadScheduledNotifications();
+      // Check for calendar event changes after refresh
+      setTimeout(() => {
+        checkCalendarEventChanges().catch((error) => {
+          console.error('Failed to check calendar changes:', error);
+        });
+      }, 500);
+    } finally {
+      setRefreshingScheduled(false);
+    }
   }, []);
 
   const onRefreshArchived = useCallback(async () => {
@@ -126,6 +139,13 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       loadAllNotifications();
+      // Don't check calendar changes immediately on focus - delay it significantly
+      // to avoid blocking the UI when returning from scheduling a notification
+      setTimeout(() => {
+        checkCalendarEventChanges().catch((error) => {
+          console.error('Failed to check calendar changes:', error);
+        });
+      }, 2000); // 2 second delay to ensure UI is fully loaded
     }, [])
   );
 
