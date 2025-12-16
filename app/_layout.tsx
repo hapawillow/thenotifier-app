@@ -2,7 +2,7 @@ import { CalendarChangeModal } from '@/components/calendar-change-modal';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ChangedCalendarEvent, checkCalendarEventChanges } from '@/utils/calendar-check';
 import { calendarCheckEvents } from '@/utils/calendar-check-events';
-import { archiveScheduledNotifications, initDatabase, updateArchivedNotificationData } from '@/utils/database';
+import { archiveScheduledNotifications, ensureDailyAlarmWindowForAllNotifications, initDatabase, updateArchivedNotificationData } from '@/utils/database';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { EventSubscription } from 'expo-modules-core';
@@ -246,6 +246,11 @@ export default function RootLayout() {
       if (nextAppState === 'active') {
         // App came to foreground, check for calendar changes
         performCalendarCheck();
+
+        // Replenish daily alarm windows (ensure 14 future alarms per daily notification)
+        ensureDailyAlarmWindowForAllNotifications().catch((error) => {
+          console.error('Failed to replenish daily alarm windows:', error);
+        });
       }
     });
 

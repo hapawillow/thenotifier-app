@@ -9,7 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, saveAlarmPermissionDenied, saveScheduledNotificationData } from '@/utils/database';
+import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, markAllDailyAlarmInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow } from '@/utils/database';
 import { getPermissionInstructions } from '@/utils/permissions';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
@@ -803,12 +803,36 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         console.log('Cancelling existing alarm with ID:', alarmId);
         if (editingHasAlarm) {
           try {
-            const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
-            if (existingAlarm) {
-              await NativeAlarmManager.cancelAlarm(alarmId);
-              console.log('Cancelled existing alarm:', alarmId);
+            // Check if this is a daily repeating alarm - if so, cancel all instances
+            const { getAllScheduledNotificationData } = await import('@/utils/database');
+            const allNotifications = await getAllScheduledNotificationData();
+            const existingNotification = allNotifications.find(n => n.notificationId === editingNotificationId);
+
+            if (existingNotification?.repeatOption === 'daily') {
+              // Cancel all daily alarm instances
+              const dailyInstances = await getAllActiveDailyAlarmInstances(editingNotificationId);
+              for (const instance of dailyInstances) {
+                try {
+                  await NativeAlarmManager.cancelAlarm(instance.alarmId);
+                  console.log('Cancelled daily alarm instance:', instance.alarmId);
+                } catch (instanceError) {
+                  const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
+                  if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+                    console.error('Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
+                  }
+                }
+              }
+              await markAllDailyAlarmInstancesCancelled(editingNotificationId);
+              console.log('Marked all daily alarm instances as cancelled');
             } else {
-              console.log('Alarm not found, may have already been cancelled:', alarmId);
+              // Single alarm (one-time or weekly)
+              const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
+              if (existingAlarm) {
+                await NativeAlarmManager.cancelAlarm(alarmId);
+                console.log('Cancelled existing alarm:', alarmId);
+              } else {
+                console.log('Alarm not found, may have already been cancelled:', alarmId);
+              }
             }
           } catch (alarmError) {
             const errorMessage = alarmError instanceof Error ? alarmError.message : String(alarmError);
@@ -927,6 +951,36 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location, initialParams?.originalEventTitle, initialParams?.originalEventStartDate, initialParams?.originalEventEndDate, initialParams?.originalEventLocation, initialParams?.originalEventRecurring);
       console.log('Notification data saved successfully');
 
+      // If editing and alarm is disabled, cancel all daily alarm instances
+      if (isEditMode && !scheduleAlarm && editingHasAlarm) {
+        try {
+          const { getAllScheduledNotificationData } = await import('@/utils/database');
+          const allNotifications = await getAllScheduledNotificationData();
+          const existingNotification = allNotifications.find(n => n.notificationId === notificationId);
+
+          if (existingNotification?.repeatOption === 'daily') {
+            // Cancel all daily alarm instances
+            const dailyInstances = await getAllActiveDailyAlarmInstances(notificationId);
+            for (const instance of dailyInstances) {
+              try {
+                await NativeAlarmManager.cancelAlarm(instance.alarmId);
+                console.log('Cancelled daily alarm instance (alarm disabled):', instance.alarmId);
+              } catch (instanceError) {
+                const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
+                if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+                  console.error('Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
+                }
+              }
+            }
+            await markAllDailyAlarmInstancesCancelled(notificationId);
+            console.log('Marked all daily alarm instances as cancelled (alarm disabled)');
+          }
+        } catch (error) {
+          console.error('Failed to cancel daily alarms when disabling alarm:', error);
+          // Continue - don't block the update
+        }
+      }
+
       // Schedule alarm if enabled
       if (scheduleAlarm && alarmSupported) {
         try {
@@ -1040,62 +1094,136 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
           const hour = dateWithoutSeconds.getHours();
           const minutes = dateWithoutSeconds.getMinutes();
+          const dayOfWeek = dateWithoutSeconds.getDay();
+          const dayOfMonth = dateWithoutSeconds.getDate();
+          const monthOfYear = dateWithoutSeconds.getMonth() + 1; // JavaScript months are 0-11
 
           // Remove the "thenotifier-" prefix from the notificationId to get the alarmId
           // because AlarmKit expects the alarm ID to be a UUID
           const alarmId = notificationId.substring("thenotifier-".length);
           console.log('Scheduling alarm with ID:', alarmId);
           console.log('Alarm date:', dateWithoutSeconds.toISOString());
-          const alarmResult = await NativeAlarmManager.scheduleAlarm(
-            {
-              id: alarmId,
-              type: 'fixed',
-              date: dateWithoutSeconds,
-              time: {
-                hour: hour,
-                minute: minutes,
-              },
-            },
-            {
-              title: message,
-              color: '#8ddaff',
-              data: {
-                notificationId: notificationId,
-              },
-              actions: [
-                {
-                  id: 'dismiss',
-                  title: 'Dismiss',
-                  behavior: 'dismiss',
-                  icon: Platform.select({
-                    ios: 'xmark',
-                    android: 'ic_cancel'
-                  })
-                },
-                {
-                  id: 'snooze',
-                  title: 'Snooze 10m',
-                  behavior: 'snooze',
-                  snoozeDuration: 5,
-                  icon: Platform.select({
-                    ios: 'zzz',
-                    android: 'ic_snooze'
-                  })
-                },
-              ]
-            },
-          );
 
-          console.log('Alarm scheduled successfully for:', dateWithoutSeconds);
-          console.log('Alarm result:', alarmResult);
-          setTimeout(async () => {
-            const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
-            if (existingAlarm) {
-              console.log('Scheduled existing alarm found in NativeAlarmManager:', alarmId);
+          // Handle daily alarms differently - schedule 14 fixed alarms
+          if (repeatOption === 'daily') {
+            // Schedule 14-day rolling window for daily alarms
+            await scheduleDailyAlarmWindow(
+              notificationId,
+              dateWithoutSeconds,
+              { hour, minute: minutes },
+              {
+                title: message,
+                color: '#8ddaff',
+                data: {
+                  notificationId: notificationId,
+                },
+                actions: [
+                  {
+                    id: 'dismiss',
+                    title: 'Dismiss',
+                    behavior: 'dismiss',
+                    icon: Platform.select({
+                      ios: 'xmark',
+                      android: 'ic_cancel'
+                    })
+                  },
+                  {
+                    id: 'snooze',
+                    title: 'Snooze 10m',
+                    behavior: 'snooze',
+                    snoozeDuration: 5,
+                    icon: Platform.select({
+                      ios: 'zzz',
+                      android: 'ic_snooze'
+                    })
+                  },
+                ]
+              },
+              14
+            );
+            console.log('Scheduled 14 daily alarm instances for:', notificationId);
+          } else {
+            // Build alarm schedule for one-time or weekly alarms
+            let alarmSchedule: any;
+
+            if (repeatOption === 'none') {
+              // One-time alarm
+              alarmSchedule = {
+                id: alarmId,
+                type: 'fixed',
+                date: dateWithoutSeconds,
+                time: {
+                  hour: hour,
+                  minute: minutes,
+                },
+              };
             } else {
-              console.log('Scheduled alarm not found in NativeAlarmManager:', alarmId);
+              // Recurring alarm (weekly, monthly, yearly)
+              alarmSchedule = {
+                id: alarmId,
+                type: 'recurring',
+                repeatInterval: repeatOption,
+                startDate: dateWithoutSeconds,
+                time: {
+                  hour: hour,
+                  minute: minutes,
+                },
+              };
+
+              // Add repeat-specific fields
+              if (repeatOption === 'weekly') {
+                alarmSchedule.daysOfWeek = [dayOfWeek];
+              } else if (repeatOption === 'monthly') {
+                alarmSchedule.dayOfMonth = dayOfMonth;
+              } else if (repeatOption === 'yearly') {
+                alarmSchedule.monthOfYear = monthOfYear;
+                alarmSchedule.dayOfMonth = dayOfMonth;
+              }
             }
-          }, 500);
+
+            const alarmResult = await NativeAlarmManager.scheduleAlarm(
+              alarmSchedule,
+              {
+                title: message,
+                color: '#8ddaff',
+                data: {
+                  notificationId: notificationId,
+                },
+                actions: [
+                  {
+                    id: 'dismiss',
+                    title: 'Dismiss',
+                    behavior: 'dismiss',
+                    icon: Platform.select({
+                      ios: 'xmark',
+                      android: 'ic_cancel'
+                    })
+                  },
+                  {
+                    id: 'snooze',
+                    title: 'Snooze 10m',
+                    behavior: 'snooze',
+                    snoozeDuration: 5,
+                    icon: Platform.select({
+                      ios: 'zzz',
+                      android: 'ic_snooze'
+                    })
+                  },
+                ]
+              },
+            );
+
+            console.log('Alarm scheduled successfully for:', dateWithoutSeconds);
+            console.log('Alarm result:', alarmResult);
+            setTimeout(async () => {
+              const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
+              if (existingAlarm) {
+                console.log('Scheduled existing alarm found in NativeAlarmManager:', alarmId);
+              } else {
+                console.log('Scheduled alarm not found in NativeAlarmManager:', alarmId);
+              }
+            }, 500);
+          }
 
         } catch (error) {
           console.error('Failed to schedule alarm:', error);
@@ -1150,8 +1278,25 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       console.log('Notification note:', note);
       console.log('Notification link:', link);
 
-      resetForm();
-      onSuccess?.();
+      // Show warning for daily alarms
+      if (repeatOption === 'daily' && scheduleAlarm && alarmSupported) {
+        Alert.alert(
+          'Daily Alarm',
+          "Daily alarms may stop working if the app hasn't been used for two weeks.",
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                resetForm();
+                onSuccess?.();
+              },
+            },
+          ]
+        );
+      } else {
+        resetForm();
+        onSuccess?.();
+      }
     } catch (error) {
       if (isEditMode) {
         Alert.alert('Error', 'Sorry, your notification could not be updated.');

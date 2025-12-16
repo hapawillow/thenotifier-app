@@ -1,5 +1,536 @@
+diff --git a/node_modules/rn-native-alarmkit/ios/AlarmKitManager.swift b/node_modules/rn-native-alarmkit/ios/AlarmKitManager.swift
+index 8e28eba..7156d21 100644
+--- a/node_modules/rn-native-alarmkit/ios/AlarmKitManager.swift
++++ b/node_modules/rn-native-alarmkit/ios/AlarmKitManager.swift
+@@ -45,7 +45,7 @@ class AlarmKitManager {
+ 
+     func scheduleAlarm(schedule: NSDictionary, config: NSDictionary) async throws -> [String: Any] {
+         let alarmId = schedule["id"] as? String ?? UUID().uuidString
+-        let type = schedule["type"] as? String ?? "fixed"
++        let scheduleType = schedule["type"] as? String ?? "fixed"
+ 
+         // Store metadata
+         alarmMetadataStore[alarmId] = [
+@@ -54,23 +54,42 @@ class AlarmKitManager {
+         ]
+ 
+         let attributes = buildAlarmAttributes(config: config)
+-        let duration = calculateDuration(schedule: schedule)
+-
+-        // Schedule alarm using timer configuration
+         let uuid = UUID(uuidString: alarmId) ?? UUID()
+-        let alarm = try await manager.schedule(
+-            id: uuid,
+-            configuration: .timer(
+-                duration: duration,
+-                attributes: attributes
++
++        // AlarmKit supports true alarm scheduling via AlarmConfiguration.alarm(schedule:...)
++        // Use alarm schedules for fixed/recurring to avoid timer limitations and ensure calendar dates are honored.
++        let now = Date()
++        let alarmSchedule = buildAlarmKitSchedule(schedule: schedule, now: now)
++
++        let alarm: Alarm
++        if scheduleType == "interval" {
++            // Interval countdown-style timers still use .timer
++            let duration = calculateDuration(schedule: schedule)
++            alarm = try await manager.schedule(
++                id: uuid,
++                configuration: .timer(
++                    duration: duration,
++                    attributes: attributes
++                )
+             )
+-        )
++        } else {
++            alarm = try await manager.schedule(
++                id: uuid,
++                configuration: .alarm(
++                    schedule: alarmSchedule,
++                    attributes: attributes
++                )
++            )
++        }
+ 
+-        let nextFireDate = Date.now.addingTimeInterval(duration)
++        let nextFireDate = resolveNextFireDateFromAlarmKitSchedule(schedule: alarmSchedule, now: now) ?? now
++
++        // Serialize schedule to ensure date fields are numbers (not Date objects)
++        let serializedSchedule = serializeSchedule(schedule)
+ 
+         return [
+             "id": alarmId,
+-            "schedule": schedule,
++            "schedule": serializedSchedule,
+             "config": config,
+             "nextFireDate": ISO8601DateFormatter().string(from: nextFireDate),
+             "capability": "native_alarms",
+@@ -88,7 +107,23 @@ class AlarmKitManager {
+             )
+         }
+ 
+-        try await manager.cancel(id: uuid)
++        // AlarmKit's cancel and stop are synchronous-throwing (not async)
++        // Attempt cancel first (primary operation)
++        do {
++            try manager.cancel(id: uuid)
++        } catch {
++            // If cancel fails, still try stop as fallback
++            print("[AlarmKitManager] cancel failed for \(id), attempting stop: \(error)")
++        }
++        
++        // Best-effort stop to dismiss alarms that might be in .alerting state
++        do {
++            try manager.stop(id: uuid)
++        } catch {
++            // Ignore stop errors - it's best-effort cleanup
++            print("[AlarmKitManager] stop failed for \(id) (may not be alerting): \(error)")
++        }
++        
+         alarmMetadataStore.removeValue(forKey: id)
+     }
+ 
+@@ -127,9 +162,12 @@ class AlarmKitManager {
+         let duration = calculateDuration(schedule: schedule)
+         let nextFireDate = Date.now.addingTimeInterval(duration)
+ 
++        // Serialize schedule to ensure date fields are numbers (not Date objects)
++        let serializedSchedule = serializeSchedule(schedule)
++
+         return [
+             "id": id,
+-            "schedule": schedule,
++            "schedule": serializedSchedule,
+             "config": config,
+             "nextFireDate": ISO8601DateFormatter().string(from: nextFireDate),
+             "capability": "native_alarms",
+@@ -203,19 +241,79 @@ class AlarmKitManager {
+ 
+     // MARK: - Helper Methods
+ 
+-    private func calculateDuration(schedule: NSDictionary) -> TimeInterval {
+-        let type = schedule["type"] as? String ?? "fixed"
++    /// Map JS weekday (0=Sunday..6=Saturday) to Foundation.Locale.Weekday
++    private func mapToLocaleWeekday(_ day: Int) -> Foundation.Locale.Weekday? {
++        switch day {
++        case 0: return .sunday
++        case 1: return .monday
++        case 2: return .tuesday
++        case 3: return .wednesday
++        case 4: return .thursday
++        case 5: return .friday
++        case 6: return .saturday
++        default: return nil
++        }
++    }
+ 
+-        if type == "interval", let intervalMinutes = schedule["intervalMinutes"] as? Int {
+-            return TimeInterval(intervalMinutes * 60)
++    /// Build an AlarmKit Alarm.Schedule from our JS schedule dictionary.
++    /// - For fixed alarms: prefer schedule.date; otherwise compute next occurrence from time.
++    /// - For weekly recurring: use AlarmKit's relative weekly recurrence.
++    /// - For other recurring: schedule the next occurrence as a fixed date; monitorAlarms will reschedule after fire.
++    private func buildAlarmKitSchedule(schedule: NSDictionary, now: Date) -> Alarm.Schedule? {
++        let scheduleType = schedule["type"] as? String ?? "fixed"
++
++        if scheduleType == "fixed" {
++            if let fixedDate = extractDate(from: schedule["date"]) {
++                return .fixed(fixedDate)
++            }
++            // No explicit date: compute today/tomorrow at time
++            if let computed = computeNextDateFromTime(schedule: schedule, from: now) {
++                return .fixed(computed)
++            }
++            return nil
++        }
++
++        if scheduleType == "recurring" {
++            let repeatInterval = schedule["repeatInterval"] as? String
++            let timeDict = schedule["time"] as? NSDictionary
++            let hour = timeDict?["hour"] as? Int ?? 8
++            let minute = timeDict?["minute"] as? Int ?? 0
++
++            if repeatInterval == "weekly",
++               let days = schedule["daysOfWeek"] as? [Int],
++               !days.isEmpty {
++                let weekdays: [Foundation.Locale.Weekday] = days.compactMap { mapToLocaleWeekday($0) }
++                let rel = Alarm.Schedule.Relative(
++                    time: Alarm.Schedule.Relative.Time(hour: hour, minute: minute),
++                    repeats: .weekly(weekdays)
++                )
++                return .relative(rel)
++            }
++
++            // For daily/monthly/yearly (and any other future intervals), schedule the next occurrence as fixed.
++            if let startDate = extractDate(from: schedule["startDate"]), startDate > now {
++                return .fixed(startDate)
++            }
++            if let next = calculateNextOccurrenceDate(schedule: schedule, fromDate: now) {
++                return .fixed(next)
++            }
++            // Fallback: schedule next from time today/tomorrow
++            if let computed = computeNextDateFromTime(schedule: schedule, from: now) {
++                return .fixed(computed)
++            }
++            return nil
+         }
+ 
+-        // For fixed and recurring, calculate time until next alarm
++        // interval handled elsewhere; return nil here
++        return nil
++    }
++
++    /// Compute next date from schedule.time (today at hour/minute or tomorrow if passed).
++    private func computeNextDateFromTime(schedule: NSDictionary, from now: Date) -> Date? {
+         let time = schedule["time"] as? NSDictionary
+         let hour = time?["hour"] as? Int ?? 8
+         let minute = time?["minute"] as? Int ?? 0
+ 
+-        let now = Date()
+         var calendar = Calendar.current
+         calendar.timeZone = TimeZone.current
+ 
+@@ -224,16 +322,288 @@ class AlarmKitManager {
+         components.minute = minute
+         components.second = 0
+ 
+-        guard var targetDate = calendar.date(from: components) else {
++        guard var target = calendar.date(from: components) else { return nil }
++        if target <= now {
++            target = calendar.date(byAdding: .day, value: 1, to: target) ?? target
++        }
++        return target
++    }
++
++    /// Resolve a best-effort next fire date for returning to JS.
++    private func resolveNextFireDateFromAlarmKitSchedule(schedule: Alarm.Schedule?, now: Date) -> Date? {
++        guard let schedule = schedule else { return nil }
++        switch schedule {
++        case .fixed(let date):
++            return date
++        case .relative(let rel):
++            // Compute next matching weekday/time from now
++            let hour = rel.time.hour
++            let minute = rel.time.minute
++            var calendar = Calendar.current
++            calendar.timeZone = TimeZone.current
++
++            switch rel.repeats {
++            case .weekly(let weekdays):
++                // Convert Locale.Weekday to Calendar weekday ints (1=Sunday..7=Saturday)
++                let allowed: Set<Int> = Set(weekdays.compactMap { wd in
++                    switch wd {
++                    case .sunday: return 1
++                    case .monday: return 2
++                    case .tuesday: return 3
++                    case .wednesday: return 4
++                    case .thursday: return 5
++                    case .friday: return 6
++                    case .saturday: return 7
++                    }
++                })
++
++                for i in 0...14 {
++                    guard let day = calendar.date(byAdding: .day, value: i, to: now) else { continue }
++                    let weekday = calendar.component(.weekday, from: day)
++                    if allowed.contains(weekday) {
++                        var comps = calendar.dateComponents([.year, .month, .day], from: day)
++                        comps.hour = hour
++                        comps.minute = minute
++                        comps.second = 0
++                        if let candidate = calendar.date(from: comps), candidate > now {
++                            return candidate
++                        }
++                    }
++                }
++                return nil
++            case .never:
++                // Next occurrence today/tomorrow
++                return computeNextDateFromTime(schedule: ["time": ["hour": hour, "minute": minute]] as NSDictionary, from: now)
++            }
++        }
++    }
++
++    /// Extract Date from various possible types in NSDictionary (Double, NSNumber, Date, ISO string)
++    private func extractDate(from value: Any?) -> Date? {
++        guard let value = value else { return nil }
++        
++        // Try Double (milliseconds timestamp)
++        if let timestamp = value as? Double {
++            return Date(timeIntervalSince1970: timestamp / 1000.0)
++        }
++        
++        // Try NSNumber (milliseconds timestamp)
++        if let number = value as? NSNumber {
++            return Date(timeIntervalSince1970: number.doubleValue / 1000.0)
++        }
++        
++        // Try Date/NSDate directly
++        if let date = value as? Date {
++            return date
++        }
++        
++        // Try ISO string
++        if let isoString = value as? String {
++            let formatter = ISO8601DateFormatter()
++            return formatter.date(from: isoString)
++        }
++        
++        return nil
++    }
++
++    /// Serialize schedule dictionary, ensuring date fields are numbers (milliseconds) for JSON serialization
++    private func serializeSchedule(_ schedule: NSDictionary) -> NSDictionary {
++        let mutable = NSMutableDictionary(dictionary: schedule)
++        
++        // Convert date fields to milliseconds (numbers) if they exist
++        if let date = extractDate(from: schedule["date"]) {
++            mutable["date"] = date.timeIntervalSince1970 * 1000.0
++        }
++        if let startDate = extractDate(from: schedule["startDate"]) {
++            mutable["startDate"] = startDate.timeIntervalSince1970 * 1000.0
++        }
++        if let startTime = extractDate(from: schedule["startTime"]) {
++            mutable["startTime"] = startTime.timeIntervalSince1970 * 1000.0
++        }
++        
++        return mutable
++    }
++
++    private func calculateDuration(schedule: NSDictionary) -> TimeInterval {
++        let scheduleType = schedule["type"] as? String ?? "fixed"
++
++        if scheduleType == "interval", let intervalMinutes = schedule["intervalMinutes"] as? Int {
++            return TimeInterval(intervalMinutes * 60)
++        }
++
++        // For fixed alarms with a specific date, use that date
++        if scheduleType == "fixed" {
++            if let dateValue = extractDate(from: schedule["date"]) {
++                let now = Date()
++                let duration = dateValue.timeIntervalSince(now)
++                // Ensure duration is non-negative (if date is in past, schedule for 1 hour from now)
++                if duration > 0 {
++                    return duration
++                } else {
++                    // Date is in the past, log for debugging
++                    print("[AlarmKitManager] Warning: Fixed alarm date is in the past: \(dateValue)")
++                    return 3600 // Default 1 hour
++                }
++            } else {
++                // Debug logging: log what type we actually got
++                if let dateObj = schedule["date"] {
++                    let typeName = String(describing: Swift.type(of: dateObj))
++                    print("[AlarmKitManager] Warning: Could not extract date from schedule[\"date\"], type: \(typeName), value: \(dateObj)")
++                }
++            }
++        }
++
++        // For fixed without date, or recurring, calculate time until next alarm
++        let time = schedule["time"] as? NSDictionary
++        let hour = time?["hour"] as? Int ?? 8
++        let minute = time?["minute"] as? Int ?? 0
++
++        let now = Date()
++        var calendar = Calendar.current
++        calendar.timeZone = TimeZone.current
++
++        // For recurring alarms, check if there's a startDate to anchor the series
++        var targetDate: Date?
++        if let startDate = extractDate(from: schedule["startDate"]) {
++            // If startDate is in the future, use it as the first occurrence
++            if startDate > now {
++                targetDate = startDate
++            }
++        }
++
++        // If no targetDate yet, calculate next occurrence
++        if targetDate == nil {
++            var components = calendar.dateComponents([.year, .month, .day], from: now)
++            components.hour = hour
++            components.minute = minute
++            components.second = 0
++
++            guard let baseDate = calendar.date(from: components) else {
++                return 3600 // Default 1 hour
++            }
++
++            targetDate = baseDate
++
++            // If time has passed today, schedule for tomorrow
++            if targetDate! <= now {
++                targetDate = calendar.date(byAdding: .day, value: 1, to: targetDate!)
++            }
++        }
++
++        guard let finalTargetDate = targetDate else {
+             return 3600 // Default 1 hour
+         }
+ 
+-        // If time has passed today, schedule for tomorrow
+-        if targetDate <= now {
+-            targetDate = calendar.date(byAdding: .day, value: 1, to: targetDate)!
++        return finalTargetDate.timeIntervalSince(now)
++    }
++
++    private func calculateNextOccurrenceDate(schedule: NSDictionary, fromDate: Date) -> Date? {
++        let scheduleType = schedule["type"] as? String ?? "fixed"
++        let repeatInterval = schedule["repeatInterval"] as? String
++
++        // For non-recurring alarms, return nil (no next occurrence)
++        if scheduleType == "fixed" && repeatInterval == nil {
++            return nil
+         }
+ 
+-        return targetDate.timeIntervalSince(now)
++        let time = schedule["time"] as? NSDictionary
++        let hour = time?["hour"] as? Int ?? 8
++        let minute = time?["minute"] as? Int ?? 0
++
++        var calendar = Calendar.current
++        calendar.timeZone = TimeZone.current
++
++        switch repeatInterval {
++        case "daily":
++            // Next occurrence is tomorrow at the same time
++            var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fromDate)
++            components.hour = hour
++            components.minute = minute
++            components.second = 0
++            
++            guard let baseDate = calendar.date(from: components) else { return nil }
++            
++            // If baseDate is today and time hasn't passed, use it; otherwise use tomorrow
++            if baseDate <= fromDate {
++                return calendar.date(byAdding: .day, value: 1, to: baseDate)
++            }
++            return baseDate
++
++        case "weekly":
++            // Find next occurrence on the specified weekday
++            let daysOfWeek = schedule["daysOfWeek"] as? [Int] ?? []
++            guard !daysOfWeek.isEmpty else { return nil }
++            
++            let currentWeekday = calendar.component(.weekday, from: fromDate) - 1 // Convert to 0-6 (Sunday=0)
++            
++            // Find the next matching weekday
++            for i in 1...14 { // Check up to 2 weeks ahead
++                guard let checkDate = calendar.date(byAdding: .day, value: i, to: fromDate) else {
++                    continue
++                }
++                let checkWeekday = calendar.component(.weekday, from: checkDate) - 1
++                
++                if daysOfWeek.contains(checkWeekday) {
++                    var components = calendar.dateComponents([.year, .month, .day], from: checkDate)
++                    components.hour = hour
++                    components.minute = minute
++                    components.second = 0
++                    return calendar.date(from: components)
++                }
++            }
++            return nil
++
++        case "monthly":
++            // Next occurrence on the same day of month next month
++            let dayOfMonth = schedule["dayOfMonth"] as? Int ?? calendar.component(.day, from: fromDate)
++            
++            var components = calendar.dateComponents([.year, .month, .day], from: fromDate)
++            let currentMonth = components.month ?? 1
++            components.month = currentMonth + 1
++            if components.month! > 12 {
++                components.month = 1
++                components.year = (components.year ?? 2024) + 1
++            }
++            
++            // Handle invalid days (e.g., 31st in February)
++            // Clamp to last valid day of month
++            guard let tempDate = calendar.date(from: components),
++                  let dayRange = calendar.range(of: .day, in: .month, for: tempDate) else {
++                return nil
++            }
++            let clampedDay = min(dayOfMonth, dayRange.upperBound - 1)
++            components.day = clampedDay
++            components.hour = hour
++            components.minute = minute
++            components.second = 0
++            
++            return calendar.date(from: components)
++
++        case "yearly":
++            // Next occurrence on the same month/day next year
++            let monthOfYear = schedule["monthOfYear"] as? Int ?? calendar.component(.month, from: fromDate)
++            let dayOfMonth = schedule["dayOfMonth"] as? Int ?? calendar.component(.day, from: fromDate)
++            
++            var components = calendar.dateComponents([.year, .month, .day], from: fromDate)
++            components.year = (components.year ?? 2024) + 1
++            components.month = monthOfYear
++            
++            // Handle invalid days (e.g., Feb 29 in non-leap year)
++            guard let tempDate = calendar.date(from: components),
++                  let dayRange = calendar.range(of: .day, in: .month, for: tempDate) else {
++                return nil
++            }
++            let clampedDay = min(dayOfMonth, dayRange.upperBound - 1)
++            components.day = clampedDay
++            components.hour = hour
++            components.minute = minute
++            components.second = 0
++            
++            return calendar.date(from: components)
++
++        default:
++            return nil
++        }
+     }
+ 
+     private func buildAlarmAttributes(config: NSDictionary) -> AlarmAttributes<BasicAlarmMetadata> {
+@@ -288,9 +658,12 @@ class AlarmKitManager {
+                        let schedule = metadata["schedule"] as? NSDictionary,
+                        let config = metadata["config"] as? NSDictionary {
+ 
++                        // Serialize schedule to ensure date fields are numbers (not Date objects)
++                        let serializedSchedule = serializeSchedule(schedule)
++
+                         let alarmData: [String: Any] = [
+                             "id": alarmId,
+-                            "schedule": schedule,
++                            "schedule": serializedSchedule,
+                             "config": config,
+                             "nextFireDate": ISO8601DateFormatter().string(from: Date()),
+                             "capability": "native_alarms",
+@@ -298,6 +671,30 @@ class AlarmKitManager {
+                         ]
+ 
+                         delegate?.alarmDidFire(alarm: alarmData)
++
++                        // For recurring alarms, reschedule the next occurrence (except weekly, which AlarmKit can handle natively)
++                        let scheduleType = schedule["type"] as? String ?? "fixed"
++                        let repeatInterval = schedule["repeatInterval"] as? String
++                        
++                        if scheduleType == "recurring" && repeatInterval != nil && repeatInterval != "weekly" {
++                            let now = Date()
++                            if let nextOccurrence = calculateNextOccurrenceDate(schedule: schedule, fromDate: now) {
++                                // Reschedule for next occurrence using AlarmKit fixed-date alarms
++                                let attributes = buildAlarmAttributes(config: config)
++                                let uuid = UUID(uuidString: alarmId) ?? UUID()
++                                do {
++                                    _ = try await manager.schedule(
++                                        id: uuid,
++                                        configuration: .alarm(
++                                            schedule: .fixed(nextOccurrence),
++                                            attributes: attributes
++                                        )
++                                    )
++                                } catch {
++                                    print("Failed to reschedule recurring alarm \(alarmId): \(error)")
++                                }
++                            }
++                        }
+                     }
+                 }
+             }
 diff --git a/node_modules/rn-native-alarmkit/ios/NotificationFallback.swift b/node_modules/rn-native-alarmkit/ios/NotificationFallback.swift
-index cc2fd9b..fb4212f 100644
+index cc2fd9b..8933690 100644
 --- a/node_modules/rn-native-alarmkit/ios/NotificationFallback.swift
 +++ b/node_modules/rn-native-alarmkit/ios/NotificationFallback.swift
 @@ -6,9 +6,12 @@ class NotificationFallback: NSObject {
@@ -18,7 +549,7 @@ index cc2fd9b..fb4212f 100644
 @@ -178,9 +181,36 @@ class NotificationFallback: NSObject {
          let hour = time?["hour"] as? Int ?? 8
          let minute = time?["minute"] as? Int ?? 0
-         
+ 
 +        // Extract date components for one-time alarm
          var dateComponents = DateComponents()
 -        dateComponents.hour = hour
@@ -54,7 +585,114 @@ index cc2fd9b..fb4212f 100644
  
          let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: false)
          let request = UNNotificationRequest(identifier: alarmId, content: content, trigger: trigger)
-@@ -366,7 +396,15 @@ extension NotificationFallback: UNUserNotificationCenterDelegate {
+@@ -194,10 +224,29 @@ class NotificationFallback: NSObject {
+         let time = schedule["time"] as? NSDictionary
+         let hour = time?["hour"] as? Int ?? 8
+         let minute = time?["minute"] as? Int ?? 0
+-        let daysOfWeek = schedule["daysOfWeek"] as? [Int] ?? []
++        let repeatInterval = schedule["repeatInterval"] as? String
++        
++        // Determine day/month from startDate if provided, otherwise use current date
++        var calendar = Calendar.current
++        var dayOfMonth: Int?
++        var monthOfYear: Int?
+         
+-        if daysOfWeek.isEmpty {
+-            // Daily alarm
++        if let startDateTimestamp = schedule["startDate"] as? Double {
++            let startDate = Date(timeIntervalSince1970: startDateTimestamp / 1000.0)
++            dayOfMonth = calendar.component(.day, from: startDate)
++            monthOfYear = calendar.component(.month, from: startDate)
++        }
++        
++        // Override with explicit values if provided
++        if let explicitDay = schedule["dayOfMonth"] as? Int {
++            dayOfMonth = explicitDay
++        }
++        if let explicitMonth = schedule["monthOfYear"] as? Int {
++            monthOfYear = explicitMonth
++        }
++
++        switch repeatInterval {
++        case "daily":
+             var dateComponents = DateComponents()
+             dateComponents.hour = hour
+             dateComponents.minute = minute
+@@ -206,21 +255,65 @@ class NotificationFallback: NSObject {
+             let request = UNNotificationRequest(identifier: alarmId, content: content, trigger: trigger)
+ 
+             try await notificationCenter.add(request)
+-        } else {
+-            // Specific days of week - need to create multiple notification requests
+-            for dayOfWeek in daysOfWeek {
+-                let notificationId = "\(alarmId)-day\(dayOfWeek)"
+ 
++        case "weekly":
++            let daysOfWeek = schedule["daysOfWeek"] as? [Int] ?? []
++            if daysOfWeek.isEmpty {
++                // Fallback to daily if no days specified
+                 var dateComponents = DateComponents()
+                 dateComponents.hour = hour
+                 dateComponents.minute = minute
+-                dateComponents.weekday = dayOfWeek + 1 // iOS weekday is 1-7, not 0-6
+-
+                 let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
+-                let request = UNNotificationRequest(identifier: notificationId, content: content, trigger: trigger)
+-
++                let request = UNNotificationRequest(identifier: alarmId, content: content, trigger: trigger)
+                 try await notificationCenter.add(request)
++            } else {
++                // Specific days of week - need to create multiple notification requests
++                for dayOfWeek in daysOfWeek {
++                    let notificationId = "\(alarmId)-day\(dayOfWeek)"
++
++                    var dateComponents = DateComponents()
++                    dateComponents.hour = hour
++                    dateComponents.minute = minute
++                    dateComponents.weekday = dayOfWeek + 1 // iOS weekday is 1-7, not 0-6
++
++                    let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
++                    let request = UNNotificationRequest(identifier: notificationId, content: content, trigger: trigger)
++
++                    try await notificationCenter.add(request)
++                }
+             }
++
++        case "monthly":
++            var dateComponents = DateComponents()
++            dateComponents.hour = hour
++            dateComponents.minute = minute
++            dateComponents.day = dayOfMonth ?? calendar.component(.day, from: Date())
++
++            let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
++            let request = UNNotificationRequest(identifier: alarmId, content: content, trigger: trigger)
++
++            try await notificationCenter.add(request)
++
++        case "yearly":
++            var dateComponents = DateComponents()
++            dateComponents.hour = hour
++            dateComponents.minute = minute
++            dateComponents.month = monthOfYear ?? calendar.component(.month, from: Date())
++            dateComponents.day = dayOfMonth ?? calendar.component(.day, from: Date())
++
++            let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
++            let request = UNNotificationRequest(identifier: alarmId, content: content, trigger: trigger)
++
++            try await notificationCenter.add(request)
++
++        default:
++            // Fallback to daily if repeatInterval not specified
++            var dateComponents = DateComponents()
++            dateComponents.hour = hour
++            dateComponents.minute = minute
++            let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
++            let request = UNNotificationRequest(identifier: alarmId, content: content, trigger: trigger)
++            try await notificationCenter.add(request)
+         }
+     }
+ 
+@@ -366,7 +459,15 @@ extension NotificationFallback: UNUserNotificationCenterDelegate {
          willPresent notification: UNNotification,
          withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
      ) {
@@ -71,7 +709,7 @@ index cc2fd9b..fb4212f 100644
          completionHandler([.banner, .sound, .badge])
      }
  
-@@ -378,11 +416,16 @@ extension NotificationFallback: UNUserNotificationCenterDelegate {
+@@ -378,11 +479,16 @@ extension NotificationFallback: UNUserNotificationCenterDelegate {
          let userInfo = response.notification.request.content.userInfo
  
          guard let alarmId = userInfo["alarmId"] as? String else {
@@ -90,7 +728,7 @@ index cc2fd9b..fb4212f 100644
          let actionId = response.actionIdentifier
  
          if actionId == UNNotificationDefaultActionIdentifier {
-@@ -393,7 +436,13 @@ extension NotificationFallback: UNUserNotificationCenterDelegate {
+@@ -393,7 +499,13 @@ extension NotificationFallback: UNUserNotificationCenterDelegate {
              notifyAlarmFired(alarmId: alarmId, actionId: actionId)
          }
  
@@ -105,3 +743,191 @@ index cc2fd9b..fb4212f 100644
      }
  
      private func notifyAlarmFired(alarmId: String, actionId: String?) {
+diff --git a/node_modules/rn-native-alarmkit/src/NativeAlarmModule.ts b/node_modules/rn-native-alarmkit/src/NativeAlarmModule.ts
+index 639e82b..71231fb 100644
+--- a/node_modules/rn-native-alarmkit/src/NativeAlarmModule.ts
++++ b/node_modules/rn-native-alarmkit/src/NativeAlarmModule.ts
+@@ -3,14 +3,14 @@
+  * Low-level interface to native iOS and Android implementations
+  */
+ 
+-import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
++import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+ import type {
+-  AlarmSchedule,
+-  AlarmConfig,
+-  ScheduledAlarm,
+   AlarmCapabilityCheck,
++  AlarmConfig,
+   AlarmFiredEvent,
++  AlarmSchedule,
+   PermissionChangedEvent,
++  ScheduledAlarm,
+ } from './types';
+ import { AlarmError, AlarmErrorCode } from './types';
+ 
+@@ -65,16 +65,16 @@ interface NativeAlarmsSpec {
+ const NativeAlarmsModule = NativeModules.RNNativeAlarms
+   ? (NativeModules.RNNativeAlarms as NativeAlarmsSpec)
+   : new Proxy(
+-      {},
+-      {
+-        get() {
+-          throw new AlarmError(
+-            AlarmErrorCode.MODULE_NOT_LINKED,
+-            LINKING_ERROR
+-          );
+-        },
+-      }
+-    ) as NativeAlarmsSpec;
++    {},
++    {
++      get() {
++        throw new AlarmError(
++          AlarmErrorCode.MODULE_NOT_LINKED,
++          LINKING_ERROR
++        );
++      },
++    }
++  ) as NativeAlarmsSpec;
+ 
+ /**
+  * Event emitter for native events
+@@ -91,6 +91,27 @@ const EVENTS = NativeAlarmsModule.getConstants?.() || {
+   PERMISSION_CHANGED_EVENT: 'RNNativeAlarms_PermissionChanged',
+ };
+ 
++/**
++ * Normalize Date objects in schedule to milliseconds (numbers) for native bridge
++ * React Native bridge may serialize Date objects inconsistently, so we normalize them
++ */
++function normalizeScheduleForNative(schedule: AlarmSchedule): any {
++  const normalized: any = { ...schedule };
++
++  // Convert Date objects to milliseconds (numbers)
++  if (schedule.date instanceof Date) {
++    normalized.date = schedule.date.getTime();
++  }
++  if (schedule.startDate instanceof Date) {
++    normalized.startDate = schedule.startDate.getTime();
++  }
++  if (schedule.startTime instanceof Date) {
++    normalized.startTime = schedule.startTime.getTime();
++  }
++
++  return normalized;
++}
++
+ /**
+  * Wrapped native module with error handling and type safety
+  */
+@@ -133,7 +154,9 @@ export const NativeAlarmModule = {
+     config: AlarmConfig
+   ): Promise<ScheduledAlarm> {
+     try {
+-      const alarm = await NativeAlarmsModule.scheduleAlarm(schedule, config);
++      // Normalize Date objects to milliseconds before passing to native
++      const normalizedSchedule = normalizeScheduleForNative(schedule);
++      const alarm = await NativeAlarmsModule.scheduleAlarm(normalizedSchedule, config);
+ 
+       // Convert date strings to Date objects
+       return {
+@@ -165,7 +188,9 @@ export const NativeAlarmModule = {
+     config: AlarmConfig
+   ): Promise<ScheduledAlarm> {
+     try {
+-      const alarm = await NativeAlarmsModule.updateAlarm(id, schedule, config);
++      // Normalize Date objects to milliseconds before passing to native
++      const normalizedSchedule = normalizeScheduleForNative(schedule);
++      const alarm = await NativeAlarmsModule.updateAlarm(id, normalizedSchedule, config);
+ 
+       return {
+         ...alarm,
+diff --git a/node_modules/rn-native-alarmkit/src/types.ts b/node_modules/rn-native-alarmkit/src/types.ts
+index c7b428a..da34ed3 100644
+--- a/node_modules/rn-native-alarmkit/src/types.ts
++++ b/node_modules/rn-native-alarmkit/src/types.ts
+@@ -73,6 +73,11 @@ export interface AlarmCapabilityCheck {
+  */
+ export type AlarmScheduleType = 'fixed' | 'recurring' | 'interval';
+ 
++/**
++ * Repeat interval for recurring alarms
++ */
++export type AlarmRepeatInterval = 'daily' | 'weekly' | 'monthly' | 'yearly';
++
+ /**
+  * Day of week (Sunday = 0, Saturday = 6)
+  */
+@@ -113,10 +118,38 @@ export interface AlarmSchedule {
+ 
+   /**
+    * Days of week for recurring alarms (0 = Sunday, 6 = Saturday)
+-   * Required for 'recurring' type
++   * Required for 'recurring' type with 'weekly' repeatInterval
+    */
+   daysOfWeek?: DayOfWeek[];
+ 
++  /**
++   * Repeat interval for recurring alarms
++   * - 'daily': repeats every day at the same time
++   * - 'weekly': repeats on specified daysOfWeek
++   * - 'monthly': repeats on the same day of month each month
++   * - 'yearly': repeats on the same month/day each year
++   */
++  repeatInterval?: AlarmRepeatInterval;
++
++  /**
++   * Start date for recurring alarms
++   * The first occurrence will be at this date/time (if in the future)
++   * If not provided, starts from next occurrence from now
++   */
++  startDate?: Date;
++
++  /**
++   * Day of month for monthly/yearly recurring alarms (1-31)
++   * If not provided, uses the day from startDate or current date
++   */
++  dayOfMonth?: number;
++
++  /**
++   * Month of year for yearly recurring alarms (1-12)
++   * If not provided, uses the month from startDate or current date
++   */
++  monthOfYear?: number;
++
+   /**
+    * Interval in minutes (for 'interval' type)
+    * Required for 'interval' type
+@@ -577,11 +610,27 @@ export const AlarmValidation = {
+         if (schedule.time.minute < 0 || schedule.time.minute > 59) return false;
+ 
+         if (schedule.type === 'recurring') {
+-          if (!schedule.daysOfWeek || schedule.daysOfWeek.length === 0) {
+-            return false;
++          // Validate repeatInterval-specific requirements
++          if (schedule.repeatInterval === 'weekly') {
++            if (!schedule.daysOfWeek || schedule.daysOfWeek.length === 0) {
++              return false;
++            }
++            if (schedule.daysOfWeek.some(day => day < 0 || day > 6)) {
++              return false;
++            }
++          } else if (schedule.repeatInterval === 'monthly' || schedule.repeatInterval === 'yearly') {
++            if (schedule.dayOfMonth !== undefined) {
++              if (schedule.dayOfMonth < 1 || schedule.dayOfMonth > 31) {
++                return false;
++              }
++            }
+           }
+-          if (schedule.daysOfWeek.some(day => day < 0 || day > 6)) {
+-            return false;
++          if (schedule.repeatInterval === 'yearly') {
++            if (schedule.monthOfYear !== undefined) {
++              if (schedule.monthOfYear < 1 || schedule.monthOfYear > 12) {
++                return false;
++              }
++            }
+           }
+         }
+         break;

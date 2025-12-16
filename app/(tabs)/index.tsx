@@ -10,7 +10,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkCalendarEventChanges } from '@/utils/calendar-check';
-import { deleteScheduledNotification, getAllArchivedNotificationData, getAllScheduledNotificationData } from '@/utils/database';
+import { deleteScheduledNotification, getAllArchivedNotificationData, getAllScheduledNotificationData, getAllActiveDailyAlarmInstances, markAllDailyAlarmInstancesCancelled } from '@/utils/database';
 import { Toast } from 'toastify-react-native';
 
 type ScheduledNotification = {
@@ -200,6 +200,31 @@ export default function HomeScreen() {
             try {
               // Cancel the scheduled notification
               await Notifications.cancelScheduledNotificationAsync(notification.notificationId);
+              
+              // If this is a daily repeating alarm, cancel all daily alarm instances
+              if (notification.repeatOption === 'daily' && notification.hasAlarm) {
+                try {
+                  const { NativeAlarmManager } = await import('rn-native-alarmkit');
+                  const dailyInstances = await getAllActiveDailyAlarmInstances(notification.notificationId);
+                  for (const instance of dailyInstances) {
+                    try {
+                      await NativeAlarmManager.cancelAlarm(instance.alarmId);
+                      console.log('Cancelled daily alarm instance on delete:', instance.alarmId);
+                    } catch (instanceError) {
+                      const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
+                      if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+                        console.error('Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
+                      }
+                    }
+                  }
+                  await markAllDailyAlarmInstancesCancelled(notification.notificationId);
+                  console.log('Marked all daily alarm instances as cancelled on delete');
+                } catch (alarmError) {
+                  console.error('Failed to cancel daily alarms on delete:', alarmError);
+                  // Continue with deletion even if alarm cancellation fails
+                }
+              }
+              
               // Delete from database
               await deleteScheduledNotification(notification.notificationId);
               // Reload notifications

@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import * as SQLite from 'expo-sqlite';
+import * as Crypto from 'expo-crypto';
 
 // Open the database
 async function openDatabase() {
@@ -262,6 +263,30 @@ export const initDatabase = async () => {
     // Create index for ignoredCalendarEvents table
     await db.execAsync(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_ignoredCalendarEvents_composite ON ignoredCalendarEvents (calendarId, originalEventId);
+    `);
+
+    // Create dailyAlarmInstance table if it doesn't exist (for tracking AlarmKit alarms for daily repeating notifications)
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS dailyAlarmInstance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        notificationId TEXT NOT NULL,
+        alarmId TEXT NOT NULL,
+        fireDateTime TEXT NOT NULL,
+        isActive INTEGER NOT NULL DEFAULT 1,
+        createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+        cancelledAt TEXT DEFAULT NULL,
+        UNIQUE(notificationId, fireDateTime)
+      );
+    `);
+
+    // Create indexes for dailyAlarmInstance table
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_dailyAlarmInstance_notificationId_isActive ON dailyAlarmInstance (notificationId, isActive);
+    `);
+
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_dailyAlarmInstance_fireDateTime ON dailyAlarmInstance (fireDateTime);
     `);
 
     isInitialized = true;
@@ -851,6 +876,249 @@ export const getAlarmPermissionDenied = async (): Promise<boolean> => {
   } catch (error: any) {
     console.error('Failed to get alarm permission denied state:', error);
     return false;
+  }
+};
+
+// Daily Alarm Instance CRUD operations
+
+// Insert a daily alarm instance
+export const insertDailyAlarmInstance = async (
+  notificationId: string,
+  alarmId: string,
+  fireDateTime: string
+): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    await db.execAsync(
+      `INSERT OR IGNORE INTO dailyAlarmInstance (notificationId, alarmId, fireDateTime, isActive, createdAt, updatedAt)
+       VALUES ('${escapeSql(notificationId)}', '${escapeSql(alarmId)}', '${fireDateTime}', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);`
+    );
+  } catch (error: any) {
+    console.error('Failed to insert daily alarm instance:', error);
+    throw new Error(`Failed to insert daily alarm instance: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Get active future daily alarm instances for a notification
+export const getActiveFutureDailyAlarmInstances = async (
+  notificationId: string,
+  nowIso: string
+): Promise<Array<{ alarmId: string; fireDateTime: string }>> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const result = await db.getAllAsync<{ alarmId: string; fireDateTime: string }>(
+      `SELECT alarmId, fireDateTime FROM dailyAlarmInstance 
+       WHERE notificationId = '${escapeSql(notificationId)}' 
+       AND isActive = 1 
+       AND fireDateTime > '${nowIso}'
+       ORDER BY fireDateTime ASC;`
+    );
+    return result || [];
+  } catch (error: any) {
+    console.error('Failed to get active future daily alarm instances:', error);
+    return [];
+  }
+};
+
+// Get all active daily alarm instances for a notification
+export const getAllActiveDailyAlarmInstances = async (
+  notificationId: string
+): Promise<Array<{ alarmId: string; fireDateTime: string }>> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const result = await db.getAllAsync<{ alarmId: string; fireDateTime: string }>(
+      `SELECT alarmId, fireDateTime FROM dailyAlarmInstance 
+       WHERE notificationId = '${escapeSql(notificationId)}' 
+       AND isActive = 1
+       ORDER BY fireDateTime ASC;`
+    );
+    return result || [];
+  } catch (error: any) {
+    console.error('Failed to get all active daily alarm instances:', error);
+    return [];
+  }
+};
+
+// Mark a daily alarm instance as cancelled
+export const markDailyAlarmInstanceCancelled = async (alarmId: string): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    await db.execAsync(
+      `UPDATE dailyAlarmInstance 
+       SET isActive = 0, cancelledAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP 
+       WHERE alarmId = '${escapeSql(alarmId)}';`
+    );
+  } catch (error: any) {
+    console.error('Failed to mark daily alarm instance as cancelled:', error);
+    throw new Error(`Failed to mark daily alarm instance as cancelled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Mark all daily alarm instances for a notification as cancelled
+export const markAllDailyAlarmInstancesCancelled = async (notificationId: string): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    await db.execAsync(
+      `UPDATE dailyAlarmInstance 
+       SET isActive = 0, cancelledAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP 
+       WHERE notificationId = '${escapeSql(notificationId)}' AND isActive = 1;`
+    );
+  } catch (error: any) {
+    console.error('Failed to mark all daily alarm instances as cancelled:', error);
+    throw new Error(`Failed to mark all daily alarm instances as cancelled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Higher-level orchestrator: Schedule daily alarm window (14 fixed alarms)
+// This should be called from scheduleForm.tsx when scheduling a daily alarm
+export const scheduleDailyAlarmWindow = async (
+  notificationId: string,
+  baseDate: Date,
+  time: { hour: number; minute: number },
+  alarmConfig: { title: string; color?: string; data?: any; actions?: any[] },
+  count: number = 14
+): Promise<void> => {
+  const { NativeAlarmManager } = await import('rn-native-alarmkit');
+  
+  const now = new Date();
+  const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
+  
+  // Calculate dates for the next 14 occurrences
+  const dates: Date[] = [];
+  let currentDate = new Date(baseDate);
+  
+  // Ensure we start from baseDate, but skip if it's in the past
+  if (currentDate <= oneMinuteFromNow) {
+    // Start from tomorrow if baseDate has passed
+    currentDate = new Date(baseDate);
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  
+  for (let i = 0; i < count; i++) {
+    const alarmDate = new Date(currentDate);
+    alarmDate.setHours(time.hour, time.minute, 0, 0);
+    
+    // Only schedule if it's at least 1 minute in the future
+    if (alarmDate > oneMinuteFromNow) {
+      dates.push(alarmDate);
+    }
+    
+    // Move to next day
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  
+  // Schedule each alarm
+  for (const alarmDate of dates) {
+    try {
+      const alarmId = Crypto.randomUUID();
+      const alarmSchedule = {
+        id: alarmId,
+        type: 'fixed' as const,
+        date: alarmDate,
+        time: {
+          hour: time.hour,
+          minute: time.minute,
+        },
+      };
+      
+      const alarmResult = await NativeAlarmManager.scheduleAlarm(
+        alarmSchedule,
+        {
+          title: alarmConfig.title,
+          color: alarmConfig.color || '#8ddaff',
+          data: {
+            notificationId: notificationId,
+            ...alarmConfig.data,
+          },
+          actions: alarmConfig.actions,
+        }
+      );
+      
+      // Persist the alarm instance with platformAlarmId
+      await insertDailyAlarmInstance(
+        notificationId,
+        alarmResult.platformAlarmId || alarmId,
+        alarmDate.toISOString()
+      );
+    } catch (error) {
+      console.error(`Failed to schedule daily alarm instance for ${alarmDate.toISOString()}:`, error);
+      // Continue with other dates even if one fails
+    }
+  }
+};
+
+// Ensure daily alarm window for all daily notifications (replenisher)
+export const ensureDailyAlarmWindowForAllNotifications = async (): Promise<void> => {
+  const scheduledNotifications = await getAllScheduledNotificationData();
+  
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
+  
+  // Filter for daily notifications with alarms enabled
+  const dailyNotifications = scheduledNotifications.filter(
+    n => n.repeatOption === 'daily' && n.hasAlarm
+  );
+  
+  for (const notification of dailyNotifications) {
+    try {
+      // Get current active future instances
+      const activeInstances = await getActiveFutureDailyAlarmInstances(
+        notification.notificationId,
+        oneMinuteFromNow.toISOString()
+      );
+      
+      // If we have fewer than 14, schedule more
+      if (activeInstances.length < 14) {
+        const needed = 14 - activeInstances.length;
+        
+        // Parse the notification trigger to get time
+        let hour = 8;
+        let minute = 0;
+        if (notification.notificationTrigger) {
+          const trigger = notification.notificationTrigger as any;
+          if (trigger.hour !== undefined) hour = trigger.hour;
+          if (trigger.minute !== undefined) minute = trigger.minute;
+        }
+        
+        // Find the latest scheduled date or use scheduleDateTime
+        let baseDate = new Date(notification.scheduleDateTime);
+        if (activeInstances.length > 0) {
+          // Use the latest scheduled instance date
+          const latestInstance = activeInstances[activeInstances.length - 1];
+          baseDate = new Date(latestInstance.fireDateTime);
+          baseDate.setDate(baseDate.getDate() + 1); // Start from next day
+        }
+        
+        // Schedule the needed alarms with basic config (message will come from notification)
+        await scheduleDailyAlarmWindow(
+          notification.notificationId,
+          baseDate,
+          { hour, minute },
+          {
+            title: notification.message || 'Daily Alarm',
+            color: '#8ddaff',
+            data: {
+              notificationId: notification.notificationId,
+            },
+          },
+          needed
+        );
+      }
+    } catch (error) {
+      console.error(`Failed to ensure daily alarm window for ${notification.notificationId}:`, error);
+      // Continue with other notifications
+    }
   }
 };
 
