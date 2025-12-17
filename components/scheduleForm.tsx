@@ -41,6 +41,30 @@ const theme: KeyboardToolbarProps["theme"] = {
   },
 };
 
+// Shared alarm actions definition - used for both daily-window and non-daily alarms
+const ALARM_ACTIONS = [
+  {
+    id: 'dismiss',
+    title: 'Dismiss',
+    behavior: 'dismiss' as const,
+    icon: Platform.select({
+      ios: 'xmark',
+      android: 'ic_cancel'
+    })
+  },
+  {
+    id: 'snooze',
+    title: 'Snooze 10m',
+    behavior: 'snooze' as const,
+    snoozeDuration: 10, // 10 minutes to match the label
+    icon: Platform.select({
+      // Use a known-good SF Symbol name to avoid AlarmKit rejecting the configuration.
+      ios: 'clock.arrow.circlepath',
+      android: 'ic_snooze'
+    })
+  },
+];
+
 export interface ScheduleFormParams {
   date?: string;
   title?: string;
@@ -1314,27 +1338,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 data: {
                   notificationId: notificationId,
                 },
-                actions: [
-                  {
-                    id: 'dismiss',
-                    title: 'Dismiss',
-                    behavior: 'dismiss',
-                    icon: Platform.select({
-                      ios: 'xmark',
-                      android: 'ic_cancel'
-                    })
-                  },
-                  {
-                    id: 'snooze',
-                    title: 'Snooze 10m',
-                    behavior: 'snooze',
-                    snoozeDuration: 5,
-                    icon: Platform.select({
-                      ios: 'zzz',
-                      android: 'ic_snooze'
-                    })
-                  },
-                ]
+                actions: ALARM_ACTIONS
               },
               14
             );
@@ -1386,27 +1390,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 data: {
                   notificationId: notificationId,
                 },
-                actions: [
-                  {
-                    id: 'dismiss',
-                    title: 'Dismiss',
-                    behavior: 'dismiss',
-                    icon: Platform.select({
-                      ios: 'xmark',
-                      android: 'ic_cancel'
-                    })
-                  },
-                  {
-                    id: 'snooze',
-                    title: 'Snooze 10m',
-                    behavior: 'snooze',
-                    snoozeDuration: 5,
-                    icon: Platform.select({
-                      ios: 'zzz',
-                      android: 'ic_snooze'
-                    })
-                  },
-                ]
+                actions: ALARM_ACTIONS
               },
             );
 
