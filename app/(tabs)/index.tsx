@@ -11,6 +11,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { deleteScheduledNotification, getAllActiveDailyAlarmInstances, getAllActiveRepeatNotificationInstances, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrences, getScheduledNotificationData, insertRepeatOccurrence, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
+import { openNotifierLink } from '@/utils/open-link';
 import { Toast } from 'toastify-react-native';
 
 type ScheduledNotification = {
@@ -567,9 +568,17 @@ export default function HomeScreen() {
                 <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
                   Link:
                 </ThemedText>
-                <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue} numberOfLines={1}>
-                  {item.link}
-                </ThemedText>
+                <TouchableOpacity
+                  onPress={() => openNotifierLink(item.link)}
+                  activeOpacity={0.7}>
+                  <ThemedText
+                    maxFontSizeMultiplier={1.6}
+                    style={[styles.detailValue, { color: colors.tint, textDecorationLine: 'underline' }]}
+                    numberOfLines={1}
+                    accessibilityRole="link">
+                    {item.link}
+                  </ThemedText>
+                </TouchableOpacity>
               </ThemedView>
             )}
 
@@ -774,9 +783,17 @@ export default function HomeScreen() {
                   <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
                     Link:
                   </ThemedText>
-                  <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue} numberOfLines={1}>
-                    {displayLink}
-                  </ThemedText>
+                  <TouchableOpacity
+                    onPress={() => openNotifierLink(displayLink!)}
+                    activeOpacity={0.7}>
+                    <ThemedText
+                      maxFontSizeMultiplier={1.6}
+                      style={[styles.detailValue, { color: colors.tint, textDecorationLine: 'underline' }]}
+                      numberOfLines={1}
+                      accessibilityRole="link">
+                      {displayLink}
+                    </ThemedText>
+                  </TouchableOpacity>
                 </ThemedView>
               )}
             </ThemedView>
