@@ -2,7 +2,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Animated, Dimensions, FlatList, RefreshControl, StyleSheet, TouchableOpacity } from 'react-native';
+import { Alert, Animated, Dimensions, FlatList, InteractionManager, Platform, Pressable, RefreshControl, StyleSheet, TouchableOpacity } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -80,6 +80,8 @@ const isRepeatOccurrence = (item: PastItem): item is RepeatOccurrenceItem => {
 
 type TabType = 'scheduled' | 'archived';
 
+const MENU_ITEMS = ['Payments', 'My Groups', 'My Members', 'Help', 'About Us'];
+
 export default function HomeScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabType>('scheduled');
@@ -93,6 +95,7 @@ export default function HomeScreen() {
   const [drawerHeightUpdateTrigger, setDrawerHeightUpdateTrigger] = useState(0);
   const [refreshingScheduled, setRefreshingScheduled] = useState(false);
   const [refreshingArchived, setRefreshingArchived] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
@@ -806,11 +809,60 @@ export default function HomeScreen() {
     );
   };
 
+  const handleMenuToggle = () => {
+    setMenuOpen((prev) => !prev);
+  };
+
+  const handleMenuSelect = (item: string) => {
+    setMenuOpen(false);
+    // Use InteractionManager to ensure Alert shows after interactions complete
+    InteractionManager.runAfterInteractions(() => {
+      Alert.alert('Menu', `Selected: ${item}`);
+    });
+  };
+
   return (
     <ThemedView style={styles.container}>
       <ThemedView style={styles.header}>
-        {/* <ThemedText type="title">Notifications</ThemedText> */}
+        <ThemedView style={styles.headerContent}>
+          <ThemedView style={styles.headerSpacer} />
+          <TouchableOpacity
+            onPress={handleMenuToggle}
+            activeOpacity={0.7}
+            style={styles.menuButton}>
+            <IconSymbol
+              name="ellipsis.circle"
+              size={28}
+              color={colors.icon}
+            />
+          </TouchableOpacity>
+        </ThemedView>
       </ThemedView>
+
+      {menuOpen && (
+        <>
+          <Pressable
+            style={styles.menuBackdrop}
+            onPress={() => setMenuOpen(false)}
+          />
+          <ThemedView style={[styles.menuCard, { backgroundColor: colors.background, borderColor: colors.icon + '40' }]}>
+            {MENU_ITEMS.map((item, index) => (
+              <TouchableOpacity
+                key={item}
+                onPress={() => handleMenuSelect(item)}
+                activeOpacity={0.7}
+                style={[
+                  styles.menuItem,
+                  index < MENU_ITEMS.length - 1 && { borderBottomColor: colors.icon + '20' },
+                ]}>
+                <ThemedText maxFontSizeMultiplier={1.4} style={styles.menuItemText}>
+                  {item}
+                </ThemedText>
+              </TouchableOpacity>
+            ))}
+          </ThemedView>
+        </>
+      )}
 
       <ThemedView style={[styles.tabContainer, { borderBottomColor: colors.icon + '40' }]}>
         <TouchableOpacity
@@ -918,8 +970,56 @@ const styles = StyleSheet.create({
   },
   header: {
     marginTop: 40,
-    // marginBottom: 30,
     padding: 20,
+    paddingBottom: 10,
+    position: 'relative',
+    zIndex: 1,
+  },
+  headerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  headerSpacer: {
+    flex: 1,
+  },
+  menuButton: {
+    padding: 4,
+  },
+  menuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'transparent',
+    zIndex: 10,
+  },
+  menuCard: {
+    position: 'absolute',
+    // NOTE: previously this menu was positioned relative to the header.
+    // Now it's rendered at the screen root so it can sit above the backdrop on Android.
+    top: 100,
+    right: 20,
+    borderRadius: 12,
+    minWidth: 180,
+    zIndex: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
+    borderWidth: 1,
+  },
+  menuItem: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+  },
+  menuItemText: {
+    fontSize: 16,
   },
   tabContainer: {
     flexDirection: 'row',

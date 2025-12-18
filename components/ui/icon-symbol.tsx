@@ -26,7 +26,9 @@ const MAPPING = {
   'calendar': 'calendar-today',
   'repeat': 'repeat',
   'xmark': 'cancel',
-  'zzz': 'snooze'
+  'zzz': 'snooze',
+  'ellipsis.circle': 'more-vert',
+  'ellipsis': 'more-vert',
 } as IconMapping;
 
 /**
