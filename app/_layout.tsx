@@ -1,3 +1,4 @@
+import { AppearanceProvider } from '@/components/appearance-provider';
 import { CalendarChangeModal } from '@/components/calendar-change-modal';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ChangedCalendarEvent, checkCalendarEventChanges } from '@/utils/calendar-check';
@@ -317,33 +318,35 @@ export default function RootLayout() {
 
   return (
     <KeyboardProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen
-            name="schedule/[formId]"
-            options={{
-              headerShown: false,
-              presentation: 'card',
-            }}
+      <AppearanceProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="schedule/[formId]"
+              options={{
+                headerShown: false,
+                presentation: 'card',
+              }}
+            />
+            <Stack.Screen
+              name="notification-display"
+              options={{
+                presentation: 'modal',
+                title: 'Notification',
+                headerShown: true,
+              }}
+            />
+          </Stack>
+          <StatusBar style="auto" />
+          <ToastManager />
+          <CalendarChangeModal
+            visible={showCalendarChangeModal}
+            changedEvents={changedEvents}
+            onClose={() => setShowCalendarChangeModal(false)}
           />
-          <Stack.Screen
-            name="notification-display"
-            options={{
-              presentation: 'modal',
-              title: 'Notification',
-              headerShown: true,
-            }}
-          />
-        </Stack>
-        <StatusBar style="auto" />
-        <ToastManager />
-        <CalendarChangeModal
-          visible={showCalendarChangeModal}
-          changedEvents={changedEvents}
-          onClose={() => setShowCalendarChangeModal(false)}
-        />
-      </ThemeProvider>
+        </ThemeProvider>
+      </AppearanceProvider>
     </KeyboardProvider>
   );
 }

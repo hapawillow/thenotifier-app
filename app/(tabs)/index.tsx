@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Animated, Dimensions, FlatList, InteractionManager, Platform, Pressable, RefreshControl, StyleSheet, TouchableOpacity } from 'react-native';
 
+import { AppearanceModal } from '@/components/appearance-modal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -80,7 +81,7 @@ const isRepeatOccurrence = (item: PastItem): item is RepeatOccurrenceItem => {
 
 type TabType = 'scheduled' | 'archived';
 
-const MENU_ITEMS = ['Payments', 'My Groups', 'My Members', 'Help', 'About Us'];
+const MENU_ITEMS = ['Payments', 'My Groups', 'My Members', 'Help', 'About Us', 'Appearance'];
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -96,6 +97,7 @@ export default function HomeScreen() {
   const [refreshingScheduled, setRefreshingScheduled] = useState(false);
   const [refreshingArchived, setRefreshingArchived] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [appearanceModalVisible, setAppearanceModalVisible] = useState(false);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
@@ -817,6 +819,8 @@ export default function HomeScreen() {
     setMenuOpen(false);
     if (item === 'About Us') {
       router.push('/about');
+    } else if (item === 'Appearance') {
+      setAppearanceModalVisible(true);
     } else {
       // Use InteractionManager to ensure Alert shows after interactions complete
       InteractionManager.runAfterInteractions(() => {
@@ -964,6 +968,10 @@ export default function HomeScreen() {
           }
         />
       )}
+      <AppearanceModal
+        visible={appearanceModalVisible}
+        onClose={() => setAppearanceModalVisible(false)}
+      />
     </ThemedView>
   );
 }

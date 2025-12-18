@@ -943,6 +943,41 @@ export const getAlarmPermissionDenied = async (): Promise<boolean> => {
   }
 };
 
+// Save appearance mode
+export const setAppearanceMode = async (mode: 'system' | 'light' | 'dark'): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    await db.execAsync(
+      `INSERT OR REPLACE INTO appPreferences (key, value, updatedAt)
+      VALUES ('appearanceMode', '${escapeSql(mode)}', CURRENT_TIMESTAMP);`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'setAppearanceMode'), `Appearance mode saved: ${mode}`);
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'setAppearanceMode'), 'Failed to save appearance mode:', error);
+    throw new Error(`Failed to save appearance mode: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Get appearance mode
+export const getAppearanceMode = async (): Promise<'system' | 'light' | 'dark'> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const result = await db.getFirstAsync<{ value: string }>(
+      `SELECT value FROM appPreferences WHERE key = 'appearanceMode';`
+    );
+    if (result && (result.value === 'light' || result.value === 'dark' || result.value === 'system')) {
+      return result.value as 'system' | 'light' | 'dark';
+    }
+    return 'system'; // Default to system
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'getAppearanceMode'), 'Failed to get appearance mode:', error);
+    return 'system'; // Default to system on error
+  }
+};
+
 // Daily Alarm Instance CRUD operations
 
 // Insert a daily alarm instance

@@ -29,6 +29,10 @@ const MAPPING = {
   'zzz': 'snooze',
   'ellipsis.circle': 'more-vert',
   'ellipsis': 'more-vert',
+  'moon.fill': 'brightness-2',
+  'sun.max.fill': 'brightness-7',
+  'circle.lefthalf.filled': 'phone-iphone',
+  'checkmark': 'check',
 } as IconMapping;
 
 /**
