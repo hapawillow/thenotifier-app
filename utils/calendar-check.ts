@@ -1,6 +1,9 @@
 import * as Calendar from 'expo-calendar';
 import { calendarCheckEvents } from './calendar-check-events';
 import { getUpcomingCalendarNotifications, isCalendarEventIgnored } from './database';
+import { logger, makeLogHeader } from './logger';
+
+const LOG_FILE = 'utils/calendar-check.ts';
 
 export type ChangedCalendarEvent = {
   calendarId: string;
@@ -84,7 +87,7 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
   // Add a timeout to prevent hanging (5 seconds max)
   const timeoutPromise = new Promise<ChangedCalendarEvent[]>((resolve) => {
     setTimeout(() => {
-      console.log('Calendar check timed out after 5 seconds');
+      logger.info(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), 'Calendar check timed out after 5 seconds');
       resolve([]);
     }, 5000);
   });
@@ -94,13 +97,13 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
       // Check calendar permission first
       const { status } = await Calendar.getCalendarPermissionsAsync();
       if (status !== 'granted') {
-        console.log('Calendar permission not granted, skipping calendar check');
+        logger.info(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), 'Calendar permission not granted, skipping calendar check');
         return [];
       }
 
       // Get all upcoming calendar notifications
       const notifications = await getUpcomingCalendarNotifications();
-      console.log(`[Calendar Check] Found ${notifications.length} upcoming calendar notifications to check`);
+      logger.info(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), `[Calendar Check] Found ${notifications.length} upcoming calendar notifications to check`);
       if (notifications.length === 0) {
         return [];
       }
@@ -118,7 +121,7 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
       try {
         calendarsCache = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
       } catch (calError) {
-        console.error('Failed to get calendars:', calError);
+        logger.error(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), 'Failed to get calendars:', calError);
         // Continue with empty cache, will use 'Unknown' for calendar names
       }
 
@@ -138,7 +141,7 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
         // Skip if this event is ignored
         const isIgnored = await isCalendarEventIgnored(notification.calendarId, notification.originalEventId);
         if (isIgnored) {
-          console.log(`[Calendar Check] Skipping ignored event ${notification.originalEventId}`);
+          logger.info(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), `[Calendar Check] Skipping ignored event ${notification.originalEventId}`);
           continue;
         }
 
@@ -156,7 +159,7 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
           } else {
             // Fallback: use scheduleDateTime as approximation (notification was scheduled before originalEventStartDate was added)
             // This is not ideal but allows us to check for changes on older notifications
-            console.log(`[Calendar Check] Notification ${notification.notificationId} missing originalEventStartDate, using scheduleDateTime as fallback`);
+            logger.info(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), `[Calendar Check] Notification ${notification.notificationId} missing originalEventStartDate, using scheduleDateTime as fallback`);
             originalStartDate = new Date(notification.scheduleDateTime);
           }
 
@@ -210,7 +213,7 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
             }
 
           } catch (eventsError) {
-            console.error(`Failed to fetch events for calendar ${notification.calendarId}:`, eventsError);
+            logger.error(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), `Failed to fetch events for calendar ${notification.calendarId}:`, eventsError);
             // Skip this notification if we can't fetch events
             continue;
           }
@@ -250,7 +253,7 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
             // If they moved this specific occurrence, it will have a different date
             // We use a tolerance of 1 minute for time comparisons
             if (!datesEqual(originalStartDateForCompare, currentStartDate)) {
-              console.log(`[Calendar Check] Date changed for event ${notification.originalEventId}:`, {
+              logger.info(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), `[Calendar Check] Date changed for event ${notification.originalEventId}:`, {
                 original: originalStartDateForCompare.toISOString(),
                 current: currentStartDate.toISOString(),
                 diffMinutes: Math.abs(originalStartDateForCompare.getTime() - currentStartDate.getTime()) / 60000
@@ -260,7 +263,7 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
           } else {
             // If we don't have originalEventStartDate, we can't reliably compare dates
             // Skip date comparison but still check other fields (title, location, recurring)
-            console.log(`[Calendar Check] Skipping date comparison for ${notification.notificationId} - missing originalEventStartDate`);
+            logger.info(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), `[Calendar Check] Skipping date comparison for ${notification.notificationId} - missing originalEventStartDate`);
           }
 
           // Compare location (original event location vs current event location)
@@ -313,7 +316,7 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
             processedEvents.set(eventKey, true);
           }
         } catch (error) {
-          console.error(`Failed to check event ${notification.originalEventId}:`, error);
+          logger.error(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), `Failed to check event ${notification.originalEventId}:`, error);
           // Continue with next event
           continue;
         }
@@ -326,14 +329,14 @@ export const checkCalendarEventChanges = async (): Promise<ChangedCalendarEvent[
 
       return changedEvents;
     } catch (error) {
-      console.error('Failed to check calendar event changes:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), 'Failed to check calendar event changes:', error);
       return [];
     }
   })();
 
   // Race between the check and timeout
   const result = await Promise.race([checkPromise, timeoutPromise]);
-  console.log(`[Calendar Check] Final result: ${result.length} changed events`);
+  logger.info(makeLogHeader(LOG_FILE, 'checkCalendarEventChanges'), `[Calendar Check] Final result: ${result.length} changed events`);
   return result;
 };
 

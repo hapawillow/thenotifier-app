@@ -4,8 +4,11 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ChangedCalendarEvent, formatChangedFields } from '@/utils/calendar-check';
 import { saveIgnoredCalendarEvent } from '@/utils/database';
+import { logger, makeLogHeader } from '@/utils/logger';
 import { useCallback, useEffect, useState } from 'react';
 import { Modal, StyleSheet, TouchableOpacity } from 'react-native';
+
+const LOG_FILE = 'components/calendar-change-modal.tsx';
 
 type CalendarChangeModalProps = {
   visible: boolean;
@@ -24,7 +27,7 @@ export function CalendarChangeModal({ visible, changedEvents, onClose }: Calenda
       const eventKey = `${event.calendarId}-${event.originalEventId}`;
       setIgnoredEventKeys(prev => new Set(prev).add(eventKey));
     } catch (error) {
-      console.error('Failed to ignore calendar event:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'handleIgnore'), 'Failed to ignore calendar event:', error);
     }
   }, []);
 

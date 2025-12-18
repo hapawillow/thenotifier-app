@@ -3,6 +3,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ChangedCalendarEvent, checkCalendarEventChanges } from '@/utils/calendar-check';
 import { calendarCheckEvents } from '@/utils/calendar-check-events';
 import { archiveScheduledNotifications, ensureDailyAlarmWindowForAllNotifications, ensureRollingWindowNotificationInstances, getScheduledNotificationData, initDatabase, insertRepeatOccurrence, migrateRollingWindowRepeatsToExpo, updateArchivedNotificationData } from '@/utils/database';
+import { logger, makeLogHeader } from '@/utils/logger';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { EventSubscription } from 'expo-modules-core';
@@ -15,6 +16,8 @@ import { AppState, AppStateStatus } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
 import ToastManager from 'toastify-react-native';
+
+const LOG_FILE = 'app/_layout.tsx';
 
 
 // Keep the splash screen visible while we fetch resources
@@ -47,17 +50,17 @@ export default function RootLayout() {
 
   // Helper function to handle notification navigation
   const handleNotificationNavigation = useCallback(async (notification: Notifications.Notification, actionIdentifier: string) => {
-    console.log('handleNotificationNavigation: Notification received:', notification);
-    console.log('handleNotificationNavigation: Action identifier:', actionIdentifier);
+    logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Notification received:', notification);
+    logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Action identifier:', actionIdentifier);
 
     const notificationId = notification.request.identifier;
 
-    console.log('handleNotificationNavigation: Notification ID:', notificationId);
-    console.log('handleNotificationNavigation: App state:', AppState.currentState);
+    logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Notification ID:', notificationId);
+    logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: App state:', AppState.currentState);
 
     // Skip if we've already handled this notification
     if (handledNotificationsRef.current.has(notificationId)) {
-      console.log('handleNotificationNavigation: Notification already handled, skipping...');
+      logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Notification already handled, skipping...');
       return;
     }
 
@@ -71,7 +74,7 @@ export default function RootLayout() {
       await archiveScheduledNotifications();
 
       const data = notification.request.content.data;
-      console.log('handleNotificationNavigation: Data:', data);
+      logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Data:', data);
 
       // Record repeat occurrence if this is a repeating notification
       try {
@@ -92,19 +95,19 @@ export default function RootLayout() {
           };
 
           await insertRepeatOccurrence(parentId, fireDateTime, 'tap', snapshot);
-          console.log(`[RepeatOccurrence] Recorded tap occurrence for ${parentId} at ${fireDateTime}`);
+          logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Recorded tap occurrence for ${parentId} at ${fireDateTime}`);
         }
       } catch (error) {
-        console.error('handleNotificationNavigation: Failed to record repeat occurrence:', error);
+        logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Failed to record repeat occurrence:', error);
       }
 
       if (data?.message && typeof data.message === 'string') {
-        console.log('handleNotificationNavigation: Navigating to notification display with message:', data.message);
+        logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Navigating to notification display with message:', data.message);
         try {
           await updateArchivedNotificationData(notificationId);
-          console.log('handleNotificationNavigation: Archived notification data updated successfully');
+          logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Archived notification data updated successfully');
         } catch (e) {
-          console.error('handleNotificationNavigation: Failed to update archived notification data:', e);
+          logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Failed to update archived notification data:', e);
         }
 
         // Small delay to ensure navigation is ready
@@ -156,56 +159,56 @@ export default function RootLayout() {
 
   // Check if app was opened from a notification (cold start or background)
   useEffect(() => {
-    console.log('=== useEffect: lastNotificationResponse changed ===');
-    console.log('lastNotificationResponse:', lastNotificationResponse);
-    console.log('Current app state:', AppState.currentState);
+    logger.info(makeLogHeader(LOG_FILE), '=== useEffect: lastNotificationResponse changed ===');
+    logger.info(makeLogHeader(LOG_FILE), 'lastNotificationResponse:', lastNotificationResponse);
+    logger.info(makeLogHeader(LOG_FILE), 'Current app state:', AppState.currentState);
 
     if (lastNotificationResponse) {
       const { notification, actionIdentifier } = lastNotificationResponse;
       const notificationId = notification.request.identifier;
-      console.log('=== LAST NOTIFICATION RESPONSE DETECTED ===');
-      console.log('Notification ID:', notificationId);
-      console.log('Action identifier:', actionIdentifier);
-      console.log('Notification data:', notification.request.content.data);
-      console.log('Already handled?', handledNotificationsRef.current.has(notificationId));
+      logger.info(makeLogHeader(LOG_FILE), '=== LAST NOTIFICATION RESPONSE DETECTED ===');
+      logger.info(makeLogHeader(LOG_FILE), 'Notification ID:', notificationId);
+      logger.info(makeLogHeader(LOG_FILE), 'Action identifier:', actionIdentifier);
+      logger.info(makeLogHeader(LOG_FILE), 'Notification data:', notification.request.content.data);
+      logger.info(makeLogHeader(LOG_FILE), 'Already handled?', handledNotificationsRef.current.has(notificationId));
 
       // Only process if we haven't already handled this notification
       if (!handledNotificationsRef.current.has(notificationId)) {
-        console.log('Processing lastNotificationResponse - calling handleNotificationNavigation');
+        logger.info(makeLogHeader(LOG_FILE), 'Processing lastNotificationResponse - calling handleNotificationNavigation');
         handleNotificationNavigation(notification, actionIdentifier);
       } else {
-        console.log('LastNotificationResponse already handled, skipping');
+        logger.info(makeLogHeader(LOG_FILE), 'LastNotificationResponse already handled, skipping');
       }
 
     }
   }, [lastNotificationResponse, handleNotificationNavigation]);
 
   useEffect(() => {
-    console.log('Setting up notification response listener...');
+    logger.info(makeLogHeader(LOG_FILE), 'Setting up notification response listener...');
     // Handle notification taps (when app is running or in background)
     // This listener should fire when app is in foreground
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
-      console.log('=== NOTIFICATION RESPONSE RECEIVED (listener) ===');
-      console.log('Response:', JSON.stringify(response, null, 2));
+      logger.info(makeLogHeader(LOG_FILE), '=== NOTIFICATION RESPONSE RECEIVED (listener) ===');
+      logger.info(makeLogHeader(LOG_FILE), 'Response:', JSON.stringify(response, null, 2));
       const { notification, actionIdentifier } = response;
       const notificationId = notification.request.identifier;
-      console.log('Notification ID:', notificationId);
-      console.log('Action identifier:', actionIdentifier);
-      console.log('App state:', AppState.currentState);
-      console.log('Notification data:', notification.request.content.data);
+      logger.info(makeLogHeader(LOG_FILE), 'Notification ID:', notificationId);
+      logger.info(makeLogHeader(LOG_FILE), 'Action identifier:', actionIdentifier);
+      logger.info(makeLogHeader(LOG_FILE), 'App state:', AppState.currentState);
+      logger.info(makeLogHeader(LOG_FILE), 'Notification data:', notification.request.content.data);
 
       // Only process if we haven't already handled this notification
       if (!handledNotificationsRef.current.has(notificationId)) {
-        console.log('Processing notification from listener - calling handleNotificationNavigation');
+        logger.info(makeLogHeader(LOG_FILE), 'Processing notification from listener - calling handleNotificationNavigation');
         handleNotificationNavigation(notification, actionIdentifier);
       } else {
-        console.log('Notification already handled, skipping');
+        logger.info(makeLogHeader(LOG_FILE), 'Notification already handled, skipping');
       }
     });
-    console.log('Notification response listener set up, listener ref:', responseListener.current);
+    logger.info(makeLogHeader(LOG_FILE), 'Notification response listener set up, listener ref:', responseListener.current);
 
     return () => {
-      console.log('Cleaning up notification response listener');
+      logger.info(makeLogHeader(LOG_FILE), 'Cleaning up notification response listener');
       if (responseListener.current) {
         responseListener.current.remove();
         responseListener.current = null;
@@ -225,16 +228,16 @@ export default function RootLayout() {
 
     try {
       const changes = await checkCalendarEventChanges();
-      console.log('[Calendar Check] Received changes:', changes.length);
+      logger.info(makeLogHeader(LOG_FILE, 'performCalendarCheck'), '[Calendar Check] Received changes:', changes.length);
       if (changes.length > 0) {
-        console.log('[Calendar Check] Setting modal state with', changes.length, 'changed events');
+        logger.info(makeLogHeader(LOG_FILE, 'performCalendarCheck'), '[Calendar Check] Setting modal state with', changes.length, 'changed events');
         setChangedEvents(changes);
         setShowCalendarChangeModal(true);
       } else {
-        console.log('[Calendar Check] No changes found, modal not shown');
+        logger.info(makeLogHeader(LOG_FILE, 'performCalendarCheck'), '[Calendar Check] No changes found, modal not shown');
       }
     } catch (error) {
-      console.error('Failed to check calendar changes:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'performCalendarCheck'), 'Failed to check calendar changes:', error);
     }
   }, []);
 
@@ -245,7 +248,7 @@ export default function RootLayout() {
         // Don't perform calendar check on app startup - it can cause hangs
         // Calendar check will happen on app focus and screen refresh instead
       } catch (e) {
-        console.error('Failed to initialize database:', e);
+        logger.error(makeLogHeader(LOG_FILE, 'init'), 'Failed to initialize database:', e);
       }
     };
 
@@ -275,23 +278,23 @@ export default function RootLayout() {
 
         // Migrate eligible rolling-window repeats to Expo repeats (before replenishing)
         migrateRollingWindowRepeatsToExpo().catch((error) => {
-          console.error('Failed to migrate rolling-window repeats:', error);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to migrate rolling-window repeats:', error);
         });
 
         // Catch up repeat occurrences (for notifications that fired while app was inactive)
         const { catchUpRepeatOccurrences } = await import('@/utils/database');
         catchUpRepeatOccurrences().catch((error) => {
-          console.error('Failed to catch up repeat occurrences:', error);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to catch up repeat occurrences:', error);
         });
 
         // Replenish daily alarm windows (ensure 14 future alarms per daily notification)
         ensureDailyAlarmWindowForAllNotifications().catch((error) => {
-          console.error('Failed to replenish daily alarm windows:', error);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to replenish daily alarm windows:', error);
         });
 
         // Replenish rolling-window notification instances (ensure required window size per rolling-window notification)
         ensureRollingWindowNotificationInstances().catch((error) => {
-          console.error('Failed to replenish rolling-window notification instances:', error);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to replenish rolling-window notification instances:', error);
         });
       }
     });

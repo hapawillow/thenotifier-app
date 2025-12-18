@@ -10,13 +10,16 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, getAllActiveRepeatNotificationInstances, getWindowSize, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
+import { logger, makeLogHeader } from '@/utils/logger';
 import { getPermissionInstructions } from '@/utils/permissions';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
 
+const LOG_FILE = 'components/scheduleForm.tsx';
+
 // Maximum number of scheduled notifications allowed on the device
 const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 64 : 25);
-console.log('Maximum scheduled notification count for', Platform.OS, ':', MAX_SCHEDULED_NOTIFICATION_COUNT);
+logger.info(makeLogHeader(LOG_FILE), 'Maximum scheduled notification count for', Platform.OS, ':', MAX_SCHEDULED_NOTIFICATION_COUNT);
 
 // Configure notification handler
 Notifications.setNotificationHandler({
@@ -165,7 +168,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             }
           }
         } catch (capabilityError) {
-          console.error('Failed to check alarm capability:', capabilityError);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to check alarm capability:', capabilityError);
           // If we can't check, use stored state
         }
 
@@ -188,7 +191,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           }
         }
       } catch (error) {
-        console.error('Failed to check alarm permission denied state:', error);
+        logger.error(makeLogHeader(LOG_FILE), 'Failed to check alarm permission denied state:', error);
         // Default to false on error
         if (!isEditMode) {
           setScheduleAlarm(false);
@@ -244,12 +247,12 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                     const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
                     if (existingAlarm) {
                       await NativeAlarmManager.cancelAlarm(alarmId);
-                      console.log('Cancelled existing alarm due to denied permissions:', alarmId);
+                      logger.info(makeLogHeader(LOG_FILE), 'Cancelled existing alarm due to denied permissions:', alarmId);
                     }
                   } catch (alarmError) {
                     const errorMessage = alarmError instanceof Error ? alarmError.message : String(alarmError);
                     if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-                      console.error('Failed to cancel existing alarm:', alarmId, ', error:', alarmError);
+                      logger.error(makeLogHeader(LOG_FILE), 'Failed to cancel existing alarm:', alarmId, ', error:', alarmError);
                     }
                   }
                 }
@@ -260,7 +263,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 setScheduleAlarm(true);
               }
             } catch (error) {
-              console.error('Failed to check alarm capability in edit mode:', error);
+              logger.error(makeLogHeader(LOG_FILE), 'Failed to check alarm capability in edit mode:', error);
               setScheduleAlarm(true);
             }
           })();
@@ -297,7 +300,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
       // Check if we've reached the maximum
       if (count >= MAX_SCHEDULED_NOTIFICATION_COUNT) {
-        console.log('Maximum notifications reached:', count);
+        logger.info(makeLogHeader(LOG_FILE, 'checkNotificationLimit'), 'Maximum notifications reached:', count);
         Alert.alert(
           'Maximum Notifications Reached',
           `Uh oh, you've reached the maximum of ${MAX_SCHEDULED_NOTIFICATION_COUNT} scheduled notifications. You can delete an upcoming notification if you need to schedule a new notification.`,
@@ -307,7 +310,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       }
       return false; // Limit not reached
     } catch (error) {
-      console.error('Failed to check scheduled notifications count:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'checkNotificationLimit'), 'Failed to check scheduled notifications count:', error);
       return false;
     }
   }, [isEditMode]);
@@ -323,7 +326,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       // Check if alarm module is available
       try {
         const capability = await NativeAlarmManager.checkCapability();
-        console.log('Alarm capability check:', capability);
+        logger.info(makeLogHeader(LOG_FILE), 'Alarm capability check:', capability);
 
         if (capability.capability !== 'none') {
           setAlarmSupported(true);
@@ -351,9 +354,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             // Request alarm permissions immediately after notification permissions if not determined
             if (status === 'granted' && authStatus === 'notDetermined' && capability.canRequestPermission) {
               try {
-                console.log('Requesting alarm permission proactively...');
+                logger.info(makeLogHeader(LOG_FILE), 'Requesting alarm permission proactively...');
                 const granted = await NativeAlarmManager.requestPermission();
-                console.log('Alarm permission granted:', granted);
+                logger.info(makeLogHeader(LOG_FILE), 'Alarm permission granted:', granted);
 
                 if (granted) {
                   // Clear denial state if permission was granted
@@ -372,7 +375,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                   }
                 }
               } catch (permissionError) {
-                console.error('Failed to request alarm permission:', permissionError);
+                logger.error(makeLogHeader(LOG_FILE), 'Failed to request alarm permission:', permissionError);
                 const errorCheckCapability = await NativeAlarmManager.checkCapability();
                 const errorCheckAuthStatus = errorCheckCapability.platformDetails?.alarmKitAuthStatus;
 
@@ -395,10 +398,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           }
         } else {
           setAlarmSupported(false);
-          console.log('Alarms are not supported on this device');
+          logger.info(makeLogHeader(LOG_FILE), 'Alarms are not supported on this device');
         }
       } catch (error) {
-        console.error('Alarm module error:', error);
+        logger.error(makeLogHeader(LOG_FILE), 'Alarm module error:', error);
         setAlarmSupported(false);
       }
     })();
@@ -626,7 +629,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               setAlarmPermissionDenied(false);
             }
           } catch (permissionError) {
-            console.error('Failed to request alarm permission:', permissionError);
+            logger.error(makeLogHeader(LOG_FILE, 'handleAlarmToggle'), 'Failed to request alarm permission:', permissionError);
             const errorCheckCapability = await NativeAlarmManager.checkCapability();
             const errorCheckAuthStatus = errorCheckCapability.platformDetails?.alarmKitAuthStatus;
 
@@ -654,7 +657,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         // Permission check passed, allow the switch to be enabled
         setScheduleAlarm(true);
       } catch (error) {
-        console.error('Failed to check alarm capability:', error);
+        logger.error(makeLogHeader(LOG_FILE, 'handleAlarmToggle'), 'Failed to check alarm capability:', error);
         Alert.alert(
           'Alarm Permission Required',
           getPermissionInstructions('alarm'),
@@ -738,7 +741,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           shouldEnableAlarm = !denied;
         }
       } catch (error) {
-        console.error('Failed to check alarm permission in resetForm:', error);
+        logger.error(makeLogHeader(LOG_FILE, 'resetForm'), 'Failed to check alarm permission in resetForm:', error);
         shouldEnableAlarm = false;
       }
     }
@@ -777,7 +780,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   }, [source, onCancel]);
 
   const scheduleNotification = async () => {
-    console.log('=== SCHEDULE NOTIFICATION ===');
+    logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '=== SCHEDULE NOTIFICATION ===');
 
     // Check notification permissions first
     try {
@@ -791,7 +794,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         return;
       }
     } catch (error) {
-      console.error('Failed to check notification permissions:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to check notification permissions:', error);
       Alert.alert(
         'Notification Permission Required',
         'This app will not work until notifications are enabled.\n\n' + getPermissionInstructions('notification'),
@@ -805,7 +808,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       return;
     }
 
-    console.log('Selected date:', selectedDate);
+    logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Selected date:', selectedDate);
 
     const dateWithoutSeconds = new Date(selectedDate);
     dateWithoutSeconds.setSeconds(0, 0);
@@ -833,21 +836,21 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           for (const instance of repeatInstances) {
             try {
               await Notifications.cancelScheduledNotificationAsync(instance.instanceNotificationId);
-              console.log('Cancelled rolling-window notification instance on edit:', instance.instanceNotificationId);
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled rolling-window notification instance on edit:', instance.instanceNotificationId);
             } catch (instanceError) {
-              console.error('Failed to cancel rolling-window notification instance:', instance.instanceNotificationId, ', error:', instanceError);
+              logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel rolling-window notification instance:', instance.instanceNotificationId, ', error:', instanceError);
             }
           }
           await markAllRepeatNotificationInstancesCancelled(editingNotificationId);
-          console.log('Marked all rolling-window notification instances as cancelled on edit');
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Marked all rolling-window notification instances as cancelled on edit');
         } else {
           // Cancel the single scheduled notification
           await Notifications.cancelScheduledNotificationAsync(editingNotificationId);
-          console.log('Cancelled existing notification:', editingNotificationId);
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled existing notification:', editingNotificationId);
         }
 
         const alarmId = editingNotificationId.substring("thenotifier-".length);
-        console.log('Cancelling existing alarm with ID:', alarmId);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelling existing alarm with ID:', alarmId);
         if (editingHasAlarm) {
           try {
             // Check if this is a daily repeating alarm - if so, cancel all instances
@@ -857,40 +860,40 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               for (const instance of dailyInstances) {
                 try {
                   await NativeAlarmManager.cancelAlarm(instance.alarmId);
-                  console.log('Cancelled daily alarm instance:', instance.alarmId);
+                  logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled daily alarm instance:', instance.alarmId);
                 } catch (instanceError) {
                   const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
                   if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-                    console.error('Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
+                    logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
                   }
                 }
               }
               await markAllDailyAlarmInstancesCancelled(editingNotificationId);
-              console.log('Marked all daily alarm instances as cancelled');
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Marked all daily alarm instances as cancelled');
             } else {
               // Single alarm (one-time or weekly)
               const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
               if (existingAlarm) {
                 await NativeAlarmManager.cancelAlarm(alarmId);
-                console.log('Cancelled existing alarm:', alarmId);
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled existing alarm:', alarmId);
               } else {
-                console.log('Alarm not found, may have already been cancelled:', alarmId);
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm not found, may have already been cancelled:', alarmId);
               }
             }
           } catch (alarmError) {
             const errorMessage = alarmError instanceof Error ? alarmError.message : String(alarmError);
             if (errorMessage.includes('not found') || errorMessage.includes('ALARM_NOT_FOUND')) {
-              console.log('Alarm not found (may have already been cancelled):', alarmId);
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm not found (may have already been cancelled):', alarmId);
             } else {
-              console.error('Failed to cancel existing alarm:', alarmId, ', error:', alarmError);
+              logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel existing alarm:', alarmId, ', error:', alarmError);
             }
           }
         }
 
         await deleteScheduledNotification(editingNotificationId);
-        console.log('Deleted existing notification from DB:', editingNotificationId);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Deleted existing notification from DB:', editingNotificationId);
       } catch (error) {
-        console.error('Failed to cancel/delete existing notification:', error);
+        logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel/delete existing notification:', error);
         Alert.alert('Error', 'Failed to update notification. Please try again.');
         return;
       }
@@ -909,7 +912,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       }
 
       const deepLinkUrl = (link) ? `thenotifier://notification?title=${encodeURIComponent(title)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=${encodeURIComponent(link)}` : `thenotifier://notification?title=${encodeURIComponent(title)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}`;
-      console.log('deepLinkUrl:', deepLinkUrl);
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'deepLinkUrl:', deepLinkUrl);
 
       let notificationContent: Notifications.NotificationContentInput = {
         title: notificationTitle,
@@ -929,7 +932,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       if (Platform.OS === 'ios') {
         notificationContent.interruptionLevel = 'timeSensitive';
       }
-      console.log('notificationContent:', notificationContent);
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'notificationContent:', notificationContent);
 
       let notificationTrigger: Notifications.NotificationTriggerInput;
       let useRollingWindow = false;
@@ -957,7 +960,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
 
       // Log decision inputs
-      console.log('[RepeatDecision] Decision inputs:', {
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Decision inputs:', {
         nowISO: now.toISOString(),
         selectedISO: dateWithoutSeconds.toISOString(),
         diffMs: diffMs,
@@ -976,7 +979,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             type: Notifications.SchedulableTriggerInputTypes.DATE,
             date: dateWithoutSeconds,
           };
-          console.log('[RepeatDecision] One-time notification, using DATE trigger');
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] One-time notification, using DATE trigger');
           break;
         case 'daily':
           // Use milliseconds-based comparison for daily
@@ -987,7 +990,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               type: 'DATE_WINDOW' as any,
               window: 'daily14',
             } as any;
-            console.log('[RepeatDecision] Daily repeat: using rollingWindow (diffMs >= 24h)', {
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Daily repeat: using rollingWindow (diffMs >= 24h)', {
               diffMs: diffMs,
               thresholdMs: oneDayMs,
               windowSize: 14,
@@ -999,7 +1002,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               hour: hour,
               minute: minute,
             };
-            console.log('[RepeatDecision] Daily repeat: using Expo DAILY trigger (diffMs < 24h)', {
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Daily repeat: using Expo DAILY trigger (diffMs < 24h)', {
               diffMs: diffMs,
               thresholdMs: oneDayMs,
             });
@@ -1014,7 +1017,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               type: 'DATE_WINDOW' as any,
               window: 'weekly4',
             } as any;
-            console.log('[RepeatDecision] Weekly repeat: using rollingWindow (diffMs >= 7d)', {
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Weekly repeat: using rollingWindow (diffMs >= 7d)', {
               diffMs: diffMs,
               thresholdMs: oneWeekMs,
               windowSize: 4,
@@ -1027,7 +1030,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               hour: hour,
               minute: minute,
             };
-            console.log('[RepeatDecision] Weekly repeat: using Expo WEEKLY trigger (diffMs < 7d)', {
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Weekly repeat: using Expo WEEKLY trigger (diffMs < 7d)', {
               diffMs: diffMs,
               thresholdMs: oneWeekMs,
             });
@@ -1043,7 +1046,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               type: 'DATE_WINDOW' as any,
               window: 'monthly4',
             } as any;
-            console.log('[RepeatDecision] Monthly repeat: using rollingWindow (selected >= oneMonthFromNow)', {
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Monthly repeat: using rollingWindow (selected >= oneMonthFromNow)', {
               selectedISO: dateWithoutSeconds.toISOString(),
               oneMonthFromNowISO: oneMonthFromNow.toISOString(),
               windowSize: 4,
@@ -1056,7 +1059,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               hour: hour,
               minute: minute,
             };
-            console.log('[RepeatDecision] Monthly repeat: using Expo MONTHLY trigger (selected < oneMonthFromNow)', {
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Monthly repeat: using Expo MONTHLY trigger (selected < oneMonthFromNow)', {
               selectedISO: dateWithoutSeconds.toISOString(),
               oneMonthFromNowISO: oneMonthFromNow.toISOString(),
             });
@@ -1072,7 +1075,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               type: 'DATE_WINDOW' as any,
               window: 'yearly2',
             } as any;
-            console.log('[RepeatDecision] Yearly repeat: using rollingWindow (selected >= oneYearFromNow)', {
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Yearly repeat: using rollingWindow (selected >= oneYearFromNow)', {
               selectedISO: dateWithoutSeconds.toISOString(),
               oneYearFromNowISO: oneYearFromNow.toISOString(),
               windowSize: 2,
@@ -1086,7 +1089,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               hour: hour,
               minute: minute,
             };
-            console.log('[RepeatDecision] Yearly repeat: using Expo YEARLY trigger (selected < oneYearFromNow)', {
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Yearly repeat: using Expo YEARLY trigger (selected < oneYearFromNow)', {
               selectedISO: dateWithoutSeconds.toISOString(),
               oneYearFromNowISO: oneYearFromNow.toISOString(),
             });
@@ -1095,21 +1098,21 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       }
 
       // Log final decision
-      console.log('[RepeatDecision] Final decision:', {
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Final decision:', {
         useRollingWindow: useRollingWindow,
         notificationTriggerType: (notificationTrigger as any).type,
         repeatOption: repeatOption,
       });
 
       if (useRollingWindow) {
-        console.log('[RepeatDecision] Using rollingWindow for notifications, repeatOption:', repeatOption);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Using rollingWindow for notifications, repeatOption:', repeatOption);
 
         // Check OS notification limit before scheduling rolling window
         const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
         const windowSize = getWindowSize(repeatOption as 'daily' | 'weekly' | 'monthly' | 'yearly');
         const remainingCapacity = MAX_SCHEDULED_NOTIFICATION_COUNT - scheduledNotifications.length;
 
-        console.log('[RepeatDecision] Notification capacity check:', {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Notification capacity check:', {
           windowSize: windowSize,
           scheduledCount: scheduledNotifications.length,
           maxCapacity: MAX_SCHEDULED_NOTIFICATION_COUNT,
@@ -1118,7 +1121,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
         if (windowSize > remainingCapacity) {
           const neededToDelete = windowSize - remainingCapacity;
-          console.log('[RepeatDecision] Capacity exceeded, blocking scheduling:', {
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Capacity exceeded, blocking scheduling:', {
             neededToDelete: neededToDelete,
           });
           Alert.alert(
@@ -1130,7 +1133,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         }
 
         // Schedule rolling window DATE notifications
-        console.log('[RepeatDecision] Scheduling rolling-window notification instances...');
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Scheduling rolling-window notification instances...');
         const result = await scheduleRollingWindowNotifications(
           notificationId,
           dateWithoutSeconds,
@@ -1138,7 +1141,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           notificationContent
         );
 
-        console.log('[RepeatDecision] Rolling-window notification instances scheduled:', {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Rolling-window notification instances scheduled:', {
           scheduled: result.scheduled,
           skipped: result.skipped,
           repeatOption: repeatOption,
@@ -1147,28 +1150,28 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
         // Save parent notification record
         await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location, initialParams?.originalEventTitle, initialParams?.originalEventStartDate, initialParams?.originalEventEndDate, initialParams?.originalEventLocation, initialParams?.originalEventRecurring, 'rollingWindow');
-        console.log('Rolling-window notification data saved successfully');
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Rolling-window notification data saved successfully');
       } else {
         // Use existing repeating trigger approach (Expo triggers)
-        console.log('[RepeatDecision] Using Expo repeating trigger approach');
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Using Expo repeating trigger approach');
         if (Platform.OS === 'android') {
           (notificationTrigger as any).channelId = "thenotifier";
         }
-        console.log('notificationTrigger:', notificationTrigger);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'notificationTrigger:', notificationTrigger);
 
-        console.log('=== SCHEDULE NOTIFICATION ASYNC ===');
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '=== SCHEDULE NOTIFICATION ASYNC ===');
         await Notifications.scheduleNotificationAsync({
           identifier: notificationId,
           content: notificationContent,
           trigger: notificationTrigger,
         });
 
-        console.log('Notification scheduled successfully, saving notification data...', notificationId, notificationTitle, message, note, link, dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification scheduled successfully, saving notification data...', notificationId, notificationTitle, message, note, link, dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location);
         // Determine repeatMethod: 'expo' for Expo repeating triggers, null for one-time
         const repeatMethodValue = (repeatOption && repeatOption !== 'none' && !useRollingWindow) ? 'expo' : null;
-        console.log('[RepeatDecision] Saving notification with repeatMethod:', repeatMethodValue);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Saving notification with repeatMethod:', repeatMethodValue);
         await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location, initialParams?.originalEventTitle, initialParams?.originalEventStartDate, initialParams?.originalEventEndDate, initialParams?.originalEventLocation, initialParams?.originalEventRecurring, repeatMethodValue);
-        console.log('Notification data saved successfully');
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification data saved successfully');
       }
 
       // If editing and alarm is disabled, cancel all daily alarm instances
@@ -1184,19 +1187,19 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             for (const instance of dailyInstances) {
               try {
                 await NativeAlarmManager.cancelAlarm(instance.alarmId);
-                console.log('Cancelled daily alarm instance (alarm disabled):', instance.alarmId);
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled daily alarm instance (alarm disabled):', instance.alarmId);
               } catch (instanceError) {
                 const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
                 if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-                  console.error('Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
+                  logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
                 }
               }
             }
             await markAllDailyAlarmInstancesCancelled(notificationId);
-            console.log('Marked all daily alarm instances as cancelled (alarm disabled)');
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Marked all daily alarm instances as cancelled (alarm disabled)');
           }
         } catch (error) {
-          console.error('Failed to cancel daily alarms when disabling alarm:', error);
+          logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel daily alarms when disabling alarm:', error);
           // Continue - don't block the update
         }
       }
@@ -1205,17 +1208,17 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       if (scheduleAlarm && alarmSupported) {
         try {
           const capability = await NativeAlarmManager.checkCapability();
-          console.log('Alarm capability before scheduling:', capability);
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm capability before scheduling:', capability);
 
           let authStatus = capability.platformDetails?.alarmKitAuthStatus;
-          console.log('AlarmKit auth status:', authStatus);
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'AlarmKit auth status:', authStatus);
 
           if (capability.requiresPermission) {
             if (authStatus === 'notDetermined' && capability.canRequestPermission) {
               try {
-                console.log('Requesting alarm permission...');
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Requesting alarm permission...');
                 const granted = await NativeAlarmManager.requestPermission();
-                console.log('Alarm permission granted:', granted);
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm permission granted:', granted);
 
                 if (!granted) {
                   await saveAlarmPermissionDenied(true);
@@ -1235,7 +1238,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
                 const postRequestCapability = await NativeAlarmManager.checkCapability();
                 const postRequestAuthStatus = postRequestCapability.platformDetails?.alarmKitAuthStatus;
-                console.log('Updated auth status after permission request:', postRequestAuthStatus);
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Updated auth status after permission request:', postRequestAuthStatus);
 
                 if (postRequestAuthStatus !== 'authorized') {
                   await saveAlarmPermissionDenied(true);
@@ -1255,7 +1258,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
                 authStatus = postRequestAuthStatus;
               } catch (permissionError) {
-                console.error('Failed to request alarm permission:', permissionError);
+                logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to request alarm permission:', permissionError);
                 const errorMsg = permissionError instanceof Error ? permissionError.message : String(permissionError);
 
                 const errorCheckCapability = await NativeAlarmManager.checkCapability();
@@ -1306,7 +1309,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             setAlarmPermissionDenied(false);
 
             if (authStatus !== 'authorized') {
-              console.log('Alarm permission not authorized, cannot schedule');
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm permission not authorized, cannot schedule');
               resetForm();
               return;
             }
@@ -1321,13 +1324,13 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           // Remove the "thenotifier-" prefix from the notificationId to get the alarmId
           // because AlarmKit expects the alarm ID to be a UUID
           const alarmId = notificationId.substring("thenotifier-".length);
-          console.log('Scheduling alarm with ID:', alarmId);
-          console.log('Alarm date:', dateWithoutSeconds.toISOString());
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Scheduling alarm with ID:', alarmId);
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm date:', dateWithoutSeconds.toISOString());
 
           // Handle daily alarms differently - schedule 14 fixed alarms
           if (repeatOption === 'daily') {
             // Schedule 14-day rolling window for daily alarms (AlarmKit alarms, not notifications)
-            console.log('[AlarmWindow] Scheduling 14-day AlarmKit alarm window for daily repeat');
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling 14-day AlarmKit alarm window for daily repeat');
             await scheduleDailyAlarmWindow(
               notificationId,
               dateWithoutSeconds,
@@ -1342,7 +1345,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               },
               14
             );
-            console.log('[AlarmWindow] Scheduled 14 AlarmKit alarm instances for:', notificationId);
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled 14 AlarmKit alarm instances for:', notificationId);
           } else {
             // Build alarm schedule for one-time or weekly alarms
             let alarmSchedule: any;
@@ -1394,20 +1397,20 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               },
             );
 
-            console.log('Alarm scheduled successfully for:', dateWithoutSeconds);
-            console.log('Alarm result:', alarmResult);
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm scheduled successfully for:', dateWithoutSeconds);
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm result:', alarmResult);
             setTimeout(async () => {
               const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
               if (existingAlarm) {
-                console.log('Scheduled existing alarm found in NativeAlarmManager:', alarmId);
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Scheduled existing alarm found in NativeAlarmManager:', alarmId);
               } else {
-                console.log('Scheduled alarm not found in NativeAlarmManager:', alarmId);
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Scheduled alarm not found in NativeAlarmManager:', alarmId);
               }
             }, 500);
           }
 
         } catch (error) {
-          console.error('Failed to schedule alarm:', error);
+          logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to schedule alarm:', error);
           const errorMessage = error instanceof Error ? error.message : String(error);
 
           if (errorMessage.includes('permission') || errorMessage.includes('Permission') || errorMessage.includes('authorization')) {
@@ -1424,15 +1427,15 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         }
       }
 
-      console.log('Notification scheduled with ID:', notificationId);
-      console.log('Notification selected date:', dateWithoutSeconds);
-      console.log('Notification title:', notificationTitle);
-      console.log('Notification message:', message);
-      console.log('Notification note:', note);
-      console.log('Notification link:', link);
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification scheduled with ID:', notificationId);
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification selected date:', dateWithoutSeconds);
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification title:', notificationTitle);
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification message:', message);
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification note:', note);
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification link:', link);
 
       // Show warning alerts for rolling-window notifications (only when using rolling-window strategy)
-      console.log('[RepeatDecision] Checking alert display:', {
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Checking alert display:', {
         useRollingWindow: useRollingWindow,
         repeatOption: repeatOption,
         shouldShowAlert: useRollingWindow && repeatOption !== 'none',
@@ -1461,7 +1464,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             break;
         }
 
-        console.log('[RepeatDecision] Showing alert:', {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Showing alert:', {
           alertTitle: alertTitle,
           repeatOption: repeatOption,
         });
@@ -1480,7 +1483,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           ]
         );
       } else {
-        console.log('[RepeatDecision] No alert shown (not rolling-window or one-time)');
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] No alert shown (not rolling-window or one-time)');
         resetForm();
         onSuccess?.();
       }
@@ -1490,13 +1493,13 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       } else {
         Alert.alert('Error', 'Sorry, your notification could not be scheduled.');
       }
-      console.error(error);
-      console.error('Failed to schedule notification with ID:', notificationId);
-      console.error('Failed selected date:', dateWithoutSeconds);
-      console.error('Failed title:', notificationTitle);
-      console.error('Failed message:', message);
-      console.error('Failed note:', note);
-      console.error('Failed link:', link);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), error);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to schedule notification with ID:', notificationId);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed selected date:', dateWithoutSeconds);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed title:', notificationTitle);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed message:', message);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed note:', note);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed link:', link);
     }
   };
 

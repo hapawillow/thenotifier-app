@@ -6,10 +6,13 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo } from 'react';
 import { StyleSheet, TouchableOpacity } from 'react-native';
 import { openNotifierLink } from '@/utils/open-link';
+import { logger, makeLogHeader } from '@/utils/logger';
+
+const LOG_FILE = 'app/notification-display.tsx';
 
 export default function NotificationDisplayScreen() {
 
-  console.log('NotificationDisplayScreen');
+  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'NotificationDisplayScreen');
 
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
@@ -33,10 +36,10 @@ export default function NotificationDisplayScreen() {
 
 
   const { title, message, note, link } = useLocalSearchParams<{ title: string, message: string, note: string, link: string }>();
-  console.log('title', title);
-  console.log('message', message);
-  console.log('note', note);
-  console.log('link', link);
+  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'title', title);
+  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'message', message);
+  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'note', note);
+  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'link', link);
 
   const handleOpenLink = async () => {
     if (!link) return;

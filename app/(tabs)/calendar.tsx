@@ -11,7 +11,10 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { checkUpcomingNotificationForCalendarEvent, getAllCalendarSelections, saveCalendarSelections } from '@/utils/database';
+import { logger, makeLogHeader } from '@/utils/logger';
 import { getPermissionInstructions } from '@/utils/permissions';
+
+const LOG_FILE = 'app/(tabs)/calendar.tsx';
 
 type CalendarEvent = {
   id: string;
@@ -69,17 +72,17 @@ export default function CalendarScreen() {
           }
         } else if (mounted) {
           // If check timed out or failed, try requesting directly
-          console.log('Permission check timed out, requesting directly...');
+          logger.info(makeLogHeader(LOG_FILE, 'initCalendar'), 'Permission check timed out, requesting directly...');
           await requestCalendarPermissions();
         }
       } catch (error) {
-        console.error('Error initializing calendar:', error);
+        logger.error(makeLogHeader(LOG_FILE, 'initCalendar'), 'Error initializing calendar:', error);
         if (mounted) {
           // On error, try requesting permission directly
           try {
             await requestCalendarPermissions();
           } catch (requestError) {
-            console.error('Request also failed:', requestError);
+            logger.error(makeLogHeader(LOG_FILE, 'initCalendar'), 'Request also failed:', requestError);
             if (mounted) {
               setPermissionStatus('denied');
             }
@@ -109,7 +112,7 @@ export default function CalendarScreen() {
             );
           }
         } catch (error) {
-          console.error('Failed to check calendar permissions:', error);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to check calendar permissions:', error);
         }
       })();
 
@@ -121,7 +124,7 @@ export default function CalendarScreen() {
       // Delay to avoid blocking UI
       setTimeout(() => {
         checkCalendarEventChanges().catch((error) => {
-          console.error('Failed to check calendar changes:', error);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to check calendar changes:', error);
         });
       }, 1000);
     }, [selectedCalendarIds, calendars])
@@ -131,14 +134,14 @@ export default function CalendarScreen() {
     try {
       // Check if Calendar module is available
       if (!Calendar || typeof Calendar.getCalendarPermissionsAsync !== 'function') {
-        console.error('Calendar module not available');
+        logger.error(makeLogHeader(LOG_FILE, 'checkCalendarPermissions'), 'Calendar module not available');
         setPermissionStatus('denied');
         return;
       }
 
-      console.log('Checking calendar permissions...');
+      logger.info(makeLogHeader(LOG_FILE, 'checkCalendarPermissions'), 'Checking calendar permissions...');
       const { status } = await Calendar.getCalendarPermissionsAsync();
-      console.log('Calendar permission status:', status);
+      logger.info(makeLogHeader(LOG_FILE, 'checkCalendarPermissions'), 'Calendar permission status:', status);
 
       setPermissionStatus(status as 'granted' | 'denied' | 'undetermined');
 
@@ -146,11 +149,11 @@ export default function CalendarScreen() {
         await loadCalendars();
       } else if (status === 'undetermined') {
         // If undetermined, automatically request permission
-        console.log('Permission undetermined, requesting...');
+        logger.info(makeLogHeader(LOG_FILE, 'checkCalendarPermissions'), 'Permission undetermined, requesting...');
         await requestCalendarPermissions();
       }
     } catch (error: any) {
-      console.error('Failed to check calendar permissions:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'checkCalendarPermissions'), 'Failed to check calendar permissions:', error);
       // Handle MissingCalendarPListValueException gracefully
       if (error?.message?.includes('MissingCalendarPListValueException') ||
         error?.code === 'MissingCalendarPListValueException') {
@@ -162,13 +165,13 @@ export default function CalendarScreen() {
         );
       } else {
         // For other errors, try requesting permission directly
-        console.log('Error checking permissions, trying to request directly...');
+        logger.info(makeLogHeader(LOG_FILE, 'checkCalendarPermissions'), 'Error checking permissions, trying to request directly...');
         setPermissionStatus('undetermined');
         // Try requesting permission as fallback
         try {
           await requestCalendarPermissions();
         } catch (requestError) {
-          console.error('Failed to request permissions:', requestError);
+          logger.error(makeLogHeader(LOG_FILE, 'checkCalendarPermissions'), 'Failed to request permissions:', requestError);
           setPermissionStatus('denied');
         }
       }
@@ -197,7 +200,7 @@ export default function CalendarScreen() {
         );
       }
     } catch (error: any) {
-      console.error('Failed to request calendar permissions:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'requestCalendarPermissions'), 'Failed to request calendar permissions:', error);
       // Don't show alert on MissingCalendarPListValueException - it's a configuration issue
       if (error?.message?.includes('MissingCalendarPListValueException')) {
         Alert.alert(
@@ -245,7 +248,7 @@ export default function CalendarScreen() {
         await saveCalendarSelections(defaultSelected);
       }
     } catch (error) {
-      console.error('Failed to load calendars:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'loadCalendars'), 'Failed to load calendars:', error);
       Alert.alert('Error', 'Failed to load calendars');
     }
   };
@@ -263,7 +266,7 @@ export default function CalendarScreen() {
     try {
       await saveCalendarSelections(newSelected);
     } catch (error) {
-      console.error('Failed to save calendar selection:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'toggleCalendarSelection'), 'Failed to save calendar selection:', error);
     }
   };
 
@@ -320,7 +323,7 @@ export default function CalendarScreen() {
             });
           }
         } catch (error) {
-          console.error(`Failed to load events for calendar ${calendarId}:`, error);
+          logger.error(makeLogHeader(LOG_FILE, 'loadEvents'), `Failed to load events for calendar ${calendarId}:`, error);
         }
       }
 
@@ -353,7 +356,7 @@ export default function CalendarScreen() {
         }
       });
     } catch (error) {
-      console.error('Failed to load events:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'loadEvents'), 'Failed to load events:', error);
       Alert.alert('Error', 'Failed to load calendar events');
     }
   };
@@ -374,7 +377,7 @@ export default function CalendarScreen() {
       // Check for calendar event changes after refresh
       setTimeout(() => {
         checkCalendarEventChanges().catch((error) => {
-          console.error('Failed to check calendar changes:', error);
+          logger.error(makeLogHeader(LOG_FILE, 'onRefresh'), 'Failed to check calendar changes:', error);
         });
       }, 500);
     } finally {

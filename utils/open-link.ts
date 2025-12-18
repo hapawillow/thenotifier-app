@@ -1,5 +1,8 @@
 import * as Calendar from 'expo-calendar';
 import { Alert, Linking, Platform } from 'react-native';
+import { logger, makeLogHeader } from './logger';
+
+const LOG_FILE = 'utils/open-link.ts';
 
 /**
  * Opens a link, handling both regular URLs and thenotifier://calendar-event deep links.
@@ -66,14 +69,14 @@ export async function openNotifierLink(link: string): Promise<void> {
             Alert.alert('Error', 'Unable to generate calendar link for this platform.');
           }
         } catch (error) {
-          console.error('Failed to open calendar event:', error);
+          logger.error(makeLogHeader(LOG_FILE, 'openNotifierLink'), 'Failed to open calendar event:', error);
           Alert.alert('Error', 'Unable to open calendar event. Please open your calendar app manually.');
         }
       } else {
         Alert.alert('Error', 'Invalid calendar event link');
       }
     } catch (error) {
-      console.error('Failed to parse calendar link:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'openNotifierLink'), 'Failed to parse calendar link:', error);
       Alert.alert('Error', 'Invalid link format');
     }
   } else {
@@ -86,7 +89,7 @@ export async function openNotifierLink(link: string): Promise<void> {
         Alert.alert('Error', 'Unable to open this link');
       }
     } catch (error) {
-      console.error('Failed to open URL:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'openNotifierLink'), 'Failed to open URL:', error);
       Alert.alert('Error', 'Unable to open link');
     }
   }

@@ -11,8 +11,11 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { deleteScheduledNotification, getAllActiveDailyAlarmInstances, getAllActiveRepeatNotificationInstances, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrences, getScheduledNotificationData, insertRepeatOccurrence, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
+import { logger, makeLogHeader } from '@/utils/logger';
 import { openNotifierLink } from '@/utils/open-link';
 import { Toast } from 'toastify-react-native';
+
+const LOG_FILE = 'app/(tabs)/index.tsx';
 
 type ScheduledNotification = {
   id: number;
@@ -116,7 +119,7 @@ export default function HomeScreen() {
       // Don't check calendar changes immediately after loading - it can cause hangs
       // Calendar check will happen on focus via useFocusEffect instead
     } catch (error) {
-      console.error('Failed to load scheduled notifications:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'loadScheduledNotifications'), 'Failed to load scheduled notifications:', error);
     }
   };
 
@@ -157,7 +160,7 @@ export default function HomeScreen() {
         }
       });
     } catch (error) {
-      console.error('Failed to load archived notifications:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'loadArchivedNotifications'), 'Failed to load archived notifications:', error);
     }
   };
 
@@ -172,7 +175,7 @@ export default function HomeScreen() {
       // Check for calendar event changes after refresh
       setTimeout(() => {
         checkCalendarEventChanges().catch((error) => {
-          console.error('Failed to check calendar changes:', error);
+          logger.error(makeLogHeader(LOG_FILE, 'onRefreshScheduled'), 'Failed to check calendar changes:', error);
         });
       }, 500);
     } finally {
@@ -193,7 +196,7 @@ export default function HomeScreen() {
       // to avoid blocking the UI when returning from scheduling a notification
       setTimeout(() => {
         checkCalendarEventChanges().catch((error) => {
-          console.error('Failed to check calendar changes:', error);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to check calendar changes:', error);
         });
       }, 2000); // 2 second delay to ensure UI is fully loaded
     }, [])
@@ -223,10 +226,10 @@ export default function HomeScreen() {
           };
 
           await insertRepeatOccurrence(parentId, fireDateTime, 'foreground', snapshot);
-          console.log(`[RepeatOccurrence] Recorded foreground occurrence for ${parentId} at ${fireDateTime}`);
+          logger.info(makeLogHeader(LOG_FILE), `[RepeatOccurrence] Recorded foreground occurrence for ${parentId} at ${fireDateTime}`);
         }
       } catch (error) {
-        console.error('Failed to record repeat occurrence from foreground listener:', error);
+        logger.error(makeLogHeader(LOG_FILE), 'Failed to record repeat occurrence from foreground listener:', error);
       }
 
       // Small delay to ensure database is updated
@@ -284,13 +287,13 @@ export default function HomeScreen() {
                 for (const instance of repeatInstances) {
                   try {
                     await Notifications.cancelScheduledNotificationAsync(instance.instanceNotificationId);
-                    console.log('Cancelled rolling-window notification instance on delete:', instance.instanceNotificationId);
+                    logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Cancelled rolling-window notification instance on delete:', instance.instanceNotificationId);
                   } catch (instanceError) {
-                    console.error('Failed to cancel rolling-window notification instance:', instance.instanceNotificationId, ', error:', instanceError);
+                    logger.error(makeLogHeader(LOG_FILE, 'handleDelete'), 'Failed to cancel rolling-window notification instance:', instance.instanceNotificationId, ', error:', instanceError);
                   }
                 }
                 await markAllRepeatNotificationInstancesCancelled(notification.notificationId);
-                console.log('Marked all rolling-window notification instances as cancelled on delete');
+                logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Marked all rolling-window notification instances as cancelled on delete');
               } else {
                 // Cancel the single scheduled notification
                 await Notifications.cancelScheduledNotificationAsync(notification.notificationId);
@@ -304,18 +307,18 @@ export default function HomeScreen() {
                   for (const instance of dailyInstances) {
                     try {
                       await NativeAlarmManager.cancelAlarm(instance.alarmId);
-                      console.log('Cancelled daily alarm instance on delete:', instance.alarmId);
+                      logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Cancelled daily alarm instance on delete:', instance.alarmId);
                     } catch (instanceError) {
                       const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
                       if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-                        console.error('Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
+                        logger.error(makeLogHeader(LOG_FILE, 'handleDelete'), 'Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
                       }
                     }
                   }
                   await markAllDailyAlarmInstancesCancelled(notification.notificationId);
-                  console.log('Marked all daily alarm instances as cancelled on delete');
+                  logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Marked all daily alarm instances as cancelled on delete');
                 } catch (alarmError) {
-                  console.error('Failed to cancel daily alarms on delete:', alarmError);
+                  logger.error(makeLogHeader(LOG_FILE, 'handleDelete'), 'Failed to cancel daily alarms on delete:', alarmError);
                   // Continue with deletion even if alarm cancellation fails
                 }
               }
@@ -340,7 +343,7 @@ export default function HomeScreen() {
               });
 
             } catch (error) {
-              console.error('Failed to delete notification:', error);
+              logger.error(makeLogHeader(LOG_FILE, 'handleDelete'), 'Failed to delete notification:', error);
               Alert.alert('Error', 'Failed to cancel notification');
             }
           },
@@ -430,7 +433,7 @@ export default function HomeScreen() {
           return '';
       }
     } catch (error) {
-      console.error('Error formatting repeat option:', error);
+      logger.error(makeLogHeader(LOG_FILE, 'formatRepeatOption'), 'Error formatting repeat option:', error);
       return '';
     }
   };

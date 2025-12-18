@@ -2,6 +2,9 @@ import * as Crypto from 'expo-crypto';
 import * as Notifications from 'expo-notifications';
 import * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
+import { logger, makeLogHeader } from './logger';
+
+const LOG_FILE = 'utils/database.ts';
 
 // Open the database
 async function openDatabase() {
@@ -50,7 +53,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: repeatOption column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatOption column may already exist');
       }
     }
     try {
@@ -58,7 +61,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: notificationTrigger column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: notificationTrigger column may already exist');
       }
     }
     try {
@@ -66,7 +69,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: hasAlarm column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: hasAlarm column may already exist');
       }
     }
     try {
@@ -74,7 +77,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: calendarId column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: calendarId column may already exist');
       }
     }
     try {
@@ -82,7 +85,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: originalEventId column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventId column may already exist');
       }
     }
     try {
@@ -90,7 +93,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: location column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: location column may already exist');
       }
     }
     try {
@@ -98,7 +101,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: originalEventTitle column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventTitle column may already exist');
       }
     }
     try {
@@ -106,7 +109,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: originalEventStartDate column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventStartDate column may already exist');
       }
     }
     try {
@@ -114,7 +117,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: originalEventEndDate column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventEndDate column may already exist');
       }
     }
     try {
@@ -122,7 +125,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: originalEventLocation column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventLocation column may already exist');
       }
     }
     try {
@@ -130,7 +133,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: originalEventRecurring column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventRecurring column may already exist');
       }
     }
     try {
@@ -138,7 +141,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: repeatMethod column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatMethod column may already exist');
       }
     }
 
@@ -183,7 +186,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: repeatOption column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatOption column may already exist');
       }
     }
     try {
@@ -191,7 +194,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: notificationTrigger column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: notificationTrigger column may already exist');
       }
     }
     try {
@@ -199,7 +202,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: hasAlarm column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: hasAlarm column may already exist');
       }
     }
     try {
@@ -207,7 +210,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: calendarId column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: calendarId column may already exist');
       }
     }
     try {
@@ -215,7 +218,7 @@ export const initDatabase = async () => {
     } catch (error: any) {
       // Column might already exist, ignore error
       if (!error.message?.includes('duplicate column')) {
-        console.log('Note: originalEventId column may already exist');
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventId column may already exist');
       }
     }
 
@@ -348,9 +351,9 @@ export const initDatabase = async () => {
     `);
 
     isInitialized = true;
-    console.log('Database initialized successfully');
+    logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Database initialized successfully');
   } catch (error: any) {
-    console.error('Database initialization failed:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'initDatabase'), 'Database initialization failed:', error);
     throw new Error(`Database initialization failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -377,7 +380,7 @@ export const saveScheduledNotificationData = async (
   originalEventRecurring?: string,
   repeatMethod?: 'expo' | 'rollingWindow' | null
 ) => {
-  console.log('Saving scheduled notification data:', { notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger });
+  logger.info(makeLogHeader(LOG_FILE, 'saveScheduledNotificationData'), 'Saving scheduled notification data:', { notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger });
   try {
     const db = await openDatabase();
     // First ensure table exists
@@ -408,9 +411,9 @@ export const saveScheduledNotificationData = async (
       `INSERT OR REPLACE INTO scheduledNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, location, originalEventTitle, originalEventStartDate, originalEventEndDate, originalEventLocation, originalEventRecurring, repeatMethod, updatedAt)
       VALUES ('${escapeSql(notificationId)}', '${escapeSql(title)}', '${escapeSql(message)}', '${escapeSql(note)}', '${escapeSql(link)}', '${scheduleDateTime}', '${escapeSql(scheduleDateTimeLocal)}', ${repeatOptionSql}, ${notificationTriggerSql}, ${hasAlarmValue}, ${calendarIdSql}, ${originalEventIdSql}, ${locationSql}, ${originalEventTitleSql}, ${originalEventStartDateSql}, ${originalEventEndDateSql}, ${originalEventLocationSql}, ${originalEventRecurringSql}, ${repeatMethodSql}, CURRENT_TIMESTAMP);`
     );
-    console.log('Notification data saved successfully');
+    logger.info(makeLogHeader(LOG_FILE, 'saveScheduledNotificationData'), 'Notification data saved successfully');
     const result = await getScheduledNotificationData(notificationId);
-    console.log('Saved scheduled notification data:', result);
+    logger.info(makeLogHeader(LOG_FILE, 'saveScheduledNotificationData'), 'Saved scheduled notification data:', result);
   } catch (error: any) {
     throw new Error(`Failed to save scheduled notification data: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -433,7 +436,7 @@ export const getScheduledNotificationData = async (notificationId: string) => {
       try {
         parsedTrigger = JSON.parse(result.notificationTrigger) as Notifications.NotificationTriggerInput;
       } catch (e) {
-        console.error('Failed to parse notificationTrigger JSON:', e);
+        logger.error(makeLogHeader(LOG_FILE), 'Failed to parse notificationTrigger JSON:', e);
       }
     }
 
@@ -442,7 +445,7 @@ export const getScheduledNotificationData = async (notificationId: string) => {
       notificationTrigger: parsedTrigger,
     };
   } catch (error: any) {
-    console.error('Failed to get scheduled notification data:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getScheduledNotificationData'), 'Failed to get scheduled notification data:', error);
     return null;
   }
 };
@@ -465,7 +468,7 @@ export const getAllScheduledNotificationData = async () => {
         try {
           parsedTrigger = JSON.parse(item.notificationTrigger) as Notifications.NotificationTriggerInput;
         } catch (e) {
-          console.error('Failed to parse notificationTrigger JSON:', e);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to parse notificationTrigger JSON:', e);
         }
       }
       return {
@@ -475,7 +478,7 @@ export const getAllScheduledNotificationData = async () => {
       };
     });
   } catch (error: any) {
-    console.error('Failed to get all scheduled notification data:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getAllScheduledNotificationData'), 'Failed to get all scheduled notification data:', error);
     return [];
   }
 };
@@ -491,7 +494,7 @@ export const getScheduledNotificationCount = async () => {
     );
     return result || [];
   } catch (error: any) {
-    console.error('Failed to get all scheduled notification data:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getAllScheduledNotificationData'), 'Failed to get all scheduled notification data:', error);
     return [];
   }
 };
@@ -519,7 +522,7 @@ export const getUpcomingCalendarNotifications = async () => {
         try {
           parsedTrigger = JSON.parse(item.notificationTrigger) as Notifications.NotificationTriggerInput;
         } catch (e) {
-          console.error('Failed to parse notificationTrigger JSON:', e);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to parse notificationTrigger JSON:', e);
         }
       }
       return {
@@ -529,7 +532,7 @@ export const getUpcomingCalendarNotifications = async () => {
       };
     });
   } catch (error: any) {
-    console.error('Failed to get upcoming calendar notifications:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getUpcomingCalendarNotifications'), 'Failed to get upcoming calendar notifications:', error);
     return [];
   }
 };
@@ -540,9 +543,9 @@ export const deleteScheduledNotification = async (notificationId: string) => {
     const db = await openDatabase();
     await initDatabase();
     await db.execAsync(`DELETE FROM scheduledNotification WHERE notificationId = '${notificationId}';`);
-    console.log('Scheduled notification deleted successfully');
+    logger.info(makeLogHeader(LOG_FILE, 'deleteScheduledNotification'), 'Scheduled notification deleted successfully');
   } catch (error: any) {
-    console.error('Failed to delete scheduled notification:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'deleteScheduledNotification'), 'Failed to delete scheduled notification:', error);
     throw new Error(`Failed to delete scheduled notification: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -588,9 +591,9 @@ export const updateScheduledNotificationData = async (
            updatedAt = CURRENT_TIMESTAMP
        WHERE notificationId = '${escapeSql(notificationId)}';`
     );
-    console.log('Scheduled notification data updated successfully');
+    logger.info(makeLogHeader(LOG_FILE, 'updateScheduledNotificationData'), 'Scheduled notification data updated successfully');
   } catch (error: any) {
-    console.error('Failed to update scheduled notification data:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'updateScheduledNotificationData'), 'Failed to update scheduled notification data:', error);
     throw new Error(`Failed to update scheduled notification data: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -626,16 +629,16 @@ export const archiveScheduledNotifications = async () => {
       FROM scheduledNotification
       WHERE scheduleDateTime < '${now}'
       and (repeatOption IS NULL OR repeatOption = 'none');`);
-    console.log('Archived scheduled notification data successfully');
+    logger.info(makeLogHeader(LOG_FILE, 'archiveScheduledNotifications'), 'Archived scheduled notification data successfully');
 
     // Delete past notifications from scheduled table
     await db.execAsync(
       `DELETE FROM scheduledNotification 
       WHERE scheduleDateTime < '${now}' 
       and (repeatOption IS NULL OR repeatOption = 'none');`);
-    console.log('Deleted scheduled notification data successfully');
+    logger.info(makeLogHeader(LOG_FILE, 'archiveScheduledNotifications'), 'Deleted scheduled notification data successfully');
   } catch (error: any) {
-    console.error('Failed to archive scheduled notification data:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'archiveScheduledNotifications'), 'Failed to archive scheduled notification data:', error);
     throw new Error(`Failed to archive scheduled notification data: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -647,9 +650,9 @@ export const updateArchivedNotificationData = async (notificationId: string) => 
     await initDatabase();
 
     await db.execAsync(`UPDATE archivedNotification SET handledAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE notificationId = '${notificationId}';`);
-    console.log('Archived notification data updated successfully');
+    logger.info(makeLogHeader(LOG_FILE, 'updateArchivedNotificationData'), 'Archived notification data updated successfully');
   } catch (error: any) {
-    console.error('Failed to update archived notification data:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'updateArchivedNotificationData'), 'Failed to update archived notification data:', error);
     throw new Error(`Failed to update archived notification data: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -671,7 +674,7 @@ export const getAllArchivedNotificationData = async () => {
         try {
           parsedTrigger = JSON.parse(item.notificationTrigger) as Notifications.NotificationTriggerInput;
         } catch (e) {
-          console.error('Failed to parse notificationTrigger JSON:', e);
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to parse notificationTrigger JSON:', e);
         }
       }
       return {
@@ -681,7 +684,7 @@ export const getAllArchivedNotificationData = async () => {
       };
     });
   } catch (error: any) {
-    console.error('Failed to get all archived notification data:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getAllArchivedNotificationData'), 'Failed to get all archived notification data:', error);
     return [];
   }
 };
@@ -703,18 +706,18 @@ export const getArchivedNotificationData = async (notificationId: string) => {
       try {
         parsedTrigger = JSON.parse(result.notificationTrigger) as Notifications.NotificationTriggerInput;
       } catch (e) {
-        console.error('Failed to parse notificationTrigger JSON:', e);
+        logger.error(makeLogHeader(LOG_FILE), 'Failed to parse notificationTrigger JSON:', e);
       }
     }
 
-    console.log('Archived notification data:', result);
+    logger.info(makeLogHeader(LOG_FILE, 'getArchivedNotificationData'), 'Archived notification data:', result);
     return {
       ...result,
       notificationTrigger: parsedTrigger,
       hasAlarm: result.hasAlarm === 1,
     };
   } catch (error: any) {
-    console.error('Failed to get archived notification data:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getArchivedNotificationData'), 'Failed to get archived notification data:', error);
     return null;
   }
 };
@@ -729,9 +732,9 @@ export const saveCalendarSelection = async (calendarId: string, isSelected: bool
       `INSERT OR REPLACE INTO calendarSelection (calendarId, isSelected, updatedAt)
       VALUES ('${calendarId}', ${isSelectedInt}, CURRENT_TIMESTAMP);`
     );
-    console.log(`Calendar selection saved: ${calendarId} = ${isSelected}`);
+    logger.info(makeLogHeader(LOG_FILE, 'saveCalendarSelection'), `Calendar selection saved: ${calendarId} = ${isSelected}`);
   } catch (error: any) {
-    console.error('Failed to save calendar selection:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'saveCalendarSelection'), 'Failed to save calendar selection:', error);
     throw new Error(`Failed to save calendar selection: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -771,13 +774,13 @@ export const saveCalendarSelections = async (selectedCalendarIds: Set<string>) =
       }
 
       await db.execAsync('COMMIT;');
-      console.log('Calendar selections saved successfully');
+      logger.info(makeLogHeader(LOG_FILE, 'saveCalendarSelections'), 'Calendar selections saved successfully');
     } catch (error) {
       await db.execAsync('ROLLBACK;');
       throw error;
     }
   } catch (error: any) {
-    console.error('Failed to save calendar selections:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'saveCalendarSelections'), 'Failed to save calendar selections:', error);
     throw new Error(`Failed to save calendar selections: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -806,7 +809,7 @@ export const checkUpcomingNotificationForCalendarEvent = async (calendarId: stri
 
     return result ? result.count > 0 : false;
   } catch (error: any) {
-    console.error('Failed to check upcoming notification for calendar event:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'checkUpcomingNotificationForCalendarEvent'), 'Failed to check upcoming notification for calendar event:', error);
     // Return false on error to allow user to proceed
     return false;
   }
@@ -828,7 +831,7 @@ export const saveIgnoredCalendarEvent = async (calendarId: string, originalEvent
       VALUES ('${escapedCalendarId}', '${escapedOriginalEventId}');
     `);
   } catch (error: any) {
-    console.error('Failed to save ignored calendar event:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'saveIgnoredCalendarEvent'), 'Failed to save ignored calendar event:', error);
     throw error;
   }
 };
@@ -852,7 +855,7 @@ export const isCalendarEventIgnored = async (calendarId: string, originalEventId
 
     return result ? result.count > 0 : false;
   } catch (error: any) {
-    console.error('Failed to check if calendar event is ignored:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'isCalendarEventIgnored'), 'Failed to check if calendar event is ignored:', error);
     // Return false on error to allow checking
     return false;
   }
@@ -868,7 +871,7 @@ export const getCalendarSelection = async (calendarId: string): Promise<boolean 
     );
     return result ? result.isSelected === 1 : null;
   } catch (error: any) {
-    console.error('Failed to get calendar selection:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getCalendarSelection'), 'Failed to get calendar selection:', error);
     return null;
   }
 };
@@ -887,7 +890,7 @@ export const getAllCalendarSelections = async (): Promise<Map<string, boolean>> 
     }
     return selections;
   } catch (error: any) {
-    console.error('Failed to get all calendar selections:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getAllCalendarSelections'), 'Failed to get all calendar selections:', error);
     return new Map();
   }
 };
@@ -902,7 +905,7 @@ export const getSelectedCalendarIds = async (): Promise<Set<string>> => {
     );
     return new Set(result.map(row => row.calendarId));
   } catch (error: any) {
-    console.error('Failed to get selected calendar IDs:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getSelectedCalendarIds'), 'Failed to get selected calendar IDs:', error);
     return new Set();
   }
 };
@@ -918,9 +921,9 @@ export const saveAlarmPermissionDenied = async (denied: boolean): Promise<void> 
       `INSERT OR REPLACE INTO appPreferences (key, value, updatedAt)
       VALUES ('alarmPermissionDenied', '${escapeSql(value)}', CURRENT_TIMESTAMP);`
     );
-    console.log(`Alarm permission denied state saved: ${denied}`);
+    logger.info(makeLogHeader(LOG_FILE, 'saveAlarmPermissionDenied'), `Alarm permission denied state saved: ${denied}`);
   } catch (error: any) {
-    console.error('Failed to save alarm permission denied state:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'saveAlarmPermissionDenied'), 'Failed to save alarm permission denied state:', error);
     throw new Error(`Failed to save alarm permission denied state: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -935,7 +938,7 @@ export const getAlarmPermissionDenied = async (): Promise<boolean> => {
     );
     return result ? result.value === 'true' : false;
   } catch (error: any) {
-    console.error('Failed to get alarm permission denied state:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getAlarmPermissionDenied'), 'Failed to get alarm permission denied state:', error);
     return false;
   }
 };
@@ -957,7 +960,7 @@ export const insertDailyAlarmInstance = async (
        VALUES ('${escapeSql(notificationId)}', '${escapeSql(alarmId)}', '${fireDateTime}', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);`
     );
   } catch (error: any) {
-    console.error('Failed to insert daily alarm instance:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'insertDailyAlarmInstance'), 'Failed to insert daily alarm instance:', error);
     throw new Error(`Failed to insert daily alarm instance: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -980,7 +983,7 @@ export const getActiveFutureDailyAlarmInstances = async (
     );
     return result || [];
   } catch (error: any) {
-    console.error('Failed to get active future daily alarm instances:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getActiveFutureDailyAlarmInstances'), 'Failed to get active future daily alarm instances:', error);
     return [];
   }
 };
@@ -1001,7 +1004,7 @@ export const getAllActiveDailyAlarmInstances = async (
     );
     return result || [];
   } catch (error: any) {
-    console.error('Failed to get all active daily alarm instances:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getAllActiveDailyAlarmInstances'), 'Failed to get all active daily alarm instances:', error);
     return [];
   }
 };
@@ -1018,7 +1021,7 @@ export const markDailyAlarmInstanceCancelled = async (alarmId: string): Promise<
        WHERE alarmId = '${escapeSql(alarmId)}';`
     );
   } catch (error: any) {
-    console.error('Failed to mark daily alarm instance as cancelled:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'markDailyAlarmInstanceCancelled'), 'Failed to mark daily alarm instance as cancelled:', error);
     throw new Error(`Failed to mark daily alarm instance as cancelled: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -1035,7 +1038,7 @@ export const markAllDailyAlarmInstancesCancelled = async (notificationId: string
        WHERE notificationId = '${escapeSql(notificationId)}' AND isActive = 1;`
     );
   } catch (error: any) {
-    console.error('Failed to mark all daily alarm instances as cancelled:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'markAllDailyAlarmInstancesCancelled'), 'Failed to mark all daily alarm instances as cancelled:', error);
     throw new Error(`Failed to mark all daily alarm instances as cancelled: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -1057,7 +1060,7 @@ export const insertRepeatNotificationInstance = async (
        VALUES ('${escapeSql(parentNotificationId)}', '${escapeSql(instanceNotificationId)}', '${fireDateTime}', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);`
     );
   } catch (error: any) {
-    console.error('Failed to insert repeat notification instance:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'insertRepeatNotificationInstance'), 'Failed to insert repeat notification instance:', error);
     throw new Error(`Failed to insert repeat notification instance: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -1080,7 +1083,7 @@ export const getActiveFutureRepeatNotificationInstances = async (
     );
     return result || [];
   } catch (error: any) {
-    console.error('Failed to get active future repeat notification instances:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getActiveFutureRepeatNotificationInstances'), 'Failed to get active future repeat notification instances:', error);
     return [];
   }
 };
@@ -1101,7 +1104,7 @@ export const getAllActiveRepeatNotificationInstances = async (
     );
     return result || [];
   } catch (error: any) {
-    console.error('Failed to get all active repeat notification instances:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getAllActiveRepeatNotificationInstances'), 'Failed to get all active repeat notification instances:', error);
     return [];
   }
 };
@@ -1118,7 +1121,7 @@ export const markRepeatNotificationInstanceCancelled = async (instanceNotificati
        WHERE instanceNotificationId = '${escapeSql(instanceNotificationId)}';`
     );
   } catch (error: any) {
-    console.error('Failed to mark repeat notification instance as cancelled:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'markRepeatNotificationInstanceCancelled'), 'Failed to mark repeat notification instance as cancelled:', error);
     throw new Error(`Failed to mark repeat notification instance as cancelled: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -1135,7 +1138,7 @@ export const markAllRepeatNotificationInstancesCancelled = async (parentNotifica
        WHERE parentNotificationId = '${escapeSql(parentNotificationId)}' AND isActive = 1;`
     );
   } catch (error: any) {
-    console.error('Failed to mark all repeat notification instances as cancelled:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'markAllRepeatNotificationInstancesCancelled'), 'Failed to mark all repeat notification instances as cancelled:', error);
     throw new Error(`Failed to mark all repeat notification instances as cancelled: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -1287,7 +1290,7 @@ export const scheduleRollingWindowNotifications = async (
 
       scheduled++;
     } catch (error) {
-      console.error(`Failed to schedule rolling-window notification instance for ${occurrenceDate.toISOString()}:`, error);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleRollingWindowNotifications'), `Failed to schedule rolling-window notification instance for ${occurrenceDate.toISOString()}:`, error);
       skipped++;
       // Continue with other dates even if one fails
     }
@@ -1298,7 +1301,7 @@ export const scheduleRollingWindowNotifications = async (
 
 // Migrate rolling-window repeats to Expo repeats
 export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
-  console.log('[RepeatMigration] Starting migration of rolling-window repeats to Expo repeats');
+  logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), '[RepeatMigration] Starting migration of rolling-window repeats to Expo repeats');
 
   try {
     const scheduledNotifications = await getAllScheduledNotificationData();
@@ -1319,45 +1322,45 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
       return true;
     });
 
-    console.log(`[RepeatMigration] Found ${eligibleNotifications.length} eligible notifications`);
+    logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Found ${eligibleNotifications.length} eligible notifications`);
 
     let migrated = 0;
     let skipped = 0;
 
     for (const notification of eligibleNotifications) {
       try {
-        console.log(`[RepeatMigration] Processing notification: ${notification.notificationId}`);
+        logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Processing notification: ${notification.notificationId}`);
 
         // Load active rolling instances
         const activeInstances = await getAllActiveRepeatNotificationInstances(notification.notificationId);
 
         // Skip if no active instances (might have been cleaned up already)
         if (activeInstances.length === 0) {
-          console.log(`[RepeatMigration] No active instances found for ${notification.notificationId}, skipping`);
+          logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] No active instances found for ${notification.notificationId}, skipping`);
           continue;
         }
 
-        console.log(`[RepeatMigration] Found ${activeInstances.length} active rolling instances`);
+        logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Found ${activeInstances.length} active rolling instances`);
 
         // Step 2: Capacity guard - cancel latest instance
         const latestInstance = activeInstances.reduce((latest, current) => {
           return new Date(current.fireDateTime) > new Date(latest.fireDateTime) ? current : latest;
         });
 
-        console.log(`[RepeatMigration] Cancelling latest instance: ${latestInstance.instanceNotificationId} (fireDateTime: ${latestInstance.fireDateTime})`);
+        logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Cancelling latest instance: ${latestInstance.instanceNotificationId} (fireDateTime: ${latestInstance.fireDateTime})`);
 
         try {
           await Notifications.cancelScheduledNotificationAsync(latestInstance.instanceNotificationId);
           await markRepeatNotificationInstanceCancelled(latestInstance.instanceNotificationId);
-          console.log(`[RepeatMigration] Successfully cancelled latest instance`);
+          logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Successfully cancelled latest instance`);
         } catch (cancelError: any) {
           const errorMessage = cancelError instanceof Error ? cancelError.message : String(cancelError);
           // Treat "not found" as non-fatal
           if (errorMessage.includes('not found') || errorMessage.includes('NOT_FOUND')) {
-            console.log(`[RepeatMigration] Latest instance not found (may have already fired), marking as cancelled`);
+            logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Latest instance not found (may have already fired), marking as cancelled`);
             await markRepeatNotificationInstanceCancelled(latestInstance.instanceNotificationId);
           } else {
-            console.error(`[RepeatMigration] Failed to cancel latest instance: ${errorMessage}`);
+            logger.error(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Failed to cancel latest instance: ${errorMessage}`);
             skipped++;
             continue;
           }
@@ -1406,7 +1409,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
             };
             break;
           default:
-            console.error(`[RepeatMigration] Unknown repeatOption: ${notification.repeatOption}`);
+            logger.error(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Unknown repeatOption: ${notification.repeatOption}`);
             skipped++;
             continue;
         }
@@ -1438,13 +1441,13 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
           notificationContent.interruptionLevel = 'timeSensitive';
         }
 
-        console.log(`[RepeatMigration] Scheduling Expo repeating notification with trigger:`, expoTrigger);
+        logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduling Expo repeating notification with trigger:`, expoTrigger);
         await Notifications.scheduleNotificationAsync({
           identifier: notification.notificationId,
           content: notificationContent,
           trigger: expoTrigger,
         });
-        console.log(`[RepeatMigration] Successfully scheduled Expo repeating notification`);
+        logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Successfully scheduled Expo repeating notification`);
 
         // Step 4: Handle alarms if necessary
         let alarmHandlingRequired = false;
@@ -1456,7 +1459,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
           // In a more sophisticated implementation, we could compare alarm configs
           alarmHandlingRequired = true;
 
-          console.log(`[RepeatMigration] Handling alarms for ${notification.notificationId}`);
+          logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Handling alarms for ${notification.notificationId}`);
 
           try {
             const { NativeAlarmManager } = await import('rn-native-alarmkit');
@@ -1476,7 +1479,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                 },
                 14
               );
-              console.log(`[RepeatMigration] Scheduled new daily alarm window`);
+              logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduled new daily alarm window`);
 
               // Then cancel old daily alarms
               const dailyInstances = await getAllActiveDailyAlarmInstances(notification.notificationId);
@@ -1491,7 +1494,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                   }
                 }
               }
-              console.log(`[RepeatMigration] Cancelled old daily alarm instances`);
+              logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Cancelled old daily alarm instances`);
             } else {
               // Weekly/monthly/yearly: schedule new alarm first
               const alarmId = notification.notificationId.substring("thenotifier-".length);
@@ -1537,12 +1540,12 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                   },
                 }
               );
-              console.log(`[RepeatMigration] Scheduled new ${notification.repeatOption} alarm`);
+              logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduled new ${notification.repeatOption} alarm`);
 
               // Then cancel old alarm
               try {
                 await NativeAlarmManager.cancelAlarm(alarmId);
-                console.log(`[RepeatMigration] Cancelled old alarm`);
+                logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Cancelled old alarm`);
               } catch (alarmCancelError: any) {
                 const errorMessage = alarmCancelError instanceof Error ? alarmCancelError.message : String(alarmCancelError);
                 if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
@@ -1551,15 +1554,15 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
               }
             }
           } catch (alarmError) {
-            console.error(`[RepeatMigration] Alarm handling failed for ${notification.notificationId}:`, alarmError);
+            logger.error(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Alarm handling failed for ${notification.notificationId}:`, alarmError);
             alarmHandlingFailed = true;
 
             // Rollback: cancel newly scheduled Expo notification
             try {
               await Notifications.cancelScheduledNotificationAsync(notification.notificationId);
-              console.log(`[RepeatMigration] Rolled back Expo notification due to alarm failure`);
+              logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Rolled back Expo notification due to alarm failure`);
             } catch (rollbackError) {
-              console.error(`[RepeatMigration] Failed to rollback Expo notification:`, rollbackError);
+              logger.error(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Failed to rollback Expo notification:`, rollbackError);
             }
 
             skipped++;
@@ -1589,11 +1592,11 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
           undefined, // originalEventRecurring
           'expo'
         );
-        console.log(`[RepeatMigration] Updated DB: set repeatMethod='expo'`);
+        logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Updated DB: set repeatMethod='expo'`);
 
         // Step 6: Cleanup old rolling-window artifacts
         const remainingInstances = activeInstances.filter(inst => inst.instanceNotificationId !== latestInstance.instanceNotificationId);
-        console.log(`[RepeatMigration] Cleaning up ${remainingInstances.length} remaining rolling instances`);
+        logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Cleaning up ${remainingInstances.length} remaining rolling instances`);
 
         for (const instance of remainingInstances) {
           try {
@@ -1605,23 +1608,23 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
             if (errorMessage.includes('not found') || errorMessage.includes('NOT_FOUND')) {
               await markRepeatNotificationInstanceCancelled(instance.instanceNotificationId);
             } else {
-              console.error(`[RepeatMigration] Failed to cleanup instance ${instance.instanceNotificationId}: ${errorMessage}`);
+              logger.error(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Failed to cleanup instance ${instance.instanceNotificationId}: ${errorMessage}`);
             }
           }
         }
 
         migrated++;
-        console.log(`[RepeatMigration] Successfully migrated ${notification.notificationId}`);
+        logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Successfully migrated ${notification.notificationId}`);
 
       } catch (error) {
-        console.error(`[RepeatMigration] Failed to migrate ${notification.notificationId}:`, error);
+        logger.error(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Failed to migrate ${notification.notificationId}:`, error);
         skipped++;
       }
     }
 
-    console.log(`[RepeatMigration] Migration complete: ${migrated} migrated, ${skipped} skipped`);
+    logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Migration complete: ${migrated} migrated, ${skipped} skipped`);
   } catch (error) {
-    console.error('[RepeatMigration] Migration failed:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), '[RepeatMigration] Migration failed:', error);
   }
 };
 
@@ -1721,7 +1724,7 @@ export const ensureRollingWindowNotificationInstances = async (): Promise<void> 
         );
       }
     } catch (error) {
-      console.error(`Failed to ensure rolling-window notification instances for ${notification.notificationId}:`, error);
+      logger.error(makeLogHeader(LOG_FILE, 'ensureRollingWindowNotificationInstances'), `Failed to ensure rolling-window notification instances for ${notification.notificationId}:`, error);
       // Continue with other notifications
     }
   }
@@ -1799,7 +1802,7 @@ export const scheduleDailyAlarmWindow = async (
         alarmDate.toISOString()
       );
     } catch (error) {
-      console.error(`Failed to schedule daily alarm instance for ${alarmDate.toISOString()}:`, error);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `Failed to schedule daily alarm instance for ${alarmDate.toISOString()}:`, error);
       // Continue with other dates even if one fails
     }
   }
@@ -1864,7 +1867,7 @@ export const ensureDailyAlarmWindowForAllNotifications = async (): Promise<void>
         );
       }
     } catch (error) {
-      console.error(`Failed to ensure daily alarm window for ${notification.notificationId}:`, error);
+      logger.error(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), `Failed to ensure daily alarm window for ${notification.notificationId}:`, error);
       // Continue with other notifications
     }
   }
@@ -1898,7 +1901,7 @@ export const insertRepeatOccurrence = async (
       ('${escapeSql(parentNotificationId)}', '${fireDateTime}', ${sourceSql}, ${titleSql}, ${messageSql}, ${noteSql}, ${linkSql}, CURRENT_TIMESTAMP);
     `);
   } catch (error: any) {
-    console.error('Failed to insert repeat occurrence:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'insertRepeatOccurrence'), 'Failed to insert repeat occurrence:', error);
     throw new Error(`Failed to insert repeat occurrence: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
@@ -1913,7 +1916,7 @@ export const getLatestRepeatOccurrenceFireDate = async (parentNotificationId: st
     );
     return result?.maxFireDateTime || null;
   } catch (error: any) {
-    console.error('Failed to get latest repeat occurrence fire date:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getLatestRepeatOccurrenceFireDate'), 'Failed to get latest repeat occurrence fire date:', error);
     return null;
   }
 };
@@ -1961,7 +1964,7 @@ export const getRepeatOccurrences = async (limit?: number, sinceIso?: string): P
 
     return result || [];
   } catch (error: any) {
-    console.error('Failed to get repeat occurrences:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'getRepeatOccurrences'), 'Failed to get repeat occurrences:', error);
     return [];
   }
 };
@@ -1981,7 +1984,7 @@ export const catchUpRepeatOccurrences = async (): Promise<void> => {
       n => n.repeatOption && n.repeatOption !== 'none' && ['daily', 'weekly', 'monthly', 'yearly'].includes(n.repeatOption)
     );
 
-    console.log(`[CatchUp] Found ${repeatingNotifications.length} repeating notifications to check`);
+    logger.info(makeLogHeader(LOG_FILE, 'catchUpRepeatOccurrences'), `[CatchUp] Found ${repeatingNotifications.length} repeating notifications to check`);
 
     for (const notification of repeatingNotifications) {
       try {
@@ -2054,17 +2057,17 @@ export const catchUpRepeatOccurrences = async (): Promise<void> => {
         }
 
         if (occurrences.length > 0) {
-          console.log(`[CatchUp] Inserted ${occurrences.length} catch-up occurrences for ${notification.notificationId}`);
+          logger.info(makeLogHeader(LOG_FILE, 'catchUpRepeatOccurrences'), `[CatchUp] Inserted ${occurrences.length} catch-up occurrences for ${notification.notificationId}`);
         }
       } catch (error) {
-        console.error(`[CatchUp] Failed to catch up occurrences for ${notification.notificationId}:`, error);
+        logger.error(makeLogHeader(LOG_FILE, 'catchUpRepeatOccurrences'), `[CatchUp] Failed to catch up occurrences for ${notification.notificationId}:`, error);
         // Continue with other notifications
       }
     }
 
-    console.log('[CatchUp] Catch-up complete');
+    logger.info(makeLogHeader(LOG_FILE, 'catchUpRepeatOccurrences'), '[CatchUp] Catch-up complete');
   } catch (error) {
-    console.error('[CatchUp] Catch-up failed:', error);
+    logger.error(makeLogHeader(LOG_FILE, 'catchUpRepeatOccurrences'), '[CatchUp] Catch-up failed:', error);
   }
 };
 
