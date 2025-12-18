@@ -815,10 +815,14 @@ export default function HomeScreen() {
 
   const handleMenuSelect = (item: string) => {
     setMenuOpen(false);
-    // Use InteractionManager to ensure Alert shows after interactions complete
-    InteractionManager.runAfterInteractions(() => {
-      Alert.alert('Menu', `Selected: ${item}`);
-    });
+    if (item === 'About Us') {
+      router.push('/about');
+    } else {
+      // Use InteractionManager to ensure Alert shows after interactions complete
+      InteractionManager.runAfterInteractions(() => {
+        Alert.alert('Menu', `Selected: ${item}`);
+      });
+    }
   };
 
   return (
