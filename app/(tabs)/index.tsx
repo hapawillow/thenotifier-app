@@ -861,7 +861,9 @@ export default function HomeScreen() {
                 activeOpacity={0.7}
                 style={[
                   styles.menuItem,
-                  index < MENU_ITEMS.length - 1 && { borderBottomColor: colors.icon + '20' },
+                  index < MENU_ITEMS.length - 1
+                    ? { borderBottomColor: colors.icon + '20', borderBottomWidth: 1 }
+                    : { borderBottomWidth: 0 },
                 ]}>
                 <ThemedText maxFontSizeMultiplier={1.4} style={styles.menuItemText}>
                   {item}
@@ -1028,7 +1030,6 @@ const styles = StyleSheet.create({
   menuItem: {
     paddingVertical: 14,
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
   },
   menuItemText: {
     fontSize: 16,
