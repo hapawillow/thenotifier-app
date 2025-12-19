@@ -496,6 +496,11 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
     { borderColor: colors.icon, backgroundColor: colors.background }
   ], [colors.icon, colors.background]);
 
+  const pickerContainerStyle = useMemo(() => [
+    styles.pickerContainer,
+    { borderColor: colors.icon, backgroundColor: colors.background }
+  ], [colors.icon, colors.background]);
+
   // Memoize callbacks
   const handleDateButtonPress = useCallback(async () => {
     const limitReached = await checkNotificationLimit();
@@ -1565,13 +1570,18 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             </ThemedView>
 
             {showDatePicker && (
-              <DateTimePicker
-                value={selectedDate}
-                mode="datetime"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={handleDateChange}
-                minimumDate={minimumDate}
-              />
+              <ThemedView style={pickerContainerStyle}>
+                <DateTimePicker
+                  value={selectedDate}
+                  mode="datetime"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={handleDateChange}
+                  minimumDate={minimumDate}
+                  textColor={Platform.OS === 'ios' ? colors.text : undefined}
+                  themeVariant={colorScheme === 'dark' ? 'dark' : 'light'}
+                  accentColor={colors.tint}
+                />
+              </ThemedView>
             )}
             {Platform.OS === 'ios' && showDatePicker && (
               <TouchableOpacity
@@ -1591,18 +1601,20 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
             {
               showRepeatPicker && (
-                <Picker
-                  selectedValue={repeatOption}
-                  onValueChange={handleRepeatChange}
-                  style={[styles.picker, { color: colors.text, borderColor: colors.icon, backgroundColor: colors.background }]}
-                  itemStyle={{ color: colors.text }}
-                >
-                  <Picker.Item label="Do not repeat" value="none" />
-                  <Picker.Item label="Repeat every day" value="daily" />
-                  <Picker.Item label="Repeat every week" value="weekly" />
-                  <Picker.Item label="Repeat every month" value="monthly" />
-                  <Picker.Item label="Repeat every year" value="yearly" />
-                </Picker>
+                <ThemedView style={pickerContainerStyle}>
+                  <Picker
+                    selectedValue={repeatOption}
+                    onValueChange={handleRepeatChange}
+                    style={[styles.picker, { color: colors.text }]}
+                    itemStyle={{ color: colors.text }}
+                  >
+                    <Picker.Item label="Do not repeat" value="none" />
+                    <Picker.Item label="Repeat every day" value="daily" />
+                    <Picker.Item label="Repeat every week" value="weekly" />
+                    <Picker.Item label="Repeat every month" value="monthly" />
+                    <Picker.Item label="Repeat every year" value="yearly" />
+                  </Picker>
+                </ThemedView>
               )
             }
             {
@@ -1792,8 +1804,14 @@ const styles = StyleSheet.create({
   keyboardToolbarButton: {
     fontSize: 18,
   },
-  picker: {
+  pickerContainer: {
+    borderWidth: 1,
+    borderRadius: 8,
     padding: 12,
+    minHeight: 50,
+    marginTop: 6,
+  },
+  picker: {
     minHeight: 50,
   },
 });
