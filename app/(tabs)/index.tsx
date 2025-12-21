@@ -14,6 +14,7 @@ import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { deleteScheduledNotification, getAllActiveDailyAlarmInstances, getAllActiveRepeatNotificationInstances, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrences, getScheduledNotificationData, insertRepeatOccurrence, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
+import { notificationRefreshEvents } from '@/utils/notification-refresh-events';
 import { openNotifierLink } from '@/utils/open-link';
 import { Toast } from 'toastify-react-native';
 
@@ -110,7 +111,7 @@ export default function HomeScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
-  const loadScheduledNotifications = async () => {
+  const loadScheduledNotifications = useCallback(async () => {
     try {
       // Archive past notifications first
       const { archiveScheduledNotifications } = await import('@/utils/database');
@@ -135,7 +136,7 @@ export default function HomeScreen() {
     } catch (error) {
       logger.error(makeLogHeader(LOG_FILE, 'loadScheduledNotifications'), 'Failed to load scheduled notifications:', error);
     }
-  };
+  }, []);
 
   const loadArchivedNotifications = async () => {
     try {
@@ -255,6 +256,17 @@ export default function HomeScreen() {
       unsubscribe.remove();
     };
   }, []);
+
+  // Listen for notification refresh events (e.g., after permission cleanup)
+  useEffect(() => {
+    const unsubscribe = notificationRefreshEvents.subscribe(() => {
+      logger.info(makeLogHeader(LOG_FILE), 'Notification refresh event received, reloading scheduled notifications');
+      loadScheduledNotifications();
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [loadScheduledNotifications]);
 
   const toggleExpand = (id: number) => {
     const isExpanded = expandedIds.has(id);

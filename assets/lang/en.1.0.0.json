@@ -101,7 +101,9 @@
     "weeklyNotificationMessage": "To prevent your phone from stopping this weekly notification, you may need to use use this app at least once a month after the start date.",
     "monthlyNotificationMessage": "To prevent your phone from stopping this monthly notification, you may need to use use this app at least once a month after the start date.",
     "yearlyNotificationMessage": "To prevent your phone from stopping this yearly notification, you may need to use use this app at least once a year after the start date.",
-    "alarmSchedulingWarning": "The notification was scheduled, but there was a problem scheduling the alarm: {{error}}"
+    "alarmSchedulingWarning": "The notification was scheduled, but there was a problem scheduling the alarm: {{error}}",
+    "notificationPermissionRemovedCleanup": "The Notifier has detected that it no longer has permission to schedule notifications and alarms. As a result, upcoming notifications have been removed.",
+    "alarmPermissionRemovedCleanup": "The Notifier has detected that it no longer has permission to schedule alarms. As a result, alarms have been removed from your upcoming notifications."
   },
   "popupTitles": {
     "appearance": "Appearance",

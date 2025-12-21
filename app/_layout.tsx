@@ -14,11 +14,14 @@ import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, AppStateStatus } from 'react-native';
+import { Alert, AppState, AppStateStatus } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
 import ToastManager from 'toastify-react-native';
 import appJson from '../app.json';
+import { reconcilePermissionsOnForeground } from '@/utils/permission-reconcile';
+import { translate } from '@/utils/i18n';
+import { NativeAlarmManager } from 'rn-native-alarmkit';
 
 const LOG_FILE = 'app/_layout.tsx';
 
@@ -306,36 +309,74 @@ export default function RootLayout() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
       if (nextAppState === 'active') {
+        // First, reconcile permissions (detect transitions and cleanup if needed)
+        if (i18nPack) {
+          const t = (key: string) => translate(i18nPack, key);
+          await reconcilePermissionsOnForeground(t).catch((error) => {
+            logger.error(makeLogHeader(LOG_FILE), 'Failed to reconcile permissions:', error);
+          });
+        }
+
+        // Check current permissions for gating replenishers
+        let notificationPermissionGranted = false;
+        let alarmPermissionAuthorized = false;
+
+        try {
+          const notificationPerms = await Notifications.getPermissionsAsync();
+          notificationPermissionGranted = notificationPerms.status === 'granted';
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to check notification permissions:', error);
+        }
+
+        try {
+          const alarmCapability = await NativeAlarmManager.checkCapability();
+          alarmPermissionAuthorized = 
+            alarmCapability.capability !== 'none' &&
+            (!alarmCapability.requiresPermission || alarmCapability.platformDetails?.alarmKitAuthStatus === 'authorized');
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to check alarm capability:', error);
+        }
+
         // App came to foreground, check for calendar changes
         performCalendarCheck();
 
         // Migrate eligible rolling-window repeats to Expo repeats (before replenishing)
-        migrateRollingWindowRepeatsToExpo().catch((error) => {
-          logger.error(makeLogHeader(LOG_FILE), 'Failed to migrate rolling-window repeats:', error);
-        });
+        if (notificationPermissionGranted) {
+          migrateRollingWindowRepeatsToExpo().catch((error) => {
+            logger.error(makeLogHeader(LOG_FILE), 'Failed to migrate rolling-window repeats:', error);
+          });
+        }
 
         // Catch up repeat occurrences (for notifications that fired while app was inactive)
-        const { catchUpRepeatOccurrences } = await import('@/utils/database');
-        catchUpRepeatOccurrences().catch((error) => {
-          logger.error(makeLogHeader(LOG_FILE), 'Failed to catch up repeat occurrences:', error);
-        });
+        if (notificationPermissionGranted) {
+          const { catchUpRepeatOccurrences } = await import('@/utils/database');
+          catchUpRepeatOccurrences().catch((error) => {
+            logger.error(makeLogHeader(LOG_FILE), 'Failed to catch up repeat occurrences:', error);
+          });
+        }
 
         // Replenish daily alarm windows (ensure 14 future alarms per daily notification)
-        ensureDailyAlarmWindowForAllNotifications().catch((error) => {
-          logger.error(makeLogHeader(LOG_FILE), 'Failed to replenish daily alarm windows:', error);
-        });
+        // Only if both notification and alarm permissions are granted
+        if (notificationPermissionGranted && alarmPermissionAuthorized) {
+          ensureDailyAlarmWindowForAllNotifications().catch((error) => {
+            logger.error(makeLogHeader(LOG_FILE), 'Failed to replenish daily alarm windows:', error);
+          });
+        }
 
         // Replenish rolling-window notification instances (ensure required window size per rolling-window notification)
-        ensureRollingWindowNotificationInstances().catch((error) => {
-          logger.error(makeLogHeader(LOG_FILE), 'Failed to replenish rolling-window notification instances:', error);
-        });
+        // Only if notification permission is granted
+        if (notificationPermissionGranted) {
+          ensureRollingWindowNotificationInstances().catch((error) => {
+            logger.error(makeLogHeader(LOG_FILE), 'Failed to replenish rolling-window notification instances:', error);
+          });
+        }
       }
     });
 
     return () => {
       subscription.remove();
     };
-  }, [performCalendarCheck]);
+  }, [performCalendarCheck, i18nPack]);
 
 
   useEffect(() => {
