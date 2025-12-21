@@ -1023,3 +1023,255 @@ After implementing fixes, re-run:
 - Test Case 4.6 (notification limit)
 - Test Case 5.8 (alarm reschedule rollback)
 
+---
+
+## Permission Removal Scenarios
+
+### Test Case 7.1: Notification permission removed - one-time notification
+**Objective:** Verify cleanup when notification permission is revoked with one-time notification scheduled
+
+**Prerequisites:**
+- Schedule a one-time notification (no repeat, no alarm) scheduled for future
+- Notification permission is granted
+
+**Steps:**
+1. Verify notification appears in Upcoming tab
+2. Verify notification exists in `scheduledNotification` table
+3. Verify notification is scheduled in Expo (`Notifications.getAllScheduledNotificationsAsync()`)
+4. Go to device Settings > The Notifier > Notifications
+5. Disable "Allow Notifications"
+6. Return to app (app should come to foreground)
+
+**Expected Results:**
+- Alert shown: "Warning" title with message "The Notifier has detected that it no longer has permission to schedule notifications and alarms. As a result, upcoming notifications have been removed."
+- All scheduled Expo notifications cancelled (verify `Notifications.getAllScheduledNotificationsAsync()` returns empty)
+- Notification moved to Past tab with `cancelledAt` timestamp set
+- Notification removed from `scheduledNotification` table
+- Notification exists in `archivedNotification` table with `cancelledAt` set
+- Upcoming tab shows "No upcoming notifications"
+- Past tab shows the cancelled notification
+- Alert only shown once (subsequent foregrounds don't show alert)
+
+---
+
+### Test Case 7.2: Notification permission removed - Expo repeating notification
+**Objective:** Verify cleanup when notification permission is revoked with Expo repeating notification scheduled
+
+**Prerequisites:**
+- Schedule a daily repeating notification (start < 24 hours, uses Expo DAILY trigger)
+- Notification permission is granted
+
+**Steps:**
+1. Verify notification appears in Upcoming tab
+2. Verify `repeatMethod` in DB is `'expo'`
+3. Verify single Expo notification scheduled with DAILY trigger
+4. Go to device Settings > The Notifier > Notifications
+5. Disable "Allow Notifications"
+6. Return to app
+
+**Expected Results:**
+- Alert shown with notification permission removal message
+- Single Expo repeating notification cancelled
+- Notification archived with `cancelledAt` set
+- Notification removed from `scheduledNotification` table
+- Upcoming tab empty
+- Past tab shows cancelled notification
+- Alert only shown once
+
+---
+
+### Test Case 7.3: Notification permission removed - rolling-window repeating notification
+**Objective:** Verify cleanup when notification permission is revoked with rolling-window repeating notification scheduled
+
+**Prerequisites:**
+- Schedule a daily repeating notification (start >= 24 hours, uses rolling window)
+- Notification permission is granted
+
+**Steps:**
+1. Verify notification appears in Upcoming tab
+2. Verify `repeatMethod` in DB is `'rollingWindow'`
+3. Verify multiple DATE notification instances scheduled (check `repeatNotificationInstance` table)
+4. Verify instances exist in Expo scheduled notifications
+5. Go to device Settings > The Notifier > Notifications
+6. Disable "Allow Notifications"
+7. Return to app
+
+**Expected Results:**
+- Alert shown with notification permission removal message
+- All DATE notification instances cancelled (verify `Notifications.getAllScheduledNotificationsAsync()` returns empty)
+- All rows in `repeatNotificationInstance` table marked as inactive (`isActive = 0`, `cancelledAt` set)
+- Notification archived with `cancelledAt` set
+- Notification removed from `scheduledNotification` table
+- Upcoming tab empty
+- Past tab shows cancelled notification
+- Alert only shown once
+
+---
+
+### Test Case 7.4: Notification permission removed - daily alarm window
+**Objective:** Verify cleanup when notification permission is revoked with daily alarm window scheduled
+
+**Prerequisites:**
+- Schedule a daily repeating notification with alarm enabled
+- Notification permission is granted
+- Alarm permission is granted
+
+**Steps:**
+1. Verify notification appears in Upcoming tab with alarm icon
+2. Verify 14 daily alarm instances exist in `dailyAlarmInstance` table (`isActive = 1`)
+3. Verify alarms are scheduled in AlarmKit
+4. Go to device Settings > The Notifier > Notifications
+5. Disable "Allow Notifications"
+6. Return to app
+
+**Expected Results:**
+- Alert shown with notification permission removal message
+- All Expo notifications cancelled
+- All AlarmKit alarms cancelled (verify alarms no longer exist)
+- All rows in `dailyAlarmInstance` table marked as inactive (`isActive = 0`, `cancelledAt` set)
+- Notification archived with `cancelledAt` set
+- Notification removed from `scheduledNotification` table
+- Upcoming tab empty
+- Past tab shows cancelled notification
+- Alert only shown once
+
+---
+
+### Test Case 7.5: Alarm permission removed - one-time alarm
+**Objective:** Verify cleanup when alarm permission is revoked but notifications remain enabled
+
+**Prerequisites:**
+- Schedule a one-time notification with alarm enabled
+- Notification permission is granted
+- Alarm permission is granted
+
+**Steps:**
+1. Verify notification appears in Upcoming tab with alarm icon
+2. Verify `hasAlarm` in DB is `1` or `true`
+3. Verify alarm is scheduled in AlarmKit
+4. Go to device Settings > The Notifier > Alarms (iOS) or Permissions > Alarms (Android)
+5. Disable alarm permission
+6. Return to app
+
+**Expected Results:**
+- Alert shown: "Warning" title with message "The Notifier has detected that it no longer has permission to schedule alarms. As a result, alarms have been removed from your upcoming notifications."
+- Alarm cancelled in AlarmKit (verify alarm no longer exists)
+- Notification remains in Upcoming tab but alarm icon disappears
+- `hasAlarm` in DB updated to `0` or `false`
+- Notification NOT moved to Past tab
+- Existing Past/archived notifications remain unchanged
+- Alert only shown once
+
+---
+
+### Test Case 7.6: Alarm permission removed - recurring alarm (weekly/monthly/yearly)
+**Objective:** Verify cleanup when alarm permission is revoked for recurring alarm
+
+**Prerequisites:**
+- Schedule a weekly/monthly/yearly repeating notification with alarm enabled
+- Notification permission is granted
+- Alarm permission is granted
+
+**Steps:**
+1. Verify notification appears in Upcoming tab with alarm icon
+2. Verify recurring alarm is scheduled in AlarmKit
+3. Go to device Settings > The Notifier > Alarms (iOS) or Permissions > Alarms (Android)
+4. Disable alarm permission
+5. Return to app
+
+**Expected Results:**
+- Alert shown with alarm permission removal message
+- Recurring alarm cancelled in AlarmKit
+- Notification remains in Upcoming tab but alarm icon disappears
+- `hasAlarm` in DB updated to `0` or `false`
+- Notification NOT moved to Past tab
+- Alert only shown once
+
+---
+
+### Test Case 7.7: Alarm permission removed - daily alarm window
+**Objective:** Verify cleanup when alarm permission is revoked for daily alarm window
+
+**Prerequisites:**
+- Schedule a daily repeating notification with alarm enabled
+- Notification permission is granted
+- Alarm permission is granted
+
+**Steps:**
+1. Verify notification appears in Upcoming tab with alarm icon
+2. Verify 14 daily alarm instances exist in `dailyAlarmInstance` table (`isActive = 1`)
+3. Verify alarms are scheduled in AlarmKit
+4. Go to device Settings > The Notifier > Alarms (iOS) or Permissions > Alarms (Android)
+5. Disable alarm permission
+6. Return to app
+
+**Expected Results:**
+- Alert shown with alarm permission removal message
+- All 14 AlarmKit alarms cancelled (verify alarms no longer exist)
+- All rows in `dailyAlarmInstance` table marked as inactive (`isActive = 0`, `cancelledAt` set)
+- Notification remains in Upcoming tab but alarm icon disappears
+- `hasAlarm` in DB updated to `0` or `false`
+- Notification NOT moved to Past tab
+- Alert only shown once
+
+---
+
+### Test Case 7.8: Permission restoration - no cleanup
+**Objective:** Verify that restoring permissions doesn't trigger cleanup
+
+**Prerequisites:**
+- Notification permission was previously removed
+- No upcoming notifications exist
+
+**Steps:**
+1. Go to device Settings > The Notifier > Notifications
+2. Enable "Allow Notifications"
+3. Return to app
+
+**Expected Results:**
+- No alert shown
+- No cleanup performed
+- App functions normally
+
+---
+
+### Test Case 7.9: Multiple permission removals - only first triggers alert
+**Objective:** Verify that alert is only shown once per permission transition
+
+**Prerequisites:**
+- Schedule multiple upcoming notifications (mix of one-time, repeating, with/without alarms)
+- Notification permission is granted
+
+**Steps:**
+1. Go to device Settings > The Notifier > Notifications
+2. Disable "Allow Notifications"
+3. Return to app (first foreground)
+4. Background app
+5. Return to app again (second foreground)
+
+**Expected Results:**
+- Alert shown only on first foreground after permission removal
+- No alert shown on subsequent foregrounds
+- All notifications cleaned up on first foreground
+
+---
+
+### Verification Points for Permission Removal Tests
+1. **Platform State**: 
+   - Check `Notifications.getAllScheduledNotificationsAsync()` - should be empty after notification permission removal
+   - Check AlarmKit alarms - should be cancelled after alarm permission removal
+2. **Database State**: 
+   - Query `scheduledNotification` table - should be empty after notification permission removal
+   - Query `archivedNotification` table - should contain cancelled notifications with `cancelledAt` set
+   - Query `repeatNotificationInstance` table - all rows should be inactive after notification permission removal
+   - Query `dailyAlarmInstance` table - all rows should be inactive after permission removal
+   - Query `appPreferences` table - should contain `lastKnownNotificationPermission` and `lastKnownAlarmPermission`
+3. **UI State**: 
+   - Upcoming tab should be empty after notification permission removal
+   - Past tab should show cancelled notifications after notification permission removal
+   - Alarm icons should disappear after alarm permission removal
+4. **Alert Behavior**: 
+   - Alert shown exactly once per permission transition
+   - Alert text matches i18n keys
+   - Alert title uses `alertTitles.warning`
+

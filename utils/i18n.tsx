@@ -25,7 +25,7 @@ type I18nProviderProps = {
  * Translates a nested key path (e.g., "buttonText.delete") to its value
  * Supports placeholder substitution with {{placeholder}} syntax
  */
-function translate(
+export function translate(
   pack: LanguagePack,
   key: string,
   params?: Record<string, string | number>

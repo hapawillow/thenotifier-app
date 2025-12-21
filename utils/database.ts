@@ -657,6 +657,88 @@ export const updateArchivedNotificationData = async (notificationId: string) => 
   }
 };
 
+// Archive all scheduled notifications as cancelled (for permission removal cleanup)
+export const archiveAllScheduledNotificationsAsCancelled = async (cancelledAtIso: string): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+
+    // Archive all scheduled notifications with cancelledAt set
+    await db.execAsync(`INSERT OR REPLACE INTO archivedNotification 
+      (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, createdAt, updatedAt, cancelledAt, archivedAt) 
+      SELECT
+        notificationId,
+        title,
+        message,
+        note,
+        link,
+        scheduleDateTime,
+        scheduleDateTimeLocal,
+        repeatOption,
+        notificationTrigger,
+        hasAlarm,
+        calendarId,
+        originalEventId,
+        createdAt,
+        updatedAt,
+        '${escapeSql(cancelledAtIso)}',
+        CURRENT_TIMESTAMP
+      FROM scheduledNotification;`);
+    logger.info(makeLogHeader(LOG_FILE, 'archiveAllScheduledNotificationsAsCancelled'), 'Archived all scheduled notifications as cancelled');
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'archiveAllScheduledNotificationsAsCancelled'), 'Failed to archive all scheduled notifications as cancelled:', error);
+    throw new Error(`Failed to archive all scheduled notifications as cancelled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Delete all scheduled notifications (for permission removal cleanup)
+export const deleteAllScheduledNotifications = async (): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    await db.execAsync(`DELETE FROM scheduledNotification;`);
+    logger.info(makeLogHeader(LOG_FILE, 'deleteAllScheduledNotifications'), 'Deleted all scheduled notifications');
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'deleteAllScheduledNotifications'), 'Failed to delete all scheduled notifications:', error);
+    throw new Error(`Failed to delete all scheduled notifications: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Mark all repeat notification instances as cancelled for all parent notifications
+export const markAllRepeatNotificationInstancesCancelledForAllParents = async (): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    await db.execAsync(
+      `UPDATE repeatNotificationInstance 
+       SET isActive = 0, cancelledAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP 
+       WHERE isActive = 1;`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'markAllRepeatNotificationInstancesCancelledForAllParents'), 'Marked all repeat notification instances as cancelled');
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'markAllRepeatNotificationInstancesCancelledForAllParents'), 'Failed to mark all repeat notification instances as cancelled:', error);
+    throw new Error(`Failed to mark all repeat notification instances as cancelled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Mark all daily alarm instances as cancelled for all notifications
+export const markAllDailyAlarmInstancesCancelledForAllNotifications = async (): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    await db.execAsync(
+      `UPDATE dailyAlarmInstance 
+       SET isActive = 0, cancelledAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP 
+       WHERE isActive = 1;`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'markAllDailyAlarmInstancesCancelledForAllNotifications'), 'Marked all daily alarm instances as cancelled');
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'markAllDailyAlarmInstancesCancelledForAllNotifications'), 'Failed to mark all daily alarm instances as cancelled:', error);
+    throw new Error(`Failed to mark all daily alarm instances as cancelled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
 // Get all archived notification data
 export const getAllArchivedNotificationData = async () => {
   try {
@@ -907,6 +989,38 @@ export const getSelectedCalendarIds = async (): Promise<Set<string>> => {
   } catch (error: any) {
     logger.error(makeLogHeader(LOG_FILE, 'getSelectedCalendarIds'), 'Failed to get selected calendar IDs:', error);
     return new Set();
+  }
+};
+
+// Generic app preference helpers
+export const getAppPreference = async (key: string): Promise<string | null> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const result = await db.getFirstAsync<{ value: string }>(
+      `SELECT value FROM appPreferences WHERE key = '${escapeSql(key)}';`
+    );
+    return result?.value || null;
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'getAppPreference'), `Failed to get app preference for key ${key}:`, error);
+    return null;
+  }
+};
+
+export const setAppPreference = async (key: string, value: string): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    await db.execAsync(
+      `INSERT OR REPLACE INTO appPreferences (key, value, updatedAt)
+      VALUES ('${escapeSql(key)}', '${escapeSql(value)}', CURRENT_TIMESTAMP);`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'setAppPreference'), `App preference saved: ${key} = ${value}`);
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'setAppPreference'), `Failed to save app preference for key ${key}:`, error);
+    throw new Error(`Failed to save app preference: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
 
