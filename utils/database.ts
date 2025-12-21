@@ -1137,6 +1137,26 @@ export const getActiveFutureDailyAlarmInstances = async (
   }
 };
 
+// Get all daily alarm instances for a notification (including inactive ones, for robust cancellation)
+export const getAllDailyAlarmInstances = async (
+  notificationId: string
+): Promise<Array<{ alarmId: string; fireDateTime: string; isActive: number }>> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const result = await db.getAllAsync<{ alarmId: string; fireDateTime: string; isActive: number }>(
+      `SELECT alarmId, fireDateTime, isActive FROM dailyAlarmInstance 
+       WHERE notificationId = '${escapeSql(notificationId)}' 
+       ORDER BY fireDateTime ASC;`
+    );
+    return result || [];
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'getAllDailyAlarmInstances'), 'Failed to get all daily alarm instances:', error);
+    return [];
+  }
+};
+
 // Get all active daily alarm instances for a notification
 export const getAllActiveDailyAlarmInstances = async (
   notificationId: string

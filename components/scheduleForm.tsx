@@ -9,7 +9,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, getAllActiveRepeatNotificationInstances, getWindowSize, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
+import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveRepeatNotificationInstances, getWindowSize, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
+import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-scheduling';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { getPermissionInstructions } from '@/utils/permissions';
@@ -831,70 +832,27 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
     // If in edit mode, cancel existing notification and alarm, then delete from DB
     if (isEditMode && editingNotificationId) {
       try {
-        // Check if this is a rolling-window managed notification
+        // Get existing notification to determine repeatOption for proper alarm cancellation
         const { getAllScheduledNotificationData } = await import('@/utils/database');
         const allNotifications = await getAllScheduledNotificationData();
         const existingNotification = allNotifications.find(n => n.notificationId === editingNotificationId);
-        const isRollingWindow = existingNotification?.notificationTrigger && (existingNotification.notificationTrigger as any).type === 'DATE_WINDOW';
+        const existingRepeatOption = existingNotification?.repeatOption ?? repeatOption ?? null;
 
+        // Cancel all Expo scheduled notifications (main + rolling-window instances)
+        // Always attempt cancellation regardless of DB state (idempotent)
+        await cancelExpoForParent(editingNotificationId);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled all Expo notifications for edit:', editingNotificationId);
+
+        // Cancel all AlarmKit alarms (daily and non-daily)
+        // Always attempt cancellation regardless of editingHasAlarm flag (idempotent)
+        await cancelAlarmKitForParent(editingNotificationId, existingRepeatOption);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled all AlarmKit alarms for edit:', editingNotificationId);
+
+        // Mark rolling-window instances as cancelled in DB (if any)
+        const isRollingWindow = existingNotification?.notificationTrigger && (existingNotification.notificationTrigger as any).type === 'DATE_WINDOW';
         if (isRollingWindow) {
-          // Cancel all rolling-window notification instances
-          const repeatInstances = await getAllActiveRepeatNotificationInstances(editingNotificationId);
-          for (const instance of repeatInstances) {
-            try {
-              await Notifications.cancelScheduledNotificationAsync(instance.instanceNotificationId);
-              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled rolling-window notification instance on edit:', instance.instanceNotificationId);
-            } catch (instanceError) {
-              logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel rolling-window notification instance:', instance.instanceNotificationId, ', error:', instanceError);
-            }
-          }
           await markAllRepeatNotificationInstancesCancelled(editingNotificationId);
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Marked all rolling-window notification instances as cancelled on edit');
-        } else {
-          // Cancel the single scheduled notification
-          await Notifications.cancelScheduledNotificationAsync(editingNotificationId);
-          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled existing notification:', editingNotificationId);
-        }
-
-        const alarmId = editingNotificationId.substring("thenotifier-".length);
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelling existing alarm with ID:', alarmId);
-        if (editingHasAlarm) {
-          try {
-            // Check if this is a daily repeating alarm - if so, cancel all instances
-            if (existingNotification?.repeatOption === 'daily') {
-              // Cancel all daily alarm instances
-              const dailyInstances = await getAllActiveDailyAlarmInstances(editingNotificationId);
-              for (const instance of dailyInstances) {
-                try {
-                  await NativeAlarmManager.cancelAlarm(instance.alarmId);
-                  logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled daily alarm instance:', instance.alarmId);
-                } catch (instanceError) {
-                  const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
-                  if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-                    logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
-                  }
-                }
-              }
-              await markAllDailyAlarmInstancesCancelled(editingNotificationId);
-              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Marked all daily alarm instances as cancelled');
-            } else {
-              // Single alarm (one-time or weekly)
-              const existingAlarm = await NativeAlarmManager.getAlarm(alarmId);
-              if (existingAlarm) {
-                await NativeAlarmManager.cancelAlarm(alarmId);
-                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled existing alarm:', alarmId);
-              } else {
-                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm not found, may have already been cancelled:', alarmId);
-              }
-            }
-          } catch (alarmError) {
-            const errorMessage = alarmError instanceof Error ? alarmError.message : String(alarmError);
-            if (errorMessage.includes('not found') || errorMessage.includes('ALARM_NOT_FOUND')) {
-              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm not found (may have already been cancelled):', alarmId);
-            } else {
-              logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to cancel existing alarm:', alarmId, ', error:', alarmError);
-            }
-          }
         }
 
         await deleteScheduledNotification(editingNotificationId);

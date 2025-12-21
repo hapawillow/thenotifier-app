@@ -11,7 +11,8 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkCalendarEventChanges } from '@/utils/calendar-check';
-import { deleteScheduledNotification, getAllActiveDailyAlarmInstances, getAllActiveRepeatNotificationInstances, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrences, getScheduledNotificationData, insertRepeatOccurrence, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
+import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-scheduling';
+import { deleteScheduledNotification, getAllActiveRepeatNotificationInstances, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrences, getScheduledNotificationData, insertRepeatOccurrence, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { notificationRefreshEvents } from '@/utils/notification-refresh-events';
@@ -304,49 +305,20 @@ export default function HomeScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              // Check if this is a rolling-window managed notification
-              const isRollingWindow = notification.notificationTrigger && (notification.notificationTrigger as any).type === 'DATE_WINDOW';
+              // Cancel all Expo scheduled notifications (main + rolling-window instances)
+              await cancelExpoForParent(notification.notificationId);
+              logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Cancelled all Expo notifications for:', notification.notificationId);
 
+              // Cancel all AlarmKit alarms (daily and non-daily)
+              // Always attempt cancellation regardless of hasAlarm flag (idempotent)
+              await cancelAlarmKitForParent(notification.notificationId, notification.repeatOption);
+              logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Cancelled all AlarmKit alarms for:', notification.notificationId);
+
+              // Mark rolling-window instances as cancelled in DB (if any)
+              const isRollingWindow = notification.notificationTrigger && (notification.notificationTrigger as any).type === 'DATE_WINDOW';
               if (isRollingWindow) {
-                // Cancel all rolling-window notification instances
-                const repeatInstances = await getAllActiveRepeatNotificationInstances(notification.notificationId);
-                for (const instance of repeatInstances) {
-                  try {
-                    await Notifications.cancelScheduledNotificationAsync(instance.instanceNotificationId);
-                    logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Cancelled rolling-window notification instance on delete:', instance.instanceNotificationId);
-                  } catch (instanceError) {
-                    logger.error(makeLogHeader(LOG_FILE, 'handleDelete'), 'Failed to cancel rolling-window notification instance:', instance.instanceNotificationId, ', error:', instanceError);
-                  }
-                }
                 await markAllRepeatNotificationInstancesCancelled(notification.notificationId);
                 logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Marked all rolling-window notification instances as cancelled on delete');
-              } else {
-                // Cancel the single scheduled notification
-                await Notifications.cancelScheduledNotificationAsync(notification.notificationId);
-              }
-
-              // If this is a daily repeating alarm, cancel all daily alarm instances
-              if (notification.repeatOption === 'daily' && notification.hasAlarm) {
-                try {
-                  const { NativeAlarmManager } = await import('rn-native-alarmkit');
-                  const dailyInstances = await getAllActiveDailyAlarmInstances(notification.notificationId);
-                  for (const instance of dailyInstances) {
-                    try {
-                      await NativeAlarmManager.cancelAlarm(instance.alarmId);
-                      logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Cancelled daily alarm instance on delete:', instance.alarmId);
-                    } catch (instanceError) {
-                      const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
-                      if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-                        logger.error(makeLogHeader(LOG_FILE, 'handleDelete'), 'Failed to cancel daily alarm instance:', instance.alarmId, ', error:', instanceError);
-                      }
-                    }
-                  }
-                  await markAllDailyAlarmInstancesCancelled(notification.notificationId);
-                  logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Marked all daily alarm instances as cancelled on delete');
-                } catch (alarmError) {
-                  logger.error(makeLogHeader(LOG_FILE, 'handleDelete'), 'Failed to cancel daily alarms on delete:', alarmError);
-                  // Continue with deletion even if alarm cancellation fails
-                }
               }
 
               // Delete from database

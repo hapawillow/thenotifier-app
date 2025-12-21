@@ -1,17 +1,17 @@
 import * as Notifications from 'expo-notifications';
 import { Alert } from 'react-native';
-import { NativeAlarmManager } from 'rn-native-alarmkit';
 import { logger, makeLogHeader } from './logger';
 import { notificationRefreshEvents } from './notification-refresh-events';
+import { cancelAlarmKitForParent, cancelExpoForParent } from './cancel-scheduling';
 import {
   archiveAllScheduledNotificationsAsCancelled,
   deleteAllScheduledNotifications,
-  getAllActiveDailyAlarmInstances,
+  getAllDailyAlarmInstances,
   getAllScheduledNotificationData,
   getAppPreference,
-  markAllDailyAlarmInstancesCancelled,
   markAllDailyAlarmInstancesCancelledForAllNotifications,
   markAllRepeatNotificationInstancesCancelledForAllParents,
+  markDailyAlarmInstanceCancelled,
   saveAlarmPermissionDenied,
   setAppPreference,
   updateScheduledNotificationData,
@@ -65,51 +65,6 @@ async function getCurrentAlarmPermission(): Promise<AlarmPermissionState> {
   }
 }
 
-/**
- * Cancel all AlarmKit alarms for a notification
- */
-async function cancelAlarmsForNotification(notificationId: string, repeatOption: string | null, hasAlarm: boolean): Promise<void> {
-  if (!hasAlarm) {
-    return;
-  }
-
-  try {
-    if (repeatOption === 'daily') {
-      // Cancel all daily alarm instances
-      const dailyInstances = await getAllActiveDailyAlarmInstances(notificationId);
-      for (const instance of dailyInstances) {
-        try {
-          await NativeAlarmManager.cancelAlarm(instance.alarmId);
-          logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmsForNotification'), `Cancelled daily alarm instance: ${instance.alarmId}`);
-        } catch (instanceError: any) {
-          const errorMessage = instanceError instanceof Error ? instanceError.message : String(instanceError);
-          // Ignore "not found" errors - alarm may have already been cancelled
-          if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-            logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmsForNotification'), `Failed to cancel daily alarm instance ${instance.alarmId}:`, instanceError);
-          }
-        }
-      }
-      await markAllDailyAlarmInstancesCancelled(notificationId);
-      logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmsForNotification'), `Marked all daily alarm instances as cancelled for ${notificationId}`);
-    } else {
-      // Cancel single alarm (one-time or recurring)
-      const alarmId = notificationId.substring('thenotifier-'.length);
-      try {
-        await NativeAlarmManager.cancelAlarm(alarmId);
-        logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmsForNotification'), `Cancelled alarm: ${alarmId}`);
-      } catch (alarmError: any) {
-        const errorMessage = alarmError instanceof Error ? alarmError.message : String(alarmError);
-        // Ignore "not found" errors - alarm may have already been cancelled
-        if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-          logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmsForNotification'), `Failed to cancel alarm ${alarmId}:`, alarmError);
-        }
-      }
-    }
-  } catch (error) {
-    logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmsForNotification'), `Failed to cancel alarms for notification ${notificationId}:`, error);
-    // Don't throw - continue with other notifications
-  }
-}
 
 /**
  * Cleanup when notification permission is removed
@@ -121,18 +76,47 @@ async function cleanupNotificationPermissionRemoved(t: (key: string) => string):
     // Get all scheduled notifications before cleanup
     const scheduledNotifications = await getAllScheduledNotificationData();
     
-    // Cancel all Expo notifications
+    // Cancel all Expo notifications (comprehensive sweep)
     try {
       await Notifications.cancelAllScheduledNotificationsAsync();
       logger.info(makeLogHeader(LOG_FILE, 'cleanupNotificationPermissionRemoved'), 'Cancelled all scheduled Expo notifications');
     } catch (error) {
       logger.error(makeLogHeader(LOG_FILE, 'cleanupNotificationPermissionRemoved'), 'Failed to cancel all Expo notifications:', error);
-      // Continue with DB cleanup even if device cancellation fails
+      // Continue with per-notification cleanup even if bulk cancellation fails
+    }
+
+    // Also cancel per-notification to catch any missed by cancelAll (idempotent)
+    for (const notification of scheduledNotifications) {
+      await cancelExpoForParent(notification.notificationId);
     }
 
     // Cancel all AlarmKit alarms for scheduled notifications
+    // Always attempt cancellation regardless of hasAlarm flag (idempotent)
     for (const notification of scheduledNotifications) {
-      await cancelAlarmsForNotification(notification.notificationId, notification.repeatOption, notification.hasAlarm);
+      await cancelAlarmKitForParent(notification.notificationId, notification.repeatOption);
+    }
+
+    // Additional sweep: cancel any daily alarm instances found in DB (even if inactive)
+    // This catches cases where DB state doesn't match device state
+    for (const notification of scheduledNotifications) {
+      if (notification.repeatOption === 'daily') {
+        const allDailyInstances = await getAllDailyAlarmInstances(notification.notificationId);
+        for (const instance of allDailyInstances) {
+          try {
+            const { NativeAlarmManager } = await import('rn-native-alarmkit');
+            await NativeAlarmManager.cancelAlarm(instance.alarmId);
+            logger.info(makeLogHeader(LOG_FILE, 'cleanupNotificationPermissionRemoved'), `Cancelled daily alarm instance from DB sweep: ${instance.alarmId}`);
+            if (instance.isActive === 1) {
+              await markDailyAlarmInstanceCancelled(instance.alarmId);
+            }
+          } catch (error: any) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+              logger.warn(makeLogHeader(LOG_FILE, 'cleanupNotificationPermissionRemoved'), `Failed to cancel daily alarm instance ${instance.alarmId} from DB sweep:`, error);
+            }
+          }
+        }
+      }
     }
 
     // Archive all scheduled notifications with cancelledAt set
@@ -174,28 +158,54 @@ async function cleanupAlarmPermissionRemoved(t: (key: string) => string): Promis
   logger.info(makeLogHeader(LOG_FILE, 'cleanupAlarmPermissionRemoved'), 'Starting alarm permission removal cleanup');
 
   try {
-    // Get all scheduled notifications with alarms
+    // Get all scheduled notifications
     const scheduledNotifications = await getAllScheduledNotificationData();
-    const notificationsWithAlarms = scheduledNotifications.filter(n => n.hasAlarm);
 
-    // Cancel all AlarmKit alarms and update hasAlarm to false
-    for (const notification of notificationsWithAlarms) {
-      await cancelAlarmsForNotification(notification.notificationId, notification.repeatOption, notification.hasAlarm);
+    // Cancel all AlarmKit alarms for ALL notifications (not just those with hasAlarm=true)
+    // This ensures we catch any alarms even if DB state is stale
+    for (const notification of scheduledNotifications) {
+      // Always attempt cancellation regardless of hasAlarm flag (idempotent)
+      await cancelAlarmKitForParent(notification.notificationId, notification.repeatOption);
       
-      // Update hasAlarm to false in database
-      await updateScheduledNotificationData(
-        notification.notificationId,
-        notification.title,
-        notification.message,
-        notification.note || '',
-        notification.link || '',
-        notification.scheduleDateTime,
-        notification.scheduleDateTimeLocal,
-        notification.repeatOption || undefined,
-        notification.notificationTrigger,
-        false // hasAlarm = false
-      );
-      logger.info(makeLogHeader(LOG_FILE, 'cleanupAlarmPermissionRemoved'), `Updated hasAlarm to false for ${notification.notificationId}`);
+      // Update hasAlarm to false in database (only if it was true)
+      if (notification.hasAlarm) {
+        await updateScheduledNotificationData(
+          notification.notificationId,
+          notification.title,
+          notification.message,
+          notification.note || '',
+          notification.link || '',
+          notification.scheduleDateTime,
+          notification.scheduleDateTimeLocal,
+          notification.repeatOption || undefined,
+          notification.notificationTrigger,
+          false // hasAlarm = false
+        );
+        logger.info(makeLogHeader(LOG_FILE, 'cleanupAlarmPermissionRemoved'), `Updated hasAlarm to false for ${notification.notificationId}`);
+      }
+    }
+
+    // Additional sweep: cancel any daily alarm instances found in DB (even if inactive)
+    // This catches cases where DB state doesn't match device state
+    for (const notification of scheduledNotifications) {
+      if (notification.repeatOption === 'daily') {
+        const allDailyInstances = await getAllDailyAlarmInstances(notification.notificationId);
+        for (const instance of allDailyInstances) {
+          try {
+            const { NativeAlarmManager } = await import('rn-native-alarmkit');
+            await NativeAlarmManager.cancelAlarm(instance.alarmId);
+            logger.info(makeLogHeader(LOG_FILE, 'cleanupAlarmPermissionRemoved'), `Cancelled daily alarm instance from DB sweep: ${instance.alarmId}`);
+            if (instance.isActive === 1) {
+              await markDailyAlarmInstanceCancelled(instance.alarmId);
+            }
+          } catch (error: any) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+              logger.warn(makeLogHeader(LOG_FILE, 'cleanupAlarmPermissionRemoved'), `Failed to cancel daily alarm instance ${instance.alarmId} from DB sweep:`, error);
+            }
+          }
+        }
+      }
     }
 
     // Update alarm permission denied state
