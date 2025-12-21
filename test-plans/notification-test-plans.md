@@ -1275,3 +1275,124 @@ After implementing fixes, re-run:
    - Alert text matches i18n keys
    - Alert title uses `alertTitles.warning`
 
+---
+
+## Orphan Prevention Validation
+
+### Test Case 8.1: Delete one-time notification with alarm - verify no orphans
+**Objective:** Verify that deleting a one-time notification with alarm doesn't leave orphaned alarms on iOS
+
+**Prerequisites:**
+- Schedule a one-time notification with alarm enabled
+- Verify alarm is scheduled in AlarmKit
+
+**Steps:**
+1. Delete the notification from Upcoming tab
+2. Wait a few seconds
+
+**Expected Results:**
+- Notification removed from Upcoming tab
+- **Verification:** Call `Notifications.getAllScheduledNotificationsAsync()` - no notifications with `content.data.notificationId` matching the deleted notification ID
+- **Verification:** AlarmKit alarm no longer exists (verify alarm doesn't fire at scheduled time)
+- No orphaned notifications or alarms remain
+
+---
+
+### Test Case 8.2: Delete weekly/monthly/yearly notification with alarm - verify no orphans
+**Objective:** Verify that deleting recurring (non-daily) notifications with alarms doesn't leave orphaned alarms
+
+**Prerequisites:**
+- Schedule a weekly/monthly/yearly notification with alarm enabled
+- Verify recurring alarm is scheduled in AlarmKit
+
+**Steps:**
+1. Delete the notification from Upcoming tab
+2. Wait a few seconds
+
+**Expected Results:**
+- Notification removed from Upcoming tab
+- **Verification:** Call `Notifications.getAllScheduledNotificationsAsync()` - no notifications with `content.data.notificationId` matching the deleted notification ID
+- **Verification:** AlarmKit recurring alarm no longer exists (verify alarm doesn't fire at scheduled times)
+- No orphaned notifications or alarms remain
+
+---
+
+### Test Case 8.3: Update notification (change time) - verify old alarms cancelled
+**Objective:** Verify that updating a notification properly cancels old alarms before scheduling new ones
+
+**Prerequisites:**
+- Schedule a notification with alarm enabled (one-time or recurring)
+- Verify alarm is scheduled in AlarmKit
+
+**Steps:**
+1. Edit the notification and change the scheduled time
+2. Save the update
+
+**Expected Results:**
+- Old alarm cancelled in AlarmKit
+- New alarm scheduled with updated time
+- **Verification:** Only one alarm exists in AlarmKit (the new one)
+- **Verification:** Old alarm doesn't fire at original time
+- No orphaned alarms remain
+
+---
+
+### Test Case 8.4: Update notification (disable alarm) - verify alarms cancelled
+**Objective:** Verify that disabling alarm on an existing notification cancels all associated alarms
+
+**Prerequisites:**
+- Schedule a notification with alarm enabled (daily or non-daily)
+- Verify alarms are scheduled in AlarmKit
+
+**Steps:**
+1. Edit the notification
+2. Turn alarm switch OFF
+3. Save the update
+
+**Expected Results:**
+- All alarms cancelled in AlarmKit (daily instances or single alarm)
+- **Verification:** No alarms remain in AlarmKit for this notification
+- **Verification:** Alarms don't fire at scheduled times
+- Notification remains in Upcoming tab but without alarm icon
+- No orphaned alarms remain
+
+---
+
+### Test Case 8.5: Permission cleanup - verify comprehensive cancellation
+**Objective:** Verify that permission cleanup cancels all notifications/alarms even if DB state is stale
+
+**Prerequisites:**
+- Schedule multiple notifications (mix of one-time, daily, weekly/monthly/yearly)
+- Some with alarms, some without
+- Manually modify DB to set `hasAlarm=0` on one notification that actually has an alarm (simulate stale state)
+
+**Steps:**
+1. Remove notification permission
+2. Return to app
+
+**Expected Results:**
+- **Verification:** All Expo notifications cancelled (including those with stale DB state)
+- **Verification:** All AlarmKit alarms cancelled (including those with stale DB state)
+- **Verification:** Call `Notifications.getAllScheduledNotificationsAsync()` - returns empty or no notifications with `content.data.notificationId` matching any deleted notification IDs
+- **Verification:** No AlarmKit alarms remain (verify alarms don't fire)
+- No orphaned notifications or alarms remain
+
+---
+
+### Verification Steps for Orphan Prevention
+1. **After Delete/Update Operations:**
+   - Call `Notifications.getAllScheduledNotificationsAsync()` and verify no notifications exist with `content.data.notificationId` matching the deleted/updated notification ID
+   - For rolling-window notifications, verify no instance notifications remain
+   - Verify AlarmKit alarms no longer exist (check that alarms don't fire at scheduled times)
+   - Check that no orphaned alarms appear in AlarmKit inspection tools
+
+2. **After Permission Cleanup:**
+   - Call `Notifications.getAllScheduledNotificationsAsync()` - should be empty or contain no notifications related to the app
+   - Verify all AlarmKit alarms are cancelled (no alarms fire)
+   - Check DB state matches device state (no discrepancies)
+
+3. **Edge Cases:**
+   - Test with stale DB state (hasAlarm flag incorrect)
+   - Test with inactive daily alarm instances in DB
+   - Test with notifications that have been partially cancelled
+

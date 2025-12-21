@@ -18,3 +18,4 @@ class NotificationRefreshEventEmitter {
 
 export const notificationRefreshEvents = new NotificationRefreshEventEmitter();
 
+
