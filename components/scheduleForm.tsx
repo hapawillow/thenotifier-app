@@ -9,8 +9,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveRepeatNotificationInstances, getWindowSize, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
 import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-scheduling';
+import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, getWindowSize, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { getPermissionInstructions } from '@/utils/permissions';
@@ -1320,7 +1320,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               alarmSchedule = {
                 id: alarmId,
                 type: 'fixed',
-                date: dateWithoutSeconds,
+                date: dateWithoutSeconds.getTime(), // Pass milliseconds timestamp
                 time: {
                   hour: hour,
                   minute: minutes,
@@ -1332,7 +1332,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 id: alarmId,
                 type: 'recurring',
                 repeatInterval: repeatOption,
-                startDate: dateWithoutSeconds,
+                startDate: dateWithoutSeconds.getTime(), // Pass milliseconds timestamp
                 time: {
                   hour: hour,
                   minute: minutes,

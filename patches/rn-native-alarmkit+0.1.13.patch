@@ -369,7 +369,7 @@ index 8e28eba..d4a79e3 100644
 +        }
 +    }
 +
-+    /// Extract Date from various possible types in NSDictionary (Double, NSNumber, Date, ISO string)
++    /// Extract Date from various possible types in NSDictionary (Double, NSNumber, Date, ISO string, numeric string)
 +    private func extractDate(from value: Any?) -> Date? {
 +        guard let value = value else { return nil }
 +        
@@ -388,10 +388,33 @@ index 8e28eba..d4a79e3 100644
 +            return date
 +        }
 +        
-+        // Try ISO string
++        // Try ISO string (with multiple formatter options)
 +        if let isoString = value as? String {
++            // First try standard ISO8601 formatter
 +            let formatter = ISO8601DateFormatter()
-+            return formatter.date(from: isoString)
++            if let date = formatter.date(from: isoString) {
++                return date
++            }
++            
++            // Try with fractional seconds (common in some ISO strings)
++            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
++            if let date = formatter.date(from: isoString) {
++                return date
++            }
++            
++            // Try parsing as numeric string (timestamp)
++            // Check if it's a numeric string that could be a timestamp
++            if let numericValue = Double(isoString) {
++                // Heuristic: if value < 1e10, assume seconds; otherwise assume milliseconds
++                // (epoch seconds are ~1e9, epoch milliseconds are ~1e12)
++                if numericValue < 1e10 {
++                    // Likely seconds
++                    return Date(timeIntervalSince1970: numericValue)
++                } else {
++                    // Likely milliseconds
++                    return Date(timeIntervalSince1970: numericValue / 1000.0)
++                }
++            }
 +        }
 +        
 +        return nil
@@ -879,3 +902,29 @@ index cc2fd9b..abac421 100644
      }
  
      private func notifyAlarmFired(alarmId: String, actionId: String?) {
+diff --git a/node_modules/rn-native-alarmkit/src/types.ts b/node_modules/rn-native-alarmkit/src/types.ts
+index 0000000..1111111 100644
+--- a/node_modules/rn-native-alarmkit/src/types.ts
++++ b/node_modules/rn-native-alarmkit/src/types.ts
+@@ -108,7 +108,12 @@ export interface AlarmSchedule {
+    * Specific date (for 'fixed' type only)
+    * If not provided for 'fixed', uses next occurrence of time today/tomorrow
+    */
+-  date?: Date;
++  date?: Date | number;
++
++  /**
++   * Start date for recurring alarms
++   * If not provided, uses next occurrence of time today/tomorrow
++   */
++  startDate?: Date | number;
+ 
+   /**
+    * Days of week for recurring alarms (0 = Sunday, 6 = Saturday)
+@@ -126,5 +131,5 @@ export interface AlarmSchedule {
+    * Start time for interval-based alarms
+    * If not provided, starts immediately
+    */
+-  startTime?: Date;
++  startTime?: Date | number;
+ }

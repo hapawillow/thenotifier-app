@@ -1674,7 +1674,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                   id: alarmId,
                   type: 'recurring',
                   repeatInterval: 'weekly',
-                  startDate: startDate,
+                  startDate: startDate.getTime(), // Pass milliseconds timestamp
                   time: { hour, minute },
                   daysOfWeek: [dayOfWeek],
                 };
@@ -1683,7 +1683,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                   id: alarmId,
                   type: 'recurring',
                   repeatInterval: 'monthly',
-                  startDate: startDate,
+                  startDate: startDate.getTime(), // Pass milliseconds timestamp
                   time: { hour, minute },
                   dayOfMonth: day,
                 };
@@ -1692,7 +1692,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                   id: alarmId,
                   type: 'recurring',
                   repeatInterval: 'yearly',
-                  startDate: startDate,
+                  startDate: startDate.getTime(), // Pass milliseconds timestamp
                   time: { hour, minute },
                   monthOfYear: month, // Expo uses 0-11 (January = 0)
                   dayOfMonth: day,
@@ -1944,7 +1944,7 @@ export const scheduleDailyAlarmWindow = async (
       const alarmSchedule = {
         id: alarmId,
         type: 'fixed' as const,
-        date: alarmDate,
+        date: alarmDate.getTime(), // Pass milliseconds timestamp
         time: {
           hour: time.hour,
           minute: time.minute,
