@@ -1872,3 +1872,178 @@ After implementing fixes, re-run:
 - Logs show weekday/month mapping values (expoWeekday, expoMonth)
 - Logs show reason for strategy selection (matches next occurrence vs doesn't match)
 
+---
+
+## Past Tab Drawer Height Scenarios
+
+### Test Case 11.1: Past drawer - note with blank lines
+**Objective:** Verify that Past tab reveal drawer expands to show entire note including blank lines
+
+**Prerequisites:**
+- A notification exists in Past tab (archived or repeat occurrence)
+- Notification has a note with blank lines (e.g., "Line 1\n\nLine 2")
+
+**Steps:**
+1. Navigate to Past tab
+2. Find notification with note containing blank lines
+3. Tap reveal symbol (chevron) to expand drawer
+4. Observe drawer height and note content
+
+**Expected Results:**
+- Drawer expands to full height showing entire note
+- Blank line between "Line 1" and "Line 2" is visible
+- "Line 2" is fully visible (not cut off)
+- Drawer height is stable on first expand (no "measured too small then stuck")
+
+---
+
+### Test Case 11.2: Past drawer - note with many newlines
+**Objective:** Verify that Past tab drawer scales correctly for notes with multiple paragraphs
+
+**Prerequisites:**
+- A notification exists in Past tab
+- Notification has a note with 6-10 lines including blank lines
+
+**Steps:**
+1. Navigate to Past tab
+2. Find notification with multi-paragraph note
+3. Tap reveal symbol to expand drawer
+4. Scroll within drawer if needed
+5. Verify all lines are visible
+
+**Expected Results:**
+- Drawer expands to accommodate all note content
+- All lines including blank lines are visible
+- No content is cut off at bottom
+- Drawer height accurately reflects full content height
+
+---
+
+### Test Case 11.3: Past drawer - mixed content (repeat + note + link)
+**Objective:** Verify that Past tab drawer includes all expandable content rows in height calculation
+
+**Prerequisites:**
+- A notification exists in Past tab
+- Notification has repeat option, note with blank lines, and link
+
+**Steps:**
+1. Navigate to Past tab
+2. Find notification with repeat + note + link
+3. Tap reveal symbol to expand drawer
+4. Verify all content is visible
+
+**Expected Results:**
+- Drawer expands to show all rows (repeat, note, link)
+- Note with blank lines displays fully
+- All content is visible without scrolling
+- Drawer height includes all rows plus padding
+
+---
+
+### Test Case 11.4: Upcoming drawer - note with blank lines
+**Objective:** Verify that Upcoming tab reveal drawer also handles blank lines correctly
+
+**Prerequisites:**
+- A scheduled notification exists in Upcoming tab
+- Notification has a note with blank lines
+
+**Steps:**
+1. Navigate to Upcoming tab
+2. Find scheduled notification with note containing blank lines
+3. Tap reveal symbol to expand drawer
+4. Observe drawer height and note content
+
+**Expected Results:**
+- Drawer expands to full height showing entire note
+- Blank lines are visible
+- All note content is visible (not cut off)
+- Drawer height is stable on first expand
+
+---
+
+### Test Case 11.5: Drawer height measurement - first expand accuracy
+**Objective:** Verify that drawer height is measured correctly on first expand (not constrained by animation)
+
+**Prerequisites:**
+- Notification in Past or Upcoming tab with note containing blank lines
+
+**Steps:**
+1. Navigate to appropriate tab
+2. Find notification with multi-line note
+3. Tap reveal symbol to expand drawer (first time)
+4. Observe if drawer height is correct immediately
+5. Collapse and expand again
+6. Verify height is consistent
+
+**Expected Results:**
+- Drawer height is correct on first expand (not too small)
+- Height is consistent on subsequent expands
+- No "jump" or resize after initial measurement
+- Measurement view correctly calculates full content height
+
+---
+
+## Past Tab Drawer - Repeat Occurrence Display
+
+### Test Case 12.1: Past drawer - repeat occurrence shows Repeat row
+**Objective:** Verify that Past tab reveal drawer for repeat occurrences displays the Repeat row with correct formatting
+
+**Prerequisites:**
+- A daily repeat notification has fired at least once
+- The repeat occurrence appears in Past tab
+
+**Steps:**
+1. Navigate to Past tab
+2. Find a repeat occurrence item (from a daily/weekly/monthly/yearly repeat)
+3. Tap reveal symbol (chevron) to expand drawer
+4. Observe drawer content
+
+**Expected Results:**
+- Drawer shows "Repeat:" label
+- Drawer shows formatted repeat string (e.g., "Repeats daily at 10:00 AM")
+- Repeat information is displayed even if parent notification was deleted/archived
+- Format matches expected format for the repeat type (daily/weekly/monthly/yearly)
+
+---
+
+### Test Case 12.2: Past drawer - repeat occurrence with note shows both Repeat and Note rows
+**Objective:** Verify that Past tab drawer for repeat occurrences displays both Repeat and Note rows correctly
+
+**Prerequisites:**
+- A daily repeat notification with a note containing blank lines has fired
+- The note format is: "Line 1\n\nLine 2"
+
+**Steps:**
+1. Navigate to Past tab
+2. Find the repeat occurrence item
+3. Tap reveal symbol to expand drawer
+4. Verify all content is visible
+
+**Expected Results:**
+- Drawer shows "Repeat:" row with formatted repeat string
+- Drawer shows "Note:" row
+- Note displays full content including blank line between "Line 1" and "Line 2"
+- "Line 2" is fully visible (not cut off)
+- Drawer height accommodates all content (Repeat + Note rows)
+
+---
+
+### Test Case 12.3: Past drawer - ID collision prevention
+**Objective:** Verify that Past tab drawer state (expanded/collapsed, height) is not affected by ID collisions between archived and repeat occurrence items
+
+**Prerequisites:**
+- Both archivedNotification and repeatNotificationOccurrence tables have items with the same numeric ID (e.g., both have id=1)
+
+**Steps:**
+1. Navigate to Past tab
+2. Expand the archived item with id=1
+3. Collapse it
+4. Expand the repeat occurrence item with id=1
+5. Verify drawer state is independent
+
+**Expected Results:**
+- Expanding archived item does not affect repeat occurrence item
+- Expanding repeat occurrence item does not affect archived item
+- Each item maintains its own drawer height measurement
+- No state leakage between items with same numeric ID
+

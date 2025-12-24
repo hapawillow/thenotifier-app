@@ -2174,6 +2174,77 @@ export const getRepeatOccurrences = async (limit?: number, sinceIso?: string): P
   }
 };
 
+// Get repeat occurrences with parent metadata (for Past tab - includes repeatOption and scheduleDateTime)
+export const getRepeatOccurrencesWithParentMeta = async (limit?: number, sinceIso?: string): Promise<Array<{
+  id: number;
+  parentNotificationId: string;
+  fireDateTime: string;
+  recordedAt: string;
+  source: string;
+  title: string;
+  message: string;
+  note: string | null;
+  link: string | null;
+  parentRepeatOption: string | null;
+  parentScheduleDateTime: string | null;
+}>> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+
+    // LEFT JOIN with both scheduledNotification and archivedNotification
+    // Use COALESCE to prefer scheduledNotification, fallback to archivedNotification
+    let query = `
+      SELECT 
+        ro.id,
+        ro.parentNotificationId,
+        ro.fireDateTime,
+        ro.recordedAt,
+        ro.source,
+        ro.title,
+        ro.message,
+        ro.note,
+        ro.link,
+        COALESCE(sn.repeatOption, an.repeatOption) as parentRepeatOption,
+        COALESCE(sn.scheduleDateTime, an.scheduleDateTime) as parentScheduleDateTime
+      FROM repeatNotificationOccurrence ro
+      LEFT JOIN scheduledNotification sn ON ro.parentNotificationId = sn.notificationId
+      LEFT JOIN archivedNotification an ON ro.parentNotificationId = an.notificationId
+    `;
+
+    if (sinceIso) {
+      query += ` WHERE ro.fireDateTime >= '${escapeSql(sinceIso)}'`;
+    }
+
+    query += ` ORDER BY ro.fireDateTime DESC`;
+
+    if (limit) {
+      query += ` LIMIT ${limit}`;
+    }
+
+    const result = await db.getAllAsync<{
+      id: number;
+      parentNotificationId: string;
+      fireDateTime: string;
+      recordedAt: string;
+      source: string;
+      title: string;
+      message: string;
+      note: string | null;
+      link: string | null;
+      parentRepeatOption: string | null;
+      parentScheduleDateTime: string | null;
+    }>(query);
+
+    return result || [];
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'getRepeatOccurrencesWithParentMeta'), 'Failed to get repeat occurrences with parent metadata:', error);
+    return [];
+  }
+};
+
 // Catch up repeat occurrences (for notifications that fired while app was inactive)
 export const catchUpRepeatOccurrences = async (): Promise<void> => {
   try {

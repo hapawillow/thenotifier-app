@@ -12,7 +12,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-scheduling';
-import { deleteScheduledNotification, getAllActiveRepeatNotificationInstances, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrences, getScheduledNotificationData, insertRepeatOccurrence, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
+import { deleteScheduledNotification, getAllActiveRepeatNotificationInstances, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrences, getRepeatOccurrencesWithParentMeta, getScheduledNotificationData, insertRepeatOccurrence, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { notificationRefreshEvents } from '@/utils/notification-refresh-events';
@@ -73,6 +73,8 @@ type RepeatOccurrenceItem = {
   isRepeatOccurrence: true;
   scheduleDateTime: string; // Added during merge for sorting
   scheduleDateTimeLocal: string; // Added during merge for display
+  parentRepeatOption?: string | null; // From parent notification
+  parentScheduleDateTime?: string | null; // From parent notification
 };
 
 type PastItem = ArchivedNotification | RepeatOccurrenceItem;
@@ -80,6 +82,11 @@ type PastItem = ArchivedNotification | RepeatOccurrenceItem;
 // Type guard function
 const isRepeatOccurrence = (item: PastItem): item is RepeatOccurrenceItem => {
   return 'isRepeatOccurrence' in item && item.isRepeatOccurrence === true;
+};
+
+// Generate stable Past-only key to avoid ID collisions between archived and repeat occurrences
+const getPastKey = (item: PastItem): string => {
+  return isRepeatOccurrence(item) ? `repeat-${item.id}` : `archived-${item.id}`;
 };
 
 type TabType = 'scheduled' | 'archived';
@@ -105,6 +112,12 @@ export default function HomeScreen() {
   const [drawerHeights] = useState<Map<number, number>>(new Map());
   const [buttonHeights] = useState<Map<number, number>>(new Map());
   const [drawerHeightUpdateTrigger, setDrawerHeightUpdateTrigger] = useState(0);
+  
+  // Past-only state maps (use string keys to avoid ID collisions between archived and repeat occurrences)
+  const [expandedPastKeys, setExpandedPastKeys] = useState<Set<string>>(new Set());
+  const [pastAnimations] = useState<Map<string, Animated.Value>>(new Map());
+  const [pastDrawerHeights] = useState<Map<string, number>>(new Map());
+  const [pastDrawerHeightUpdateTrigger, setPastDrawerHeightUpdateTrigger] = useState(0);
   const [refreshingScheduled, setRefreshingScheduled] = useState(false);
   const [refreshingArchived, setRefreshingArchived] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -144,8 +157,8 @@ export default function HomeScreen() {
       // Load archived one-time notifications
       const archivedData = await getAllArchivedNotificationData();
 
-      // Load repeat occurrences
-      const repeatOccurrences = await getRepeatOccurrences();
+      // Load repeat occurrences with parent metadata (includes repeatOption and scheduleDateTime)
+      const repeatOccurrences = await getRepeatOccurrencesWithParentMeta();
 
       // Merge into unified PastItem list
       const merged: PastItem[] = [
@@ -156,6 +169,9 @@ export default function HomeScreen() {
           // Use fireDateTime as the display time for sorting
           scheduleDateTime: item.fireDateTime,
           scheduleDateTimeLocal: new Date(item.fireDateTime).toLocaleString(),
+          // Include parent metadata for displaying repeat info
+          parentRepeatOption: item.parentRepeatOption,
+          parentScheduleDateTime: item.parentScheduleDateTime,
         })),
       ];
 
@@ -169,10 +185,11 @@ export default function HomeScreen() {
       setPastItems(merged);
       setArchivedNotifications(archivedData);
 
-      // Initialize animations for new items
+      // Initialize Past-only animations for new items (using stable keys)
       merged.forEach((item) => {
-        if (!animations.has(item.id)) {
-          animations.set(item.id, new Animated.Value(0));
+        const pastKey = getPastKey(item);
+        if (!pastAnimations.has(pastKey)) {
+          pastAnimations.set(pastKey, new Animated.Value(0));
         }
       });
     } catch (error) {
@@ -285,6 +302,32 @@ export default function HomeScreen() {
     const animValue = animations.get(id) || new Animated.Value(0);
     if (!animations.has(id)) {
       animations.set(id, animValue);
+    }
+
+    Animated.timing(animValue, {
+      toValue: isExpanded ? 0 : 1,
+      duration: 300,
+      useNativeDriver: false,
+    }).start();
+  };
+
+  // Past-only toggle function (uses string keys to avoid ID collisions)
+  const togglePastExpand = (pastKey: string) => {
+    const isExpanded = expandedPastKeys.has(pastKey);
+    const newExpandedPastKeys = new Set(expandedPastKeys);
+
+    if (isExpanded) {
+      newExpandedPastKeys.delete(pastKey);
+    } else {
+      newExpandedPastKeys.add(pastKey);
+    }
+
+    setExpandedPastKeys(newExpandedPastKeys);
+
+    // Animate drawer
+    const animValue = pastAnimations.get(pastKey) || new Animated.Value(0);
+    if (!pastAnimations.has(pastKey)) {
+      pastAnimations.set(pastKey, animValue);
     }
 
     Animated.timing(animValue, {
@@ -465,7 +508,9 @@ export default function HomeScreen() {
       outputRange: [0, 1],
     });
 
-    const handleDrawerContentLayout = (event: any) => {
+    // Measure drawer content height from an unconstrained hidden view
+    // This ensures accurate measurement including blank lines and multi-line text
+    const handleMeasurementLayout = (event: any) => {
       const { height } = event.nativeEvent.layout;
       // The measured height already includes padding (16px on all sides)
       // For message-only notifications, enforce dynamic minimum height based on measured button height
@@ -486,6 +531,100 @@ export default function HomeScreen() {
         setDrawerHeightUpdateTrigger(prev => prev + 1);
       }
     };
+
+    // Render drawer content (reused for both measurement and visible drawer)
+    const renderDrawerContent = () => (
+      <>
+        {item.repeatOption && item.repeatOption !== 'none' && (
+          <ThemedView style={styles.detailRow}>
+            <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
+              {t('detailLabels.repeat')}
+            </ThemedText>
+            <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
+              {formatRepeatOption(item.repeatOption, item.scheduleDateTime)}
+            </ThemedText>
+          </ThemedView>
+        )}
+
+        {item.note && (
+          <ThemedView style={styles.detailRow}>
+            <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
+              {t('detailLabels.note')}
+            </ThemedText>
+            <ThemedText maxFontSizeMultiplier={1.6} style={[styles.detailValue, { flexShrink: 1 }]}>
+              {item.note}
+            </ThemedText>
+          </ThemedView>
+        )}
+
+        {item.link && (
+          <ThemedView style={styles.detailRow}>
+            <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
+              {t('detailLabels.link')}
+            </ThemedText>
+            <TouchableOpacity
+              onPress={() => openNotifierLink(item.link, t)}
+              activeOpacity={0.7}>
+              <ThemedText
+                maxFontSizeMultiplier={1.6}
+                style={[styles.detailValue, { color: colors.tint, textDecorationLine: 'underline' }]}
+                numberOfLines={1}
+                accessibilityRole="link">
+                {item.link}
+              </ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+        )}
+
+        <ThemedView style={styles.actionButtons}>
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: colors.deleteButton }]}
+            onPress={() => handleDelete(item)}
+            activeOpacity={0.7}
+            onLayout={(event) => {
+              const { height } = event.nativeEvent.layout;
+              // Store the measured button height to calculate dynamic minimum drawer height
+              // Measure the actual button height (not container) for accurate measurement
+              // Ensure minimum of 64px to account for text scaling
+              const measuredHeight = Math.max(height, 56);
+              const currentButtonHeight = buttonHeights.get(item.id);
+              // Only update if height is valid and different, or if we don't have a measurement yet
+              if (measuredHeight > 0 && currentButtonHeight !== measuredHeight) {
+                buttonHeights.set(item.id, measuredHeight);
+
+                // For message-only notifications, immediately recalculate drawer height
+                if (!hasExpandableContent) {
+                  const dynamicMinimum = 16 + 8 + measuredHeight + 16;
+                  const currentDrawerHeight = drawerHeights.get(item.id);
+                  // Always update if we don't have a drawer height, or if current is less than minimum
+                  if (!currentDrawerHeight || currentDrawerHeight < dynamicMinimum) {
+                    drawerHeights.set(item.id, dynamicMinimum);
+                    // Trigger re-render to update drawer height calculation
+                    setDrawerHeightUpdateTrigger(prev => prev + 1);
+                  } else {
+                    // Even if drawer height is already set, trigger re-render to ensure consistency
+                    setDrawerHeightUpdateTrigger(prev => prev + 1);
+                  }
+                } else {
+                  // Trigger re-render even for expandable content to ensure button height is stored
+                  setDrawerHeightUpdateTrigger(prev => prev + 1);
+                }
+              }
+            }}>
+            <IconSymbol name="trash" size={20} color={colors.deleteButtonText} />
+            <ThemedText maxFontSizeMultiplier={1.3} style={[styles.actionButtonText, { color: colors.deleteButtonText }]}>{t('buttonText.delete')}</ThemedText>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: colors.tint }]}
+            onPress={() => handleEdit(item)}
+            activeOpacity={0.7}>
+            <IconSymbol name="pencil" size={20} color={colors.buttonText} />
+            <ThemedText maxFontSizeMultiplier={1.3} style={[styles.actionButtonText, { color: colors.buttonText }]}>{t('buttonText.edit')}</ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
+      </>
+    );
 
     return (
       <ThemedView style={[styles.notificationItem, { borderColor: colors.icon + '40' }]}>
@@ -529,6 +668,18 @@ export default function HomeScreen() {
           />
         </TouchableOpacity>
 
+        {/* Hidden measurement view - measures content height without animation constraints */}
+        <ThemedView
+          style={[
+            styles.drawerContent,
+            styles.measurementView,
+          ]}
+          onLayout={handleMeasurementLayout}
+          pointerEvents="none">
+          {renderDrawerContent()}
+        </ThemedView>
+
+        {/* Visible animated drawer */}
         <Animated.View
           style={[
             styles.drawer,
@@ -539,99 +690,8 @@ export default function HomeScreen() {
               borderTopColor: colors.icon + '40',
             },
           ]}>
-          <ThemedView
-            style={styles.drawerContent}
-            onLayout={handleDrawerContentLayout}>
-            {item.repeatOption && item.repeatOption !== 'none' && (
-              <ThemedView style={styles.detailRow}>
-                <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
-                  {t('detailLabels.repeat')}
-                </ThemedText>
-                <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
-                  {formatRepeatOption(item.repeatOption, item.scheduleDateTime)}
-                </ThemedText>
-              </ThemedView>
-            )}
-
-            {item.note && (
-              <ThemedView style={styles.detailRow}>
-                <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
-                  {t('detailLabels.note')}
-                </ThemedText>
-                <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
-                  {item.note}
-                </ThemedText>
-              </ThemedView>
-            )}
-
-            {item.link && (
-              <ThemedView style={styles.detailRow}>
-                <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
-                  {t('detailLabels.link')}
-                </ThemedText>
-                <TouchableOpacity
-                  onPress={() => openNotifierLink(item.link, t)}
-                  activeOpacity={0.7}>
-                  <ThemedText
-                    maxFontSizeMultiplier={1.6}
-                    style={[styles.detailValue, { color: colors.tint, textDecorationLine: 'underline' }]}
-                    numberOfLines={1}
-                    accessibilityRole="link">
-                    {item.link}
-                  </ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-            )}
-
-            <ThemedView style={styles.actionButtons}>
-
-              <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: colors.deleteButton }]}
-                onPress={() => handleDelete(item)}
-                activeOpacity={0.7}
-                onLayout={(event) => {
-                  const { height } = event.nativeEvent.layout;
-                  // Store the measured button height to calculate dynamic minimum drawer height
-                  // Measure the actual button height (not container) for accurate measurement
-                  // Ensure minimum of 64px to account for text scaling
-                  const measuredHeight = Math.max(height, 56);
-                  const currentButtonHeight = buttonHeights.get(item.id);
-                  // Only update if height is valid and different, or if we don't have a measurement yet
-                  if (measuredHeight > 0 && currentButtonHeight !== measuredHeight) {
-                    buttonHeights.set(item.id, measuredHeight);
-
-                    // For message-only notifications, immediately recalculate drawer height
-                    if (!hasExpandableContent) {
-                      const dynamicMinimum = 16 + 8 + measuredHeight + 16;
-                      const currentDrawerHeight = drawerHeights.get(item.id);
-                      // Always update if we don't have a drawer height, or if current is less than minimum
-                      if (!currentDrawerHeight || currentDrawerHeight < dynamicMinimum) {
-                        drawerHeights.set(item.id, dynamicMinimum);
-                        // Trigger re-render to update drawer height calculation
-                        setDrawerHeightUpdateTrigger(prev => prev + 1);
-                      } else {
-                        // Even if drawer height is already set, trigger re-render to ensure consistency
-                        setDrawerHeightUpdateTrigger(prev => prev + 1);
-                      }
-                    } else {
-                      // Trigger re-render even for expandable content to ensure button height is stored
-                      setDrawerHeightUpdateTrigger(prev => prev + 1);
-                    }
-                  }
-                }}>
-                <IconSymbol name="trash" size={20} color={colors.deleteButtonText} />
-                <ThemedText maxFontSizeMultiplier={1.3} style={[styles.actionButtonText, { color: colors.deleteButtonText }]}>{t('buttonText.delete')}</ThemedText>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: colors.tint }]}
-                onPress={() => handleEdit(item)}
-                activeOpacity={0.7}>
-                <IconSymbol name="pencil" size={20} color={colors.buttonText} />
-                <ThemedText maxFontSizeMultiplier={1.3} style={[styles.actionButtonText, { color: colors.buttonText }]}>{t('buttonText.edit')}</ThemedText>
-              </TouchableOpacity>
-
-            </ThemedView>
+          <ThemedView style={styles.drawerContent}>
+            {renderDrawerContent()}
           </ThemedView>
         </Animated.View>
       </ThemedView>
@@ -639,8 +699,10 @@ export default function HomeScreen() {
   };
 
   const renderArchivedNotificationItem = ({ item }: { item: PastItem }) => {
-    const isExpanded = expandedIds.has(item.id);
-    const animValue = animations.get(item.id) || new Animated.Value(0);
+    // Use Past-only stable key to avoid ID collisions
+    const pastKey = getPastKey(item);
+    const isExpanded = expandedPastKeys.has(pastKey);
+    const animValue = pastAnimations.get(pastKey) || new Animated.Value(0);
 
     // Handle repeat occurrences differently
     const isRepeat = isRepeatOccurrence(item);
@@ -651,7 +713,11 @@ export default function HomeScreen() {
     const displayDateTime = isRepeat ? item.fireDateTime : item.scheduleDateTime;
     const displayDateTimeLocal = isRepeat ? new Date(item.fireDateTime).toLocaleString() : item.scheduleDateTimeLocal;
     const hasAlarm = isRepeat ? false : item.hasAlarm;
-    const repeatOption = isRepeat ? null : item.repeatOption;
+    
+    // For repeat occurrences, get repeat metadata from item (will be populated by DB query)
+    // For archived items, use item.repeatOption directly
+    const repeatOption = isRepeat ? (item as any).parentRepeatOption : item.repeatOption;
+    const parentScheduleDateTime = isRepeat ? (item as any).parentScheduleDateTime : item.scheduleDateTime;
 
     // Check if item has any expandable content (repeat option, note, or link)
     const hasRepeatOption = repeatOption && repeatOption !== 'none';
@@ -664,7 +730,7 @@ export default function HomeScreen() {
     // Add extra space for multiple rows or larger text
     const MINIMUM_DRAWER_HEIGHT = 80;
     const defaultFallbackHeight = hasExpandableContent ? Math.max(250, MINIMUM_DRAWER_HEIGHT) : 0;
-    const measuredHeight = drawerHeights.get(item.id) || defaultFallbackHeight;
+    const measuredHeight = pastDrawerHeights.get(pastKey) || defaultFallbackHeight;
 
     const drawerHeight = animValue.interpolate({
       inputRange: [0, 1],
@@ -676,20 +742,68 @@ export default function HomeScreen() {
       outputRange: [0, 1],
     });
 
-    const handleDrawerContentLayout = (event: any) => {
+    // Measure drawer content height from an unconstrained hidden view
+    // This ensures accurate measurement including blank lines and multi-line text
+    const handleMeasurementLayout = (event: any) => {
       const { height } = event.nativeEvent.layout;
       // The measured height already includes padding (16px on all sides)
       // Enforce minimum height when there's expandable content to prevent drawer from collapsing too small
       const finalHeight = hasExpandableContent ? Math.max(height, MINIMUM_DRAWER_HEIGHT) : height;
       
-      // Store the height for use in animation
-      const currentHeight = drawerHeights.get(item.id);
+      // Store the height for use in animation (using Past-only key)
+      const currentHeight = pastDrawerHeights.get(pastKey);
       if (currentHeight !== finalHeight) {
-        drawerHeights.set(item.id, finalHeight);
+        pastDrawerHeights.set(pastKey, finalHeight);
         // Trigger re-render to update animation with new height
-        setDrawerHeightUpdateTrigger(prev => prev + 1);
+        setPastDrawerHeightUpdateTrigger(prev => prev + 1);
       }
     };
+
+    // Render drawer content (reused for both measurement and visible drawer)
+    const renderDrawerContent = () => (
+      <>
+        {hasRepeatOption && (
+          <ThemedView style={styles.detailRow}>
+            <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
+              {t('detailLabels.repeat')}
+            </ThemedText>
+            <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
+              {formatRepeatOption(repeatOption!, parentScheduleDateTime || displayDateTime)}
+            </ThemedText>
+          </ThemedView>
+        )}
+
+        {hasNote && (
+          <ThemedView style={styles.detailRow}>
+            <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
+              {t('detailLabels.note')}
+            </ThemedText>
+            <ThemedText maxFontSizeMultiplier={1.6} style={[styles.detailValue, { flexShrink: 1 }]}>
+              {displayNote}
+            </ThemedText>
+          </ThemedView>
+        )}
+
+        {hasLink && (
+          <ThemedView style={styles.detailRow}>
+            <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
+              {t('detailLabels.link')}
+            </ThemedText>
+            <TouchableOpacity
+              onPress={() => openNotifierLink(displayLink!, t)}
+              activeOpacity={0.7}>
+              <ThemedText
+                maxFontSizeMultiplier={1.6}
+                style={[styles.detailValue, { color: colors.tint, textDecorationLine: 'underline' }]}
+                numberOfLines={1}
+                accessibilityRole="link">
+                {displayLink}
+              </ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+        )}
+      </>
+    );
 
     const headerContent = (
       <>
@@ -742,7 +856,7 @@ export default function HomeScreen() {
         {hasExpandableContent ? (
           <TouchableOpacity
             style={styles.notificationHeader}
-            onPress={() => toggleExpand(item.id)}
+            onPress={() => togglePastExpand(pastKey)}
             activeOpacity={0.7}>
             {headerContent}
           </TouchableOpacity>
@@ -753,61 +867,34 @@ export default function HomeScreen() {
         )}
 
         {hasExpandableContent && (
-          <Animated.View
-            style={[
-              styles.drawer,
-              {
-                height: drawerHeight,
-                opacity: opacity,
-                overflow: 'hidden',
-                borderTopColor: colors.icon + '40',
-              },
-            ]}>
+          <>
+            {/* Hidden measurement view - measures content height without animation constraints */}
             <ThemedView
-              style={styles.drawerContent}
-              onLayout={handleDrawerContentLayout}>
-              {hasRepeatOption && (
-                <ThemedView style={styles.detailRow}>
-                  <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
-                    {t('detailLabels.repeat')}
-                  </ThemedText>
-                  <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
-                    {formatRepeatOption(repeatOption!, displayDateTime)}
-                  </ThemedText>
-                </ThemedView>
-              )}
-
-              {hasNote && (
-                <ThemedView style={styles.detailRow}>
-                  <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
-                    {t('detailLabels.note')}
-                  </ThemedText>
-                  <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
-                    {displayNote}
-                  </ThemedText>
-                </ThemedView>
-              )}
-
-              {hasLink && (
-                <ThemedView style={styles.detailRow}>
-                  <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.detailLabel}>
-                    {t('detailLabels.link')}
-                  </ThemedText>
-                  <TouchableOpacity
-                    onPress={() => openNotifierLink(displayLink!, t)}
-                    activeOpacity={0.7}>
-                    <ThemedText
-                      maxFontSizeMultiplier={1.6}
-                      style={[styles.detailValue, { color: colors.tint, textDecorationLine: 'underline' }]}
-                      numberOfLines={1}
-                      accessibilityRole="link">
-                      {displayLink}
-                    </ThemedText>
-                  </TouchableOpacity>
-                </ThemedView>
-              )}
+              style={[
+                styles.drawerContent,
+                styles.measurementView,
+              ]}
+              onLayout={handleMeasurementLayout}
+              pointerEvents="none">
+              {renderDrawerContent()}
             </ThemedView>
-          </Animated.View>
+
+            {/* Visible animated drawer */}
+            <Animated.View
+              style={[
+                styles.drawer,
+                {
+                  height: drawerHeight,
+                  opacity: opacity,
+                  overflow: 'hidden',
+                  borderTopColor: colors.icon + '40',
+                },
+              ]}>
+              <ThemedView style={styles.drawerContent}>
+                {renderDrawerContent()}
+              </ThemedView>
+            </Animated.View>
+          </>
         )}
       </ThemedView>
     );
@@ -1098,6 +1185,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 16,
     gap: 12,
+  },
+  measurementView: {
+    position: 'absolute',
+    opacity: 0,
+    width: '100%',
+    zIndex: -1,
   },
   detailRow: {
     gap: 4,
