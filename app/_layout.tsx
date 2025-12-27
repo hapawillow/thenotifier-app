@@ -14,7 +14,7 @@ import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, AppState, AppStateStatus } from 'react-native';
+import { Alert, AppState, AppStateStatus, InteractionManager } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
 import ToastManager from 'toastify-react-native';
@@ -64,7 +64,7 @@ export default function RootLayout() {
   });
 
   // Helper function to handle notification navigation
-  const handleNotificationNavigation = useCallback(async (notification: Notifications.Notification, actionIdentifier: string) => {
+  const handleNotificationNavigation = useCallback(async (notification: Notifications.Notification, actionIdentifier: string, isColdStart: boolean = false) => {
     logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Notification received:', notification);
     logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Action identifier:', actionIdentifier);
 
@@ -155,16 +155,25 @@ export default function RootLayout() {
         navigationCooldownRef.current.set(dedupeKey, Date.now());
 
         // Small delay to ensure navigation is ready
-        // On cold start, use a longer delay to ensure router is fully initialized
-        const isColdStart = AppState.currentState === 'active';
-        const navDelay = isColdStart ? 300 : 100;
+        // On cold start, use router.replace() to override the default (tabs) route
+        // On foreground/background, use router.push() for proper modal presentation
+        const navDelay = isColdStart ? 500 : 100;
+        const navigationMethod = isColdStart ? 'replace' : 'push';
         
         pendingNavTimeoutRef.current = setTimeout(() => {
-          logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Executing router.push to notification-display');
-          router.push({
+          logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `handleNotificationNavigation: Executing router.${navigationMethod} to notification-display (coldStart: ${isColdStart})`);
+          
+          const navigationParams = {
             pathname: '/notification-display',
             params: { title: data.title as string, message: data.message as string, note: data.note as string, link: data.link as string },
-          });
+          };
+          
+          if (isColdStart) {
+            router.replace(navigationParams);
+          } else {
+            router.push(navigationParams);
+          }
+          
           pendingNavTimeoutRef.current = null;
         }, navDelay);
 
@@ -265,19 +274,22 @@ export default function RootLayout() {
       
       logger.info(makeLogHeader(LOG_FILE), 'Processing lastNotificationResponse - calling handleNotificationNavigation');
       
-      // On cold start, add a small delay to ensure router is fully ready
-      // This is especially important when app is launched from a notification tap
+      // On cold start, wait for all interactions to complete (including dev menu dismissal)
+      // and use router.replace() to override the default (tabs) route
       // Check if this is a cold start by seeing if responseListener hasn't been set up yet
       const isColdStart = !responseListener.current;
-      const delay = isColdStart ? 500 : 0;
       
-      if (delay > 0) {
-        logger.info(makeLogHeader(LOG_FILE), `Cold start detected, delaying navigation by ${delay}ms`);
-        setTimeout(() => {
-          handleNotificationNavigation(notification, actionIdentifier);
-        }, delay);
+      if (isColdStart) {
+        logger.info(makeLogHeader(LOG_FILE), 'Cold start detected, waiting for interactions to complete (dev menu dismissal)');
+        // Wait for all interactions to complete - this includes dismissing the Expo dev menu
+        InteractionManager.runAfterInteractions(() => {
+          // Add an additional delay after interactions complete to ensure router is ready
+          setTimeout(() => {
+            handleNotificationNavigation(notification, actionIdentifier, true);
+          }, 300);
+        });
       } else {
-        handleNotificationNavigation(notification, actionIdentifier);
+        handleNotificationNavigation(notification, actionIdentifier, false);
       }
     }
   }, [lastNotificationResponse, handleNotificationNavigation, loaded, i18nLoaded, i18nPack]);
@@ -305,7 +317,8 @@ export default function RootLayout() {
       // Only process if we haven't already handled this notification (by dedupe key)
       if (!handledNotificationsRef.current.has(dedupeKey)) {
         logger.info(makeLogHeader(LOG_FILE), 'Processing notification from listener - calling handleNotificationNavigation');
-        handleNotificationNavigation(notification, actionIdentifier);
+        // Listener is set up, so this is not a cold start
+        handleNotificationNavigation(notification, actionIdentifier, false);
       } else {
         logger.info(makeLogHeader(LOG_FILE), 'Notification already handled (dedupe key), skipping');
       }

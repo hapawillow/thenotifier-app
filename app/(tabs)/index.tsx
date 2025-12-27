@@ -12,7 +12,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-scheduling';
-import { deleteScheduledNotification, getAllActiveRepeatNotificationInstances, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrences, getRepeatOccurrencesWithParentMeta, getScheduledNotificationData, insertRepeatOccurrence, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
+import { deleteScheduledNotification, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrencesWithParentMeta, getScheduledNotificationData, insertRepeatOccurrence, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { notificationRefreshEvents } from '@/utils/notification-refresh-events';
@@ -98,7 +98,7 @@ export default function HomeScreen() {
   const MENU_ITEMS = [
     t('menuItemText.payments'),
     t('menuItemText.myGroups'),
-    t('menuItemText.myMembers'),
+    t('menuItemText.sendPush'),
     t('menuItemText.help'),
     t('menuItemText.aboutUs'),
     t('menuItemText.appearance'),
@@ -112,7 +112,7 @@ export default function HomeScreen() {
   const [drawerHeights] = useState<Map<number, number>>(new Map());
   const [buttonHeights] = useState<Map<number, number>>(new Map());
   const [drawerHeightUpdateTrigger, setDrawerHeightUpdateTrigger] = useState(0);
-  
+
   // Past-only state maps (use string keys to avoid ID collisions between archived and repeat occurrences)
   const [expandedPastKeys, setExpandedPastKeys] = useState<Set<string>>(new Set());
   const [pastAnimations] = useState<Map<string, Animated.Value>>(new Map());
@@ -713,7 +713,7 @@ export default function HomeScreen() {
     const displayDateTime = isRepeat ? item.fireDateTime : item.scheduleDateTime;
     const displayDateTimeLocal = isRepeat ? new Date(item.fireDateTime).toLocaleString() : item.scheduleDateTimeLocal;
     const hasAlarm = isRepeat ? false : item.hasAlarm;
-    
+
     // For repeat occurrences, get repeat metadata from item (will be populated by DB query)
     // For archived items, use item.repeatOption directly
     const repeatOption = isRepeat ? (item as any).parentRepeatOption : item.repeatOption;
@@ -749,7 +749,7 @@ export default function HomeScreen() {
       // The measured height already includes padding (16px on all sides)
       // Enforce minimum height when there's expandable content to prevent drawer from collapsing too small
       const finalHeight = hasExpandableContent ? Math.max(height, MINIMUM_DRAWER_HEIGHT) : height;
-      
+
       // Store the height for use in animation (using Past-only key)
       const currentHeight = pastDrawerHeights.get(pastKey);
       if (currentHeight !== finalHeight) {

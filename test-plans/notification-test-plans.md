@@ -2138,3 +2138,115 @@ After implementing fixes, re-run:
 - No reopen loop occurs
 - Deduplication works based on parent notification ID, not instance IDs
 
+---
+
+## Cold Start Notification Navigation
+
+### Test Case 14.1: Cold start - notification tap shows detail screen (production build)
+**Objective:** Verify that tapping a notification on cold start (app closed) navigates to notification detail screen, not home screen
+
+**Prerequisites:**
+- App is completely closed (not in background)
+- A one-time notification is scheduled and has fired
+- Test in production build (no dev menu)
+
+**Steps:**
+1. Ensure app is completely closed
+2. Wait for notification to fire
+3. Tap the notification banner/lockscreen notification
+4. Observe app launch sequence
+
+**Expected Results:**
+- Splash screen appears briefly
+- Notification detail screen appears (NOT home screen)
+- Detail screen shows correct notification content (title, message, note, link)
+- User can close detail screen and navigate normally
+
+---
+
+### Test Case 14.2: Cold start - notification tap shows detail screen (dev build with dev menu)
+**Objective:** Verify that tapping a notification on cold start works correctly even when Expo dev menu appears
+
+**Prerequisites:**
+- App is completely closed
+- A one-time notification is scheduled and has fired
+- Test in dev build (`npx expo run:ios --device`)
+
+**Steps:**
+1. Ensure app is completely closed
+2. Wait for notification to fire
+3. Tap the notification banner/lockscreen notification
+4. Observe Expo dev menu appears
+5. Dismiss the dev menu
+6. Observe app screen
+
+**Expected Results:**
+- Splash screen appears
+- Expo dev menu appears on top
+- After dismissing dev menu, notification detail screen is visible (NOT home screen)
+- Detail screen shows correct notification content
+- User can close detail screen and navigate normally
+
+---
+
+### Test Case 14.3: Cold start - repeat notification tap shows detail screen
+**Objective:** Verify that tapping a repeat notification on cold start also shows detail screen correctly
+
+**Prerequisites:**
+- App is completely closed
+- A daily repeat notification is scheduled and has fired
+- Test in production build
+
+**Steps:**
+1. Ensure app is completely closed
+2. Wait for daily repeat notification to fire
+3. Tap the notification banner
+4. Observe app launch sequence
+
+**Expected Results:**
+- Splash screen appears briefly
+- Notification detail screen appears (NOT home screen)
+- Detail screen shows correct notification content
+- No reopen loop occurs when closing detail screen
+
+---
+
+### Test Case 14.4: App icon launch - shows home screen (no regression)
+**Objective:** Verify that opening app via app icon still shows home screen (not affected by notification navigation changes)
+
+**Prerequisites:**
+- App is completely closed
+- No pending notifications
+
+**Steps:**
+1. Ensure app is completely closed
+2. Tap the app icon (not a notification)
+3. Observe app launch sequence
+
+**Expected Results:**
+- Splash screen appears briefly
+- Home screen appears (NOT notification detail screen)
+- App functions normally
+- No navigation to notification detail screen
+
+---
+
+### Test Case 14.5: Foreground notification tap - shows detail screen as modal (no regression)
+**Objective:** Verify that tapping a notification when app is running continues to work correctly
+
+**Prerequisites:**
+- App is running in foreground or background
+- A notification fires
+
+**Steps:**
+1. Ensure app is running (foreground or background)
+2. Wait for notification to fire
+3. Tap the notification banner
+4. Observe navigation behavior
+
+**Expected Results:**
+- Notification detail screen appears as modal overlay
+- Detail screen shows correct notification content
+- User can close detail screen and return to previous screen
+- Behavior matches previous working state
+
