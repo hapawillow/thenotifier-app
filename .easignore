@@ -1,0 +1,22 @@
+# EAS Build ignore file
+# Files and directories listed here will be excluded from the build archive
+# This is similar to .gitignore but specific to EAS Build
+
+# Exclude build artifacts
+android/build/
+android/.gradle/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+
+# Exclude IDE files
+android/.idea/
+android/*.iml
+
+# Exclude other generated files
+android/.cxx/
+android/*.hprof
+
+# IMPORTANT: Do NOT exclude gradlew files - they are required for builds
+# EAS Build will automatically include them even if they're in .gitignore
+

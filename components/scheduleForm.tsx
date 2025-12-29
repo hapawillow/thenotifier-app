@@ -23,6 +23,7 @@ import {
 } from '@/utils/repeat-start-date';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const LOG_FILE = 'components/scheduleForm.tsx';
 
@@ -43,8 +44,8 @@ Notifications.setNotificationHandler({
 const theme: KeyboardToolbarProps["theme"] = {
   dark: {
     ...DefaultKeyboardToolbarTheme.dark,
-    primary: "#8ddaff",
-    background: "#1d1d1d",
+    primary: Platform.OS === 'android' ? "#ffffff" : "#8ddaff",
+    background: Platform.OS === 'android' ? "#2d2d2d" : "#1d1d1d",
   },
   light: {
     ...DefaultKeyboardToolbarTheme.light,
@@ -118,6 +119,15 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const t = useT();
+  const insets = useSafeAreaInsets();
+
+  // On Android, detect if using button navigation vs gesture navigation
+  // Button navigation typically has bottom inset of 16-24px
+  // Gesture navigation typically has bottom inset of 0-8px
+  // Note: Safe area insets may not update dynamically when navigation mode changes
+  // The app may need to be restarted for changes to take effect
+  // Using a threshold of 16px to distinguish between button (>=16px) and gesture (<16px)
+  const isButtonNavigation = Platform.OS === 'android' && insets.bottom >= 16;
   const scrollViewRef = useRef<any>(null);
   const messageInputRef = useRef<TextInput>(null);
   const noteInputRef = useRef<TextInput>(null);
@@ -1812,7 +1822,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                     value={scheduleAlarm}
                     onValueChange={handleAlarmSwitchChange}
                     trackColor={{ false: '#888', true: '#68CFAF' }}
-                    thumbColor={Platform.OS === 'ios' ? '#f0f0f0' : colors.background}
+                    thumbColor='#f0f0f0'
                   />
                 </ThemedView>
               </ThemedView >
@@ -1836,7 +1846,21 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       <KeyboardToolbar
         opacity="CF"
         offset={{
-          opened: (source === 'tab' || source === 'schedule') ? 95 : 15,
+          opened: Platform.OS === 'android'
+            ? (() => {
+              // Adjust offset based on navigation mode and source
+              // Button navigation: toolbar needs to move down ~25px, so increase offset by 25px
+              // Gesture navigation: toolbar needs to move higher, so reduce offset by 15px (move up)
+              const baseOffset = (source === 'tab' || source === 'schedule') ? 95 : 10;
+              if (isButtonNavigation) {
+                // Button navigation: move toolbar down by increasing offset
+                return baseOffset + 20;
+              } else {
+                // Gesture navigation: move toolbar up more by reducing offset further
+                return baseOffset - 15;
+              }
+            })()
+            : ((source === 'tab' || source === 'schedule') ? 95 : 15),
           closed: 0
         }}
         theme={theme}
