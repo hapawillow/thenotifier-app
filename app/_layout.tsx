@@ -4,8 +4,12 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ChangedCalendarEvent, checkCalendarEventChanges } from '@/utils/calendar-check';
 import { calendarCheckEvents } from '@/utils/calendar-check-events';
 import { archiveScheduledNotifications, ensureDailyAlarmWindowForAllNotifications, ensureRollingWindowNotificationInstances, getAppLanguage, getOrCreateDeviceId, getScheduledNotificationData, initDatabase, insertRepeatOccurrence, migrateRollingWindowRepeatsToExpo, updateArchivedNotificationData } from '@/utils/database';
-import { I18nProvider, initI18n } from '@/utils/i18n';
+import { I18nProvider, initI18n, translate } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
+import { ensureAndroidNotificationChannel } from '@/utils/notification-channel';
+import { reconcileOrphansOnForeground, reconcileOrphansOnStartup } from '@/utils/orphan-reconcile';
+import { reconcilePermissionsOnForeground } from '@/utils/permission-reconcile';
+import { ensurePushTokensUpToDate } from '@/utils/push-tokens';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { EventSubscription } from 'expo-modules-core';
@@ -14,16 +18,12 @@ import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, AppState, AppStateStatus, InteractionManager } from 'react-native';
+import { AppState, AppStateStatus, InteractionManager } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
+import { NativeAlarmManager } from 'rn-native-alarmkit';
 import ToastManager from 'toastify-react-native';
 import appJson from '../app.json';
-import { reconcilePermissionsOnForeground } from '@/utils/permission-reconcile';
-import { translate } from '@/utils/i18n';
-import { ensurePushTokensUpToDate } from '@/utils/push-tokens';
-import { NativeAlarmManager } from 'rn-native-alarmkit';
-import { reconcileOrphansOnStartup, reconcileOrphansOnForeground } from '@/utils/orphan-reconcile';
 
 const LOG_FILE = 'app/_layout.tsx';
 
@@ -72,7 +72,7 @@ export default function RootLayout() {
 
     const notificationId = notification.request.identifier;
     const data = notification.request.content.data;
-    
+
     // Compute dedupe key: use parent notification ID if available (for repeat notifications),
     // otherwise fall back to the instance identifier
     const parentId = (data?.notificationId as string) || null;
@@ -110,7 +110,12 @@ export default function RootLayout() {
       logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Marked notification as handled');
 
       // Check if we need to archive any scheduled notifications
-      await archiveScheduledNotifications();
+      try {
+        await archiveScheduledNotifications();
+      } catch (error) {
+        // Error already logged in archiveScheduledNotifications, just prevent uncaught rejection
+        logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'Failed to archive notifications:', error);
+      }
 
       logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Data:', data);
 
@@ -164,21 +169,21 @@ export default function RootLayout() {
         // Increased cold start delay to 1000ms to ensure router is fully committed to initial route
         const navDelay = isColdStart ? 1000 : 100;
         const navigationMethod = isColdStart ? 'replace' : 'push';
-        
+
         pendingNavTimeoutRef.current = setTimeout(() => {
           logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `handleNotificationNavigation: Executing router.${navigationMethod} to notification-display (coldStart: ${isColdStart})`);
-          
+
           const navigationParams = {
-            pathname: '/notification-display',
+            pathname: '/notification-display' as const,
             params: { title: data.title as string, message: data.message as string, note: data.note as string, link: data.link as string },
           };
-          
+
           if (isColdStart) {
             router.replace(navigationParams);
           } else {
             router.push(navigationParams);
           }
-          
+
           pendingNavTimeoutRef.current = null;
         }, navDelay);
 
@@ -262,13 +267,15 @@ export default function RootLayout() {
       const data = notification.request.content.data;
       const parentId = (data?.notificationId as string) || null;
       const dedupeKey = parentId || notificationId;
-      
+
       // Create a unique response key to prevent React rerenders from retriggering
       // Use notification.date for stable key - this should be consistent across re-renders
       // If notification.date is not available, use a combination that's stable per notification instance
-      const dateValue = notification.date || notification.request.trigger?.date || 0;
+      const trigger = notification.request.trigger;
+      const triggerDate = trigger && 'date' in trigger ? trigger.date : undefined;
+      const dateValue = notification.date || triggerDate || 0;
       const responseKey = `${notificationId}-${actionIdentifier}-${dateValue}`;
-      
+
       logger.info(makeLogHeader(LOG_FILE), '=== LAST NOTIFICATION RESPONSE DETECTED ===');
       logger.info(makeLogHeader(LOG_FILE), 'Notification ID:', notificationId);
       logger.info(makeLogHeader(LOG_FILE), 'Parent ID:', parentId);
@@ -294,14 +301,14 @@ export default function RootLayout() {
       // But DON'T mark as handled yet - that will be done in handleNotificationNavigation
       // just before navigation to ensure we don't mark it handled too early (e.g., before dev menu is dismissed)
       lastProcessedResponseKeyRef.current = responseKey;
-      
+
       logger.info(makeLogHeader(LOG_FILE), 'Processing lastNotificationResponse - calling handleNotificationNavigation');
-      
+
       // On cold start, wait for all interactions to complete (including dev menu dismissal)
       // and use router.replace() to override the default (tabs) route
       // Check if this is a cold start by seeing if responseListener hasn't been set up yet
       const isColdStart = !responseListener.current;
-      
+
       if (isColdStart) {
         logger.info(makeLogHeader(LOG_FILE), 'Cold start detected, waiting for interactions to complete (dev menu dismissal)');
         // Wait for all interactions to complete - this includes dismissing the Expo dev menu
@@ -330,7 +337,7 @@ export default function RootLayout() {
       const data = notification.request.content.data;
       const parentId = (data?.notificationId as string) || null;
       const dedupeKey = parentId || notificationId;
-      
+
       logger.info(makeLogHeader(LOG_FILE), 'Notification ID:', notificationId);
       logger.info(makeLogHeader(LOG_FILE), 'Parent ID:', parentId);
       logger.info(makeLogHeader(LOG_FILE), 'Dedupe key:', dedupeKey);
@@ -343,7 +350,7 @@ export default function RootLayout() {
         // Check if this is the first response after cold start (fallback case)
         // If we were awaiting initial response, treat this as cold start navigation
         const isColdStartFallback = awaitingInitialResponseRef.current;
-        
+
         if (isColdStartFallback) {
           logger.info(makeLogHeader(LOG_FILE), 'Processing notification from listener - COLD START FALLBACK, using router.replace()');
           awaitingInitialResponseRef.current = false;
@@ -415,6 +422,11 @@ export default function RootLayout() {
       try {
         // Step 1: Initialize database
         await initDatabase();
+
+        // Step 1.25: Ensure Android notification channel is set up (must happen before scheduling)
+        await ensureAndroidNotificationChannel().catch((error) => {
+          logger.error(makeLogHeader(LOG_FILE, 'init'), 'Failed to ensure Android notification channel:', error);
+        });
 
         // Step 1.5: Ensure device ID exists and push tokens are up to date
         await getOrCreateDeviceId().catch((error) => {
@@ -513,7 +525,7 @@ export default function RootLayout() {
 
         try {
           const alarmCapability = await NativeAlarmManager.checkCapability();
-          alarmPermissionAuthorized = 
+          alarmPermissionAuthorized =
             alarmCapability.capability !== 'none' &&
             (!alarmCapability.requiresPermission || alarmCapability.platformDetails?.alarmKitAuthStatus === 'authorized');
         } catch (error) {

@@ -3,33 +3,50 @@ import * as Notifications from 'expo-notifications';
 import * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
 import { logger, makeLogHeader } from './logger';
+import { ANDROID_NOTIFICATION_CHANNEL_ID } from './notification-channel';
 
 const LOG_FILE = 'utils/database.ts';
 
-// Open the database
-async function openDatabase() {
-  const db = await SQLite.openDatabaseAsync("thenotifier.db");
-  return db;
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+
+// Open the database (shared connection)
+async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
+  try {
+    if (!dbPromise) {
+      dbPromise = SQLite.openDatabaseAsync("thenotifier.db");
+    }
+    const db = await dbPromise;
+    if (!db) {
+      logger.error(makeLogHeader(LOG_FILE, 'openDatabase'), 'Database connection is null');
+      throw new Error('Failed to open database: connection is null');
+    }
+    return db;
+  } catch (error) {
+    // Reset cached promise so future calls can retry
+    dbPromise = null;
+    logger.error(makeLogHeader(LOG_FILE, 'openDatabase'), 'Error opening database:', error);
+    throw error;
+  }
 }
 
-let db;
 let isInitialized = false;
-
-(async () => {
-  db = await openDatabase();
-})();
+let initPromise: Promise<void> | null = null;
 
 // Initialize database and create tables if they don't exist
 export const initDatabase = async () => {
   if (isInitialized) {
     return; // Already initialized, skip
   }
+  if (initPromise) {
+    return initPromise; // initialization in progress
+  }
 
-  try {
-    const db = await openDatabase();
+  initPromise = (async () => {
+    try {
+      const db = await openDatabase();
 
-    // Create scheduledNotification table if it doesn't exist
-    await db.execAsync(`
+      // Create scheduledNotification table if it doesn't exist
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS scheduledNotification (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         notificationId TEXT NOT NULL,
@@ -47,119 +64,119 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Add new columns if they don't exist (migration for existing databases)
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN repeatOption TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatOption column may already exist');
+      // Add new columns if they don't exist (migration for existing databases)
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN repeatOption TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatOption column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN notificationTrigger TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: notificationTrigger column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN notificationTrigger TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: notificationTrigger column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN hasAlarm INTEGER DEFAULT 0;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: hasAlarm column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN hasAlarm INTEGER DEFAULT 0;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: hasAlarm column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN calendarId TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: calendarId column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN calendarId TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: calendarId column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventId TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventId column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventId TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventId column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN location TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: location column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN location TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: location column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventTitle TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventTitle column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventTitle TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventTitle column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventStartDate TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventStartDate column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventStartDate TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventStartDate column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventEndDate TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventEndDate column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventEndDate TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventEndDate column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventLocation TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventLocation column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventLocation TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventLocation column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventRecurring TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventRecurring column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventRecurring TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventRecurring column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN repeatMethod TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatMethod column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN repeatMethod TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatMethod column may already exist');
+        }
       }
-    }
 
-    // Create indexes for scheduledNotification table
-    await db.execAsync(`
+      // Create indexes for scheduledNotification table
+      await db.execAsync(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduledNotification_notificationId ON scheduledNotification (notificationId);
     `);
 
-    await db.execAsync(`
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_scheduledNotification_scheduleDateTime ON scheduledNotification (scheduleDateTime);
     `);
 
-    await db.execAsync(`
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_scheduledNotification_calendar_event ON scheduledNotification (calendarId, originalEventId);
     `);
 
-    // Create archivedNotification table if it doesn't exist
-    await db.execAsync(`
+      // Create archivedNotification table if it doesn't exist
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS archivedNotification (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         notificationId TEXT NOT NULL,
@@ -180,59 +197,59 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Add new columns if they don't exist (migration for existing databases)
-    try {
-      await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN repeatOption TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatOption column may already exist');
+      // Add new columns if they don't exist (migration for existing databases)
+      try {
+        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN repeatOption TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatOption column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN notificationTrigger TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: notificationTrigger column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN notificationTrigger TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: notificationTrigger column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN hasAlarm INTEGER DEFAULT 0;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: hasAlarm column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN hasAlarm INTEGER DEFAULT 0;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: hasAlarm column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN calendarId TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: calendarId column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN calendarId TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: calendarId column may already exist');
+        }
       }
-    }
-    try {
-      await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN originalEventId TEXT DEFAULT NULL;`);
-    } catch (error: any) {
-      // Column might already exist, ignore error
-      if (!error.message?.includes('duplicate column')) {
-        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventId column may already exist');
+      try {
+        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN originalEventId TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        // Column might already exist, ignore error
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventId column may already exist');
+        }
       }
-    }
 
-    // Create indexes for archivedNotification table
-    await db.execAsync(`
+      // Create indexes for archivedNotification table
+      await db.execAsync(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_archivedNotification_notificationId ON archivedNotification (notificationId);
     `);
 
-    await db.execAsync(`
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_archivedNotification_scheduleDateTime ON archivedNotification (scheduleDateTime);
     `);
 
-    // Create calendarSelection table if it doesn't exist
-    await db.execAsync(`
+      // Create calendarSelection table if it doesn't exist
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS calendarSelection (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         calendarId TEXT NOT NULL UNIQUE,
@@ -241,13 +258,13 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Create index for calendarSelection table
-    await db.execAsync(`
+      // Create index for calendarSelection table
+      await db.execAsync(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_calendarSelection_calendarId ON calendarSelection (calendarId);
     `);
 
-    // Create appPreferences table if it doesn't exist (for storing app-level preferences like alarm permission denial state)
-    await db.execAsync(`
+      // Create appPreferences table if it doesn't exist (for storing app-level preferences like alarm permission denial state)
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS appPreferences (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         key TEXT NOT NULL UNIQUE,
@@ -256,13 +273,13 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Create index for appPreferences table
-    await db.execAsync(`
+      // Create index for appPreferences table
+      await db.execAsync(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_appPreferences_key ON appPreferences (key);
     `);
 
-    // Create ignoredCalendarEvents table if it doesn't exist (for storing ignored calendar events)
-    await db.execAsync(`
+      // Create ignoredCalendarEvents table if it doesn't exist (for storing ignored calendar events)
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS ignoredCalendarEvents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         calendarId TEXT NOT NULL,
@@ -272,13 +289,13 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Create index for ignoredCalendarEvents table
-    await db.execAsync(`
+      // Create index for ignoredCalendarEvents table
+      await db.execAsync(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_ignoredCalendarEvents_composite ON ignoredCalendarEvents (calendarId, originalEventId);
     `);
 
-    // Create dailyAlarmInstance table if it doesn't exist (for tracking AlarmKit alarms for daily repeating notifications)
-    await db.execAsync(`
+      // Create dailyAlarmInstance table if it doesn't exist (for tracking AlarmKit alarms for daily repeating notifications)
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS dailyAlarmInstance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         notificationId TEXT NOT NULL,
@@ -292,17 +309,17 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Create indexes for dailyAlarmInstance table
-    await db.execAsync(`
+      // Create indexes for dailyAlarmInstance table
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_dailyAlarmInstance_notificationId_isActive ON dailyAlarmInstance (notificationId, isActive);
     `);
 
-    await db.execAsync(`
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_dailyAlarmInstance_fireDateTime ON dailyAlarmInstance (fireDateTime);
     `);
 
-    // Create repeatNotificationInstance table if it doesn't exist (for tracking scheduled DATE notification instances for rolling-window repeats)
-    await db.execAsync(`
+      // Create repeatNotificationInstance table if it doesn't exist (for tracking scheduled DATE notification instances for rolling-window repeats)
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS repeatNotificationInstance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         parentNotificationId TEXT NOT NULL,
@@ -316,17 +333,17 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Create indexes for repeatNotificationInstance table
-    await db.execAsync(`
+      // Create indexes for repeatNotificationInstance table
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_repeatNotificationInstance_parentId_isActive ON repeatNotificationInstance (parentNotificationId, isActive);
     `);
 
-    await db.execAsync(`
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_repeatNotificationInstance_fireDateTime ON repeatNotificationInstance (fireDateTime);
     `);
 
-    // Create repeatNotificationOccurrence table if it doesn't exist (for tracking delivered occurrences of repeating notifications)
-    await db.execAsync(`
+      // Create repeatNotificationOccurrence table if it doesn't exist (for tracking delivered occurrences of repeating notifications)
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS repeatNotificationOccurrence (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         parentNotificationId TEXT NOT NULL,
@@ -341,17 +358,17 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Create indexes for repeatNotificationOccurrence table
-    await db.execAsync(`
+      // Create indexes for repeatNotificationOccurrence table
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_repeatNotificationOccurrence_parentId_fireDateTime ON repeatNotificationOccurrence (parentNotificationId, fireDateTime);
     `);
 
-    await db.execAsync(`
+      await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_repeatNotificationOccurrence_fireDateTime ON repeatNotificationOccurrence (fireDateTime);
     `);
 
-    // Create pushToken table if it doesn't exist (single-row table for device ID and push tokens)
-    await db.execAsync(`
+      // Create pushToken table if it doesn't exist (single-row table for device ID and push tokens)
+      await db.execAsync(`
       CREATE TABLE IF NOT EXISTS pushToken (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         deviceId TEXT NOT NULL,
@@ -363,18 +380,23 @@ export const initDatabase = async () => {
       );
     `);
 
-    // Insert default row if it doesn't exist (will be populated with deviceId on first use)
-    await db.execAsync(`
+      // Insert default row if it doesn't exist (will be populated with deviceId on first use)
+      await db.execAsync(`
       INSERT OR IGNORE INTO pushToken (id, deviceId, updatedAt)
       VALUES (1, '', CURRENT_TIMESTAMP);
     `);
 
-    isInitialized = true;
-    logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Database initialized successfully');
-  } catch (error: any) {
-    logger.error(makeLogHeader(LOG_FILE, 'initDatabase'), 'Database initialization failed:', error);
-    throw new Error(`Database initialization failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
+      isInitialized = true;
+      logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Database initialized successfully');
+    } catch (error: any) {
+      logger.error(makeLogHeader(LOG_FILE, 'initDatabase'), 'Database initialization failed:', error);
+      throw new Error(`Database initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  })().finally(() => {
+    initPromise = null;
+  });
+
+  return initPromise;
 };
 
 // Save scheduled notification data
@@ -397,38 +419,67 @@ export const saveScheduledNotificationData = async (
   originalEventEndDate?: string,
   originalEventLocation?: string,
   originalEventRecurring?: string,
-  repeatMethod?: 'expo' | 'rollingWindow' | null
+  repeatMethod?: 'expo' | 'rollingWindow' | 'alarm' | null
 ) => {
   logger.info(makeLogHeader(LOG_FILE, 'saveScheduledNotificationData'), 'Saving scheduled notification data:', { notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger });
   try {
-    const db = await openDatabase();
-    // First ensure table exists
+    // First ensure database is initialized
     await initDatabase();
+
+    // Then open database connection
+    const db = await openDatabase();
 
     // Serialize notificationTrigger to JSON string if provided
     const notificationTriggerJson = notificationTrigger ? JSON.stringify(notificationTrigger) : null;
     const repeatOptionValue = repeatOption || null;
     const hasAlarmValue = hasAlarm ? 1 : 0;
-
-    // Escape single quotes in string values to prevent SQL injection
-    const escapeSql = (str: string) => str.replace(/'/g, "''");
-    const notificationTriggerSql = notificationTriggerJson ? `'${escapeSql(notificationTriggerJson)}'` : 'NULL';
-    const repeatOptionSql = repeatOptionValue ? `'${escapeSql(repeatOptionValue)}'` : 'NULL';
-    const calendarIdSql = calendarId ? `'${escapeSql(calendarId)}'` : 'NULL';
-    const originalEventIdSql = originalEventId ? `'${escapeSql(originalEventId)}'` : 'NULL';
-    const locationSql = location ? `'${escapeSql(location)}'` : 'NULL';
-    const originalEventTitleSql = originalEventTitle ? `'${escapeSql(originalEventTitle)}'` : 'NULL';
-    const originalEventStartDateSql = originalEventStartDate ? `'${escapeSql(originalEventStartDate)}'` : 'NULL';
-    const originalEventEndDateSql = originalEventEndDate ? `'${escapeSql(originalEventEndDate)}'` : 'NULL';
-    const originalEventLocationSql = originalEventLocation ? `'${escapeSql(originalEventLocation)}'` : 'NULL';
-    const originalEventRecurringSql = originalEventRecurring ? `'${escapeSql(originalEventRecurring)}'` : 'NULL';
     const repeatMethodValue = repeatMethod || null;
-    const repeatMethodSql = repeatMethodValue ? `'${escapeSql(repeatMethodValue)}'` : 'NULL';
 
     // Use INSERT OR REPLACE to either insert new or update existing notification
-    await db.execAsync(
-      `INSERT OR REPLACE INTO scheduledNotification (notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, location, originalEventTitle, originalEventStartDate, originalEventEndDate, originalEventLocation, originalEventRecurring, repeatMethod, updatedAt)
-      VALUES ('${escapeSql(notificationId)}', '${escapeSql(title)}', '${escapeSql(message)}', '${escapeSql(note)}', '${escapeSql(link)}', '${scheduleDateTime}', '${escapeSql(scheduleDateTimeLocal)}', ${repeatOptionSql}, ${notificationTriggerSql}, ${hasAlarmValue}, ${calendarIdSql}, ${originalEventIdSql}, ${locationSql}, ${originalEventTitleSql}, ${originalEventStartDateSql}, ${originalEventEndDateSql}, ${originalEventLocationSql}, ${originalEventRecurringSql}, ${repeatMethodSql}, CURRENT_TIMESTAMP);`
+    await db.runAsync(
+      `INSERT OR REPLACE INTO scheduledNotification (
+        notificationId,
+        title,
+        message,
+        note,
+        link,
+        scheduleDateTime,
+        scheduleDateTimeLocal,
+        repeatOption,
+        notificationTrigger,
+        hasAlarm,
+        calendarId,
+        originalEventId,
+        location,
+        originalEventTitle,
+        originalEventStartDate,
+        originalEventEndDate,
+        originalEventLocation,
+        originalEventRecurring,
+        repeatMethod,
+        updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);`,
+      [
+        notificationId,
+        title,
+        message,
+        note,
+        link,
+        scheduleDateTime,
+        scheduleDateTimeLocal,
+        repeatOptionValue,
+        notificationTriggerJson,
+        hasAlarmValue,
+        calendarId ?? null,
+        originalEventId ?? null,
+        location ?? null,
+        originalEventTitle ?? null,
+        originalEventStartDate ?? null,
+        originalEventEndDate ?? null,
+        originalEventLocation ?? null,
+        originalEventRecurring ?? null,
+        repeatMethodValue,
+      ]
     );
     logger.info(makeLogHeader(LOG_FILE, 'saveScheduledNotificationData'), 'Notification data saved successfully');
     const result = await getScheduledNotificationData(notificationId);
@@ -618,9 +669,14 @@ export const updateScheduledNotificationData = async (
 };
 
 // Archive scheduled notification data
+// Note: This function is non-critical and should not throw errors to avoid uncaught promise rejections
 export const archiveScheduledNotifications = async () => {
   try {
     const db = await openDatabase();
+    if (!db) {
+      logger.info(makeLogHeader(LOG_FILE, 'archiveScheduledNotifications'), 'Database not available, skipping archive');
+      return;
+    }
     await initDatabase();
     // Get current time in ISO format for comparison
     const now = new Date().toISOString();
@@ -657,8 +713,9 @@ export const archiveScheduledNotifications = async () => {
       and (repeatOption IS NULL OR repeatOption = 'none');`);
     logger.info(makeLogHeader(LOG_FILE, 'archiveScheduledNotifications'), 'Deleted scheduled notification data successfully');
   } catch (error: any) {
+    // Log error but don't throw - archiving is a non-critical cleanup operation
     logger.error(makeLogHeader(LOG_FILE, 'archiveScheduledNotifications'), 'Failed to archive scheduled notification data:', error);
-    throw new Error(`Failed to archive scheduled notification data: ${error instanceof Error ? error.message : String(error)}`);
+    // Don't throw - this prevents uncaught promise rejections in callers
   }
 };
 
@@ -1031,10 +1088,10 @@ export const setAppPreference = async (key: string, value: string): Promise<void
   try {
     const db = await openDatabase();
     await initDatabase();
-    const escapeSql = (str: string) => str.replace(/'/g, "''");
-    await db.execAsync(
+    await db.runAsync(
       `INSERT OR REPLACE INTO appPreferences (key, value, updatedAt)
-      VALUES ('${escapeSql(key)}', '${escapeSql(value)}', CURRENT_TIMESTAMP);`
+      VALUES (?, ?, CURRENT_TIMESTAMP);`,
+      [key, value]
     );
     logger.info(makeLogHeader(LOG_FILE, 'setAppPreference'), `App preference saved: ${key} = ${value}`);
   } catch (error: any) {
@@ -1046,14 +1103,8 @@ export const setAppPreference = async (key: string, value: string): Promise<void
 // Save alarm permission denied state
 export const saveAlarmPermissionDenied = async (denied: boolean): Promise<void> => {
   try {
-    const db = await openDatabase();
-    await initDatabase();
-    const escapeSql = (str: string) => str.replace(/'/g, "''");
     const value = denied ? 'true' : 'false';
-    await db.execAsync(
-      `INSERT OR REPLACE INTO appPreferences (key, value, updatedAt)
-      VALUES ('alarmPermissionDenied', '${escapeSql(value)}', CURRENT_TIMESTAMP);`
-    );
+    await setAppPreference('alarmPermissionDenied', value);
     logger.info(makeLogHeader(LOG_FILE, 'saveAlarmPermissionDenied'), `Alarm permission denied state saved: ${denied}`);
   } catch (error: any) {
     logger.error(makeLogHeader(LOG_FILE, 'saveAlarmPermissionDenied'), 'Failed to save alarm permission denied state:', error);
@@ -1463,7 +1514,7 @@ export const scheduleRollingWindowNotifications = async (
       };
 
       if (Platform.OS === 'android') {
-        (notificationTrigger as any).channelId = "thenotifier";
+        (notificationTrigger as any).channelId = ANDROID_NOTIFICATION_CHANNEL_ID;
       }
 
       await Notifications.scheduleNotificationAsync({
@@ -1614,11 +1665,13 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
         }
 
         if (Platform.OS === 'android') {
-          (expoTrigger as any).channelId = "thenotifier";
+          (expoTrigger as any).channelId = ANDROID_NOTIFICATION_CHANNEL_ID;
         }
 
         // Build notification content
-        const deepLinkUrl = notification.link ? `thenotifier://notification?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=${encodeURIComponent(notification.link)}` : `thenotifier://notification?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}`;
+        const deepLinkUrl = notification.link
+          ? `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=${encodeURIComponent(notification.link)}`
+          : `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=`;
 
         const notificationContent: Notifications.NotificationContentInput = {
           title: notification.title,
@@ -1670,10 +1723,16 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                 startDate,
                 { hour, minute },
                 {
-                  title: notification.message,
+                  title: notification.title,
+                  body: notification.message,
                   color: '#8ddaff',
                   data: {
                     notificationId: notification.notificationId,
+                    title: notification.title,
+                    message: notification.message,
+                    note: notification.note || '',
+                    link: notification.link || '',
+                    url: deepLinkUrl,
                   },
                 },
                 14
@@ -1893,6 +1952,10 @@ export const ensureRollingWindowNotificationInstances = async (): Promise<void> 
         }
 
         // Build notification content from stored notification data
+        const deepLinkUrl = notification.link
+          ? `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=${encodeURIComponent(notification.link || '')}`
+          : `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=`;
+
         const notificationContent: Notifications.NotificationContentInput = {
           title: notification.title,
           body: notification.message,
@@ -1901,7 +1964,7 @@ export const ensureRollingWindowNotificationInstances = async (): Promise<void> 
             message: notification.message,
             note: notification.note || '',
             link: notification.link || '',
-            url: notification.link ? `thenotifier://notification?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=${encodeURIComponent(notification.link || '')}` : `thenotifier://notification?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}`
+            url: deepLinkUrl
           },
           sound: 'thenotifier.wav'
         };
@@ -1935,7 +1998,7 @@ export const scheduleDailyAlarmWindow = async (
   notificationId: string,
   baseDate: Date,
   time: { hour: number; minute: number },
-  alarmConfig: { title: string; color?: string; data?: any; actions?: any[] },
+  alarmConfig: { title: string; body?: string; sound?: string; color?: string; data?: any; actions?: any[] },
   count: number = 14
 ): Promise<void> => {
   const { NativeAlarmManager } = await import('rn-native-alarmkit');
@@ -1991,6 +2054,8 @@ export const scheduleDailyAlarmWindow = async (
         alarmSchedule as any, // Type assertion: native code accepts number timestamps (types will be patched)
         {
           title: alarmConfig.title,
+          body: alarmConfig.body,
+          sound: alarmConfig.sound,
           color: alarmConfig.color || '#8ddaff',
           data: {
             notificationId: notificationId,

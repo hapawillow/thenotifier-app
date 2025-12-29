@@ -23,7 +23,7 @@ export async function cancelExpoForParent(notificationId: string): Promise<void>
       const errorMessage = error instanceof Error ? error.message : String(error);
       // Ignore "not found" errors - notification may have already been cancelled
       if (!errorMessage.includes('not found') && !errorMessage.includes('NOT_FOUND')) {
-        logger.warn(makeLogHeader(LOG_FILE, 'cancelExpoForParent'), `Failed to cancel main notification ${notificationId}:`, error);
+        logger.info(makeLogHeader(LOG_FILE, 'cancelExpoForParent'), `Failed to cancel main notification ${notificationId}:`, error);
       }
     }
 
@@ -42,7 +42,7 @@ export async function cancelExpoForParent(notificationId: string): Promise<void>
         } catch (error: any) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           if (!errorMessage.includes('not found') && !errorMessage.includes('NOT_FOUND')) {
-            logger.warn(makeLogHeader(LOG_FILE, 'cancelExpoForParent'), `Failed to cancel instance ${instance.identifier}:`, error);
+            logger.info(makeLogHeader(LOG_FILE, 'cancelExpoForParent'), `Failed to cancel instance ${instance.identifier}:`, error);
           }
         }
       }
@@ -77,17 +77,17 @@ export async function cancelAlarmKitForParent(
       // For daily alarms, handle both strategies:
       // 1. Daily window: multiple fixed alarms tracked in dailyAlarmInstance table
       // 2. Native recurring daily: single recurring alarm with derived alarm ID
-      
+
       // Cancel all daily window instances
       const allInstances = await getAllDailyAlarmInstances(notificationId);
-      
+
       logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Found ${allInstances.length} daily alarm instance(s) for ${notificationId}`);
 
       for (const instance of allInstances) {
         try {
           await NativeAlarmManager.cancelAlarm(instance.alarmId);
           logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Cancelled daily alarm instance: ${instance.alarmId}`);
-          
+
           // Mark as cancelled in DB only if cancellation succeeded
           if (instance.isActive === 1) {
             await markDailyAlarmInstanceCancelled(instance.alarmId);
@@ -102,7 +102,7 @@ export async function cancelAlarmKitForParent(
               await markDailyAlarmInstanceCancelled(instance.alarmId);
             }
           } else {
-            logger.warn(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Failed to cancel daily alarm instance ${instance.alarmId}:`, error);
+            logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Failed to cancel daily alarm instance ${instance.alarmId}:`, error);
             // Don't mark as cancelled if cancellation failed
           }
         }
@@ -118,7 +118,7 @@ export async function cancelAlarmKitForParent(
         const errorMessage = error instanceof Error ? error.message : String(error);
         // Ignore "not found" errors - alarm may not exist or already cancelled
         if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-          logger.warn(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Failed to cancel native recurring daily alarm ${derivedAlarmId}:`, error);
+          logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Failed to cancel native recurring daily alarm ${derivedAlarmId}:`, error);
         } else {
           logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Native recurring daily alarm ${derivedAlarmId} not found (may not exist or already cancelled)`);
         }
@@ -126,7 +126,7 @@ export async function cancelAlarmKitForParent(
     } else {
       // For non-daily alarms (one-time, weekly, monthly, yearly), derive alarmId from notificationId
       const alarmId = notificationId.substring('thenotifier-'.length);
-      
+
       try {
         await NativeAlarmManager.cancelAlarm(alarmId);
         logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Cancelled non-daily alarm: ${alarmId}`);
@@ -134,7 +134,7 @@ export async function cancelAlarmKitForParent(
         const errorMessage = error instanceof Error ? error.message : String(error);
         // Ignore "not found" errors - alarm may have already been cancelled
         if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-          logger.warn(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Failed to cancel non-daily alarm ${alarmId}:`, error);
+          logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Failed to cancel non-daily alarm ${alarmId}:`, error);
         } else {
           logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Alarm ${alarmId} not found (already cancelled)`);
         }

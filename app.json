@@ -18,13 +18,6 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSSupportsLiveActivities": true,
         "NSSupportsLiveActivitiesFrequentUpdates": true
-      },
-      "liveActivity": {
-        "supportedActivities": [
-          {
-            "type": "app.thenotifier.thenotifier.snooze"
-          }
-        ]
       }
     },
     "android": {
@@ -71,7 +64,7 @@
           ],
           "channels": [
             {
-              "id": "thenotifier",
+              "id": "thenotifier_v2",
               "name": "The Notifier notifications",
               "importance": "high",
               "sound": "thenotifier.wav"
