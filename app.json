@@ -22,9 +22,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/adaptive-icon-foreground-512x512.png",
-        "backgroundImage": "./assets/images/adaptive-icon-background-512x512.png",
+        "backgroundColor": "#424242",
+        "foregroundImage": "./assets/images/adaptive-icon-foreground-220-432x432.png",
+        "backgroundImage": "./assets/images/adaptive-icon-background-432x432.png",
         "monochromeImage": "./assets/images/adaptive-icon-monochrome-432x432.png"
       },
       "edgeToEdgeEnabled": true,
@@ -50,6 +50,10 @@
           "backgroundColor": "#000000",
           "dark": {
             "backgroundColor": "#000000"
+          },
+          "android": {
+            "image": "./assets/images/adaptive-icon-foreground-432x432.png",
+            "resizeMode": "contain"
           }
         }
       ],

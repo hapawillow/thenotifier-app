@@ -125,7 +125,10 @@
   "toastMessages": {
     "notificationCancelled": "Your notification has been cancelled",
     "notificationScheduled": "Your notification has been scheduled!",
-    "notificationUpdated": "Your notification has been updated!"
+    "notificationUpdated": "Your notification has been updated!",
+    "messageLimitExceeded": "Messages are limited to 60 characters",
+    "noteLimitExceeded": "Notes are limited to 240 characters",
+    "linkLimitExceeded": "Links are limited to 2048 characters"
   },
   "emptyStates": {
     "noUpcomingNotifications": "No upcoming notifications",

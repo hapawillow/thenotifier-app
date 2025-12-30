@@ -354,8 +354,18 @@ export default function HomeScreen() {
 
               // Cancel all AlarmKit alarms (daily and non-daily)
               // Always attempt cancellation regardless of hasAlarm flag (idempotent)
-              await cancelAlarmKitForParent(notification.notificationId, notification.repeatOption);
-              logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Cancelled all AlarmKit alarms for:', notification.notificationId);
+              // Android-only: Use dual-strategy cancellation to handle alarm-only vs notification-only toggle behavior
+              if (Platform.OS === 'android') {
+                // Cancel using both strategies to avoid repeatOption ambiguity
+                // This ensures we catch all alarms regardless of DB state or daily-window instance tracking
+                await cancelAlarmKitForParent(notification.notificationId, 'daily');
+                await cancelAlarmKitForParent(notification.notificationId, null);
+                logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), '[Android] Cancelled all AlarmKit alarms for delete using dual-strategy:', notification.notificationId);
+              } else {
+                // iOS: Use single-strategy cancellation based on repeatOption
+                await cancelAlarmKitForParent(notification.notificationId, notification.repeatOption);
+                logger.info(makeLogHeader(LOG_FILE, 'handleDelete'), 'Cancelled all AlarmKit alarms for:', notification.notificationId);
+              }
 
               // Mark rolling-window instances as cancelled in DB (if any)
               const isRollingWindow = notification.notificationTrigger && (notification.notificationTrigger as any).type === 'DATE_WINDOW';

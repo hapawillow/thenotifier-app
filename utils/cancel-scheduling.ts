@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 import { NativeAlarmManager } from 'rn-native-alarmkit';
 import { getAllDailyAlarmInstances, markDailyAlarmInstanceCancelled } from './database';
 import { logger, makeLogHeader } from './logger';
@@ -73,6 +74,45 @@ export async function cancelAlarmKitForParent(
   repeatOption: string | null
 ): Promise<void> {
   try {
+    const NOTIFIER_PREFIX = 'thenotifier-';
+    const derivedId =
+      notificationId.startsWith(NOTIFIER_PREFIX)
+        ? notificationId.substring(NOTIFIER_PREFIX.length)
+        : notificationId;
+
+    // Android-only: Cancel all alarms by category first (most reliable for new alarms)
+    // This catches all alarms tagged with category=notificationId, including daily-window instances
+    if (Platform.OS === 'android') {
+      try {
+        await NativeAlarmManager.cancelAlarmsByCategory(notificationId);
+        logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[Android] Cancelled alarms by category: ${notificationId}`);
+      } catch (error: any) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        // Log but don't fail - legacy cancellation below will handle pre-category alarms
+        logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[Android] Category cancellation result for ${notificationId}:`, errorMessage);
+      }
+
+      // Best-effort verification: if anything remains in this category, cancel individually by id.
+      // This helps when stored IDs vary (legacy/prefixed) or cancellation partially succeeds.
+      try {
+        const remaining = await NativeAlarmManager.getAlarmsByCategory(notificationId);
+        if (remaining.length > 0) {
+          logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[Android] Remaining alarms in category after cancelAlarmsByCategory(${notificationId}): ${remaining.length}`);
+          for (const alarm of remaining) {
+            try {
+              await NativeAlarmManager.cancelAlarm(alarm.id);
+            } catch {
+              // Ignore; legacy cancellation below may still catch it
+            }
+          }
+        }
+      } catch {
+        // Ignore verification failures
+      }
+    }
+
+    // Legacy cancellation: handle alarms created before category tagging existed
+    // Also handles cases where category cancellation might have missed something
     if (repeatOption === 'daily') {
       // For daily alarms, handle both strategies:
       // 1. Daily window: multiple fixed alarms tracked in dailyAlarmInstance table
@@ -97,6 +137,17 @@ export async function cancelAlarmKitForParent(
           // Ignore "not found" errors - alarm may have already been cancelled
           if (errorMessage.includes('not found') || errorMessage.includes('ALARM_NOT_FOUND')) {
             logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Alarm ${instance.alarmId} not found (already cancelled)`);
+            // Back-compat: some DB rows may store alternate id formats; try best-effort variants.
+            // This is especially useful if older rows stored ids with prefixes.
+            try {
+              if (instance.alarmId.startsWith('fallback_')) {
+                await NativeAlarmManager.cancelAlarm(instance.alarmId.substring('fallback_'.length));
+              } else if (instance.alarmId.startsWith(NOTIFIER_PREFIX)) {
+                await NativeAlarmManager.cancelAlarm(instance.alarmId.substring(NOTIFIER_PREFIX.length));
+              }
+            } catch {
+              // Ignore
+            }
             // Still mark as cancelled in DB if it was active
             if (instance.isActive === 1) {
               await markDailyAlarmInstanceCancelled(instance.alarmId);
@@ -110,7 +161,7 @@ export async function cancelAlarmKitForParent(
 
       // Also cancel native recurring daily alarm if it exists (derived alarm ID)
       // This covers the case where a daily alarm uses native recurring instead of window strategy
-      const derivedAlarmId = notificationId.substring('thenotifier-'.length);
+      const derivedAlarmId = derivedId;
       try {
         await NativeAlarmManager.cancelAlarm(derivedAlarmId);
         logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Cancelled native recurring daily alarm: ${derivedAlarmId}`);
@@ -125,7 +176,7 @@ export async function cancelAlarmKitForParent(
       }
     } else {
       // For non-daily alarms (one-time, weekly, monthly, yearly), derive alarmId from notificationId
-      const alarmId = notificationId.substring('thenotifier-'.length);
+      const alarmId = derivedId;
 
       try {
         await NativeAlarmManager.cancelAlarm(alarmId);
@@ -137,6 +188,16 @@ export async function cancelAlarmKitForParent(
           logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Failed to cancel non-daily alarm ${alarmId}:`, error);
         } else {
           logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Alarm ${alarmId} not found (already cancelled)`);
+        }
+      }
+
+      // Back-compat: also try cancelling with the full notificationId in case an older build used it as the alarm id.
+      if (alarmId !== notificationId) {
+        try {
+          await NativeAlarmManager.cancelAlarm(notificationId);
+          logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Cancelled non-daily alarm (legacy id): ${notificationId}`);
+        } catch {
+          // Ignore
         }
       }
     }

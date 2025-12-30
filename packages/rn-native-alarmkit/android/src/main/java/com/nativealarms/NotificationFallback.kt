@@ -236,7 +236,14 @@ class NotificationFallback(private val context: Context) {
     }
 
     private fun cancelSingleAlarm(alarmId: String) {
-        val intent = Intent(context, AlarmReceiver::class.java)
+        // IMPORTANT:
+        // PendingIntent identity matching includes the Intent's action/data/type/class/categories
+        // (extras are ignored). We schedule alarms with action = "com.nativealarms.ALARM_ACTION".
+        // If we omit the action here, FLAG_NO_CREATE won't find the existing PendingIntent and
+        // the AlarmManager alarm will NOT be cancelled (leading to alarms still firing).
+        val intent = Intent(context, AlarmReceiver::class.java).apply {
+            action = "com.nativealarms.ALARM_ACTION"
+        }
         val pendingIntent = PendingIntent.getBroadcast(
             context,
             alarmId.hashCode(),

@@ -2,7 +2,7 @@ import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/d
 import { Picker } from '@react-native-picker/picker';
 import * as Notifications from 'expo-notifications';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Dimensions, Keyboard, Platform, StyleSheet, Switch, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
+import { Alert, Dimensions, Keyboard, PixelRatio, Platform, StyleSheet, Switch, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
 import { NativeAlarmManager } from 'rn-native-alarmkit';
 
 import { ThemedText } from '@/components/themed-text';
@@ -24,6 +24,7 @@ import {
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Toast } from 'toastify-react-native';
 
 const LOG_FILE = 'components/scheduleForm.tsx';
 
@@ -614,6 +615,60 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
     setShowDatePicker(false);
   }, []);
 
+  const handleMessageChange = useCallback((text: string) => {
+    const MAX_LENGTH = 60;
+    if (text.length > MAX_LENGTH) {
+      setMessage(text.substring(0, MAX_LENGTH));
+      Toast.show({
+        type: 'error',
+        text1: t('toastMessages.messageLimitExceeded'),
+        position: 'top',
+        visibilityTime: 2000,
+        autoHide: true,
+        backgroundColor: '#8B0000', // Dark red
+        textColor: '#f0f0f0', // Light text
+      });
+    } else {
+      setMessage(text);
+    }
+  }, [t]);
+
+  const handleNoteChange = useCallback((text: string) => {
+    const MAX_LENGTH = 240;
+    if (text.length > MAX_LENGTH) {
+      setNote(text.substring(0, MAX_LENGTH));
+      Toast.show({
+        type: 'error',
+        text1: t('toastMessages.noteLimitExceeded'),
+        position: 'top',
+        visibilityTime: 2000,
+        autoHide: true,
+        backgroundColor: '#8B0000', // Dark red
+        textColor: '#f0f0f0', // Light text
+      });
+    } else {
+      setNote(text);
+    }
+  }, [t]);
+
+  const handleLinkChange = useCallback((text: string) => {
+    const MAX_LENGTH = 2048;
+    if (text.length > MAX_LENGTH) {
+      setLink(text.substring(0, MAX_LENGTH));
+      Toast.show({
+        type: 'error',
+        text1: t('toastMessages.linkLimitExceeded'),
+        position: 'top',
+        visibilityTime: 2000,
+        autoHide: true,
+        backgroundColor: '#8B0000', // Dark red
+        textColor: '#f0f0f0', // Light text
+      });
+    } else {
+      setLink(text);
+    }
+  }, [t]);
+
   const handleMessageFocus = useCallback(async () => {
     const limitReached = await checkNotificationLimit();
     if (limitReached) {
@@ -906,8 +961,18 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
         // Cancel all AlarmKit alarms (daily and non-daily)
         // Always attempt cancellation regardless of editingHasAlarm flag (idempotent)
-        await cancelAlarmKitForParent(editingNotificationId, existingRepeatOption);
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled all AlarmKit alarms for edit:', editingNotificationId);
+        // Android-only: Use dual-strategy cancellation to handle alarm-only vs notification-only toggle behavior
+        if (Platform.OS === 'android') {
+          // Cancel using both strategies to avoid repeatOption ambiguity
+          // This ensures we catch all alarms regardless of DB state or daily-window instance tracking
+          await cancelAlarmKitForParent(editingNotificationId, 'daily');
+          await cancelAlarmKitForParent(editingNotificationId, null);
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Android] Cancelled all AlarmKit alarms for edit using dual-strategy:', editingNotificationId);
+        } else {
+          // iOS: Use single-strategy cancellation based on existing repeatOption
+          await cancelAlarmKitForParent(editingNotificationId, existingRepeatOption);
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled all AlarmKit alarms for edit:', editingNotificationId);
+        }
 
         // Mark rolling-window instances as cancelled in DB (if any)
         const isRollingWindow = existingNotification?.notificationTrigger && (existingNotification.notificationTrigger as any).type === 'DATE_WINDOW';
@@ -1495,6 +1560,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 body: message,
                 sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
                 color: '#8ddaff',
+                ...(Platform.OS === 'android' ? { category: notificationId } : {}),
                 data: {
                   notificationId: notificationId,
                   title: notificationTitle,
@@ -1730,41 +1796,78 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               </TouchableOpacity>
             )}
 
-            <ThemedView style={styles.inputGroup}>
-              <TouchableOpacity
-                style={repeatButtonStyle}
-                onPress={handleRepeatButtonPress}>
-                <ThemedText maxFontSizeMultiplier={1.6}>{formatRepeatOption(repeatOption)}</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
+            {/* Android: Always visible picker */}
+            {Platform.OS === 'android' && (() => {
+              // Calculate font size respecting maxFontSizeMultiplier of 1.6
+              // Picker respects system font scaling, so we need to account for that
+              const baseFontSize = 18; // Match ThemedText default fontSize
+              const fontScale = PixelRatio.getFontScale();
+              const maxMultiplier = 1.6;
+              // Calculate desired final size, then divide by fontScale to account for Picker's scaling
+              const desiredFinalSize = baseFontSize * Math.min(fontScale, maxMultiplier);
+              const calculatedFontSize = desiredFinalSize / fontScale;
 
-            {
-              showRepeatPicker && (
-                <ThemedView style={pickerContainerStyle}>
-                  <Picker
-                    selectedValue={repeatOption}
-                    onValueChange={handleRepeatChange}
-                    style={[styles.picker, { color: colors.text }]}
-                    itemStyle={{ color: colors.text }}
-                  >
-                    <Picker.Item label={t('repeatOptions.doNotRepeat')} value="none" />
-                    <Picker.Item label={t('repeatOptions.repeatEveryDay')} value="daily" />
-                    <Picker.Item label={t('repeatOptions.repeatEveryWeek')} value="weekly" />
-                    <Picker.Item label={t('repeatOptions.repeatEveryMonth')} value="monthly" />
-                    <Picker.Item label={t('repeatOptions.repeatEveryYear')} value="yearly" />
-                  </Picker>
+              return (
+                <ThemedView style={styles.inputGroup}>
+                  <ThemedText style={{ fontSize: baseFontSize }} maxFontSizeMultiplier={1.6}>{t('inputLabels.repeat')}</ThemedText>
+                  <ThemedView style={[pickerContainerStyle, { paddingTop: 0, paddingBottom: 0, paddingHorizontal: 8 }]}>
+                    <Picker
+                      selectedValue={repeatOption}
+                      onValueChange={handleRepeatChange}
+                      style={[styles.picker, { color: colors.text, fontSize: calculatedFontSize, paddingLeft: 4 }]}
+                      itemStyle={{ color: colors.text, fontSize: calculatedFontSize }}
+                    >
+                      <Picker.Item label={t('repeatOptions.doNotRepeat')} value="none" />
+                      <Picker.Item label={t('repeatOptions.repeatEveryDay')} value="daily" />
+                      <Picker.Item label={t('repeatOptions.repeatEveryWeek')} value="weekly" />
+                      <Picker.Item label={t('repeatOptions.repeatEveryMonth')} value="monthly" />
+                      <Picker.Item label={t('repeatOptions.repeatEveryYear')} value="yearly" />
+                    </Picker>
+                  </ThemedView>
                 </ThemedView>
-              )
-            }
-            {
-              Platform.OS === 'ios' && showRepeatPicker && (
-                <TouchableOpacity
-                  style={doneButtonStyle}
-                  onPress={handleRepeatDonePress}>
-                  <ThemedText maxFontSizeMultiplier={1.6} style={doneButtonTextStyle}>{t('buttonText.done')}</ThemedText>
-                </TouchableOpacity >
-              )
-            }
+              );
+            })()}
+
+            {/* iOS: Button + conditional picker */}
+            {Platform.OS === 'ios' && (
+              <>
+                <ThemedView style={styles.inputGroup}>
+                  <TouchableOpacity
+                    style={repeatButtonStyle}
+                    onPress={handleRepeatButtonPress}>
+                    <ThemedText maxFontSizeMultiplier={1.6}>{formatRepeatOption(repeatOption)}</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+
+                {
+                  showRepeatPicker && (
+                    <ThemedView style={pickerContainerStyle}>
+                      <Picker
+                        selectedValue={repeatOption}
+                        onValueChange={handleRepeatChange}
+                        style={[styles.picker, { color: colors.text }]}
+                        itemStyle={{ color: colors.text }}
+                      >
+                        <Picker.Item label={t('repeatOptions.doNotRepeat')} value="none" />
+                        <Picker.Item label={t('repeatOptions.repeatEveryDay')} value="daily" />
+                        <Picker.Item label={t('repeatOptions.repeatEveryWeek')} value="weekly" />
+                        <Picker.Item label={t('repeatOptions.repeatEveryMonth')} value="monthly" />
+                        <Picker.Item label={t('repeatOptions.repeatEveryYear')} value="yearly" />
+                      </Picker>
+                    </ThemedView>
+                  )
+                }
+                {
+                  showRepeatPicker && (
+                    <TouchableOpacity
+                      style={doneButtonStyle}
+                      onPress={handleRepeatDonePress}>
+                      <ThemedText maxFontSizeMultiplier={1.6} style={doneButtonTextStyle}>{t('buttonText.done')}</ThemedText>
+                    </TouchableOpacity >
+                  )
+                }
+              </>
+            )}
 
             <ThemedView style={styles.inputGroup}>
               <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>{t('inputLabels.message')}</ThemedText>
@@ -1774,10 +1877,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 placeholder={t('inputPlaceholders.notificationMessage')}
                 placeholderTextColor={colors.placeholderText}
                 value={message}
-                onChangeText={setMessage}
+                onChangeText={handleMessageChange}
                 onFocus={handleMessageFocus}
-                multiline
-                numberOfLines={2}
+                // multiline
+                // numberOfLines={1}
                 maxFontSizeMultiplier={1.6}
               />
             </ThemedView >
@@ -1790,7 +1893,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 placeholder={t('inputPlaceholders.shortNote')}
                 placeholderTextColor={colors.placeholderText}
                 value={note}
-                onChangeText={setNote}
+                onChangeText={handleNoteChange}
                 onFocus={handleNoteFocus}
                 multiline
                 numberOfLines={6}
@@ -1806,7 +1909,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 placeholder={t('inputPlaceholders.linkToOpen')}
                 placeholderTextColor={colors.placeholderText}
                 value={link}
-                onChangeText={setLink}
+                onChangeText={handleLinkChange}
                 onFocus={handleLinkFocus}
                 onBlur={handleLinkBlur}
                 maxFontSizeMultiplier={1.6}

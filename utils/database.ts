@@ -2057,6 +2057,7 @@ export const scheduleDailyAlarmWindow = async (
           body: alarmConfig.body,
           sound: alarmConfig.sound,
           color: alarmConfig.color || '#8ddaff',
+          ...(Platform.OS === 'android' ? { category: notificationId } : {}),
           data: {
             notificationId: notificationId,
             ...alarmConfig.data,
@@ -2065,10 +2066,12 @@ export const scheduleDailyAlarmWindow = async (
         }
       );
 
-      // Persist the alarm instance with platformAlarmId
+      // Persist the alarm instance id for future cancellation.
+      // Use alarmResult.id (unprefixed logical id). Older builds may have stored platformAlarmId;
+      // cancellation code handles legacy rows, but new rows should store the canonical id.
       await insertDailyAlarmInstance(
         notificationId,
-        alarmResult.platformAlarmId || alarmId,
+        alarmResult.id || alarmId,
         alarmDate.toISOString()
       );
     } catch (error) {
