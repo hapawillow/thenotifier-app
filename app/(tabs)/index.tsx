@@ -12,7 +12,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { checkCalendarEventChanges } from '@/utils/calendar-check';
 import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-scheduling';
-import { deleteScheduledNotification, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrencesWithParentMeta, getScheduledNotificationData, insertRepeatOccurrence, markAllRepeatNotificationInstancesCancelled } from '@/utils/database';
+import { deleteScheduledNotification, getAllArchivedNotificationData, getAllScheduledNotificationData, getRepeatOccurrencesWithParentMeta, getScheduledNotificationData, insertRepeatOccurrence, markAllRepeatNotificationInstancesCancelled, migrateDailyRollingWindowToNative } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { notificationRefreshEvents } from '@/utils/notification-refresh-events';
@@ -260,6 +260,16 @@ export default function HomeScreen() {
 
           await insertRepeatOccurrence(parentId, fireDateTime, 'foreground', snapshot);
           logger.info(makeLogHeader(LOG_FILE), `[RepeatOccurrence] Recorded foreground occurrence for ${parentId} at ${fireDateTime}`);
+          
+          // iOS-only: Migrate daily rolling-window to native daily repeat on first occurrence
+          if (scheduledNotification.repeatOption === 'daily' && scheduledNotification.repeatMethod === 'rollingWindow') {
+            try {
+              await migrateDailyRollingWindowToNative(parentId);
+              logger.info(makeLogHeader(LOG_FILE), `[DailyMigration] Triggered migration for ${parentId} on first occurrence (foreground)`);
+            } catch (migrationError) {
+              logger.error(makeLogHeader(LOG_FILE), `[DailyMigration] Failed to migrate ${parentId}:`, migrationError);
+            }
+          }
         }
       } catch (error) {
         logger.error(makeLogHeader(LOG_FILE), 'Failed to record repeat occurrence from foreground listener:', error);

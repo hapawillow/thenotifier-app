@@ -1717,42 +1717,78 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
             const { NativeAlarmManager } = await import('rn-native-alarmkit');
 
             if (notification.repeatOption === 'daily') {
-              // Schedule new daily alarms first (safer order)
-              await scheduleDailyAlarmWindow(
-                notification.notificationId,
-                startDate,
-                { hour, minute },
-                {
-                  title: notification.title,
-                  body: notification.message,
-                  color: '#8ddaff',
-                  data: {
-                    notificationId: notification.notificationId,
-                    title: notification.title,
-                    message: notification.message,
-                    note: notification.note || '',
-                    link: notification.link || '',
-                    url: deepLinkUrl,
-                  },
-                },
-                14
-              );
-              logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduled new daily alarm window`);
-
-              // Then cancel old daily alarms
-              const dailyInstances = await getAllActiveDailyAlarmInstances(notification.notificationId);
-              for (const instance of dailyInstances) {
-                try {
-                  await NativeAlarmManager.cancelAlarm(instance.alarmId);
-                  await markDailyAlarmInstanceCancelled(instance.alarmId);
-                } catch (alarmCancelError: any) {
-                  const errorMessage = alarmCancelError instanceof Error ? alarmCancelError.message : String(alarmCancelError);
-                  if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-                    throw alarmCancelError; // Re-throw if it's a real error
+              // iOS-only: Migrate to native daily repeating alarm (single alarm chain, not window)
+              if (Platform.OS === 'ios') {
+                // Cancel all rolling-window daily alarms first
+                const dailyInstances = await getAllActiveDailyAlarmInstances(notification.notificationId);
+                for (const instance of dailyInstances) {
+                  try {
+                    await NativeAlarmManager.cancelAlarm(instance.alarmId);
+                    await markDailyAlarmInstanceCancelled(instance.alarmId);
+                  } catch (alarmCancelError: any) {
+                    const errorMessage = alarmCancelError instanceof Error ? alarmCancelError.message : String(alarmCancelError);
+                    if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+                      logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Warning: Failed to cancel old alarm ${instance.alarmId}: ${errorMessage}`);
+                    }
                   }
                 }
+                logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Cancelled ${dailyInstances.length} old daily alarm instances`);
+                
+                // Schedule a single native daily repeating alarm
+                // Use stable alarm ID derived from notificationId (without prefix)
+                const alarmId = notification.notificationId.substring('thenotifier-'.length);
+                const alarmSchedule = {
+                  id: alarmId,
+                  type: 'recurring' as const,
+                  repeatInterval: 'daily' as const,
+                  time: { hour, minute },
+                };
+                
+                await NativeAlarmManager.scheduleAlarm(
+                  alarmSchedule as any,
+                  {
+                    title: notification.title,
+                    body: notification.message,
+                    sound: 'thenotifier',
+                    color: '#8ddaff',
+                    data: {
+                      notificationId: notification.notificationId,
+                      title: notification.title,
+                      message: notification.message,
+                      note: notification.note || '',
+                      link: notification.link || '',
+                      url: deepLinkUrl,
+                    },
+                    actions: [
+                      { icon: 'ic_cancel', behavior: 'dismiss', title: 'Dismiss', id: 'dismiss' },
+                      { icon: 'ic_snooze', snoozeDuration: 10, behavior: 'snooze', title: 'Snooze 10m', id: 'snooze' },
+                    ],
+                  }
+                );
+                logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduled native daily repeating alarm: ${alarmId}`);
+              } else {
+                // Android: Continue using window strategy
+                await scheduleDailyAlarmWindow(
+                  notification.notificationId,
+                  startDate,
+                  { hour, minute },
+                  {
+                    title: notification.title,
+                    body: notification.message,
+                    color: '#8ddaff',
+                    data: {
+                      notificationId: notification.notificationId,
+                      title: notification.title,
+                      message: notification.message,
+                      note: notification.note || '',
+                      link: notification.link || '',
+                      url: deepLinkUrl,
+                    },
+                  },
+                  14
+                );
+                logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduled new daily alarm window (Android)`);
               }
-              logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Cancelled old daily alarm instances`);
             } else {
               // Weekly/monthly/yearly: schedule new alarm first
               const alarmId = notification.notificationId.substring("thenotifier-".length);
@@ -1883,6 +1919,150 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
     logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Migration complete: ${migrated} migrated, ${skipped} skipped`);
   } catch (error) {
     logger.error(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), '[RepeatMigration] Migration failed:', error);
+  }
+};
+
+// iOS-only: Migrate a single daily rolling-window notification to native daily repeat
+// Called when the first occurrence is detected (tap/foreground)
+export const migrateDailyRollingWindowToNative = async (notificationId: string): Promise<void> => {
+  if (Platform.OS !== 'ios') {
+    return; // iOS-only function
+  }
+  
+  try {
+    const notification = await getScheduledNotificationData(notificationId);
+    
+    if (!notification) {
+      logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Notification ${notificationId} not found`);
+      return;
+    }
+    
+    // Only migrate if it's a daily rolling-window notification
+    if (notification.repeatOption !== 'daily' || notification.repeatMethod !== 'rollingWindow') {
+      logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Notification ${notificationId} is not a daily rolling-window notification`);
+      return;
+    }
+    
+    logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Starting migration for ${notificationId}`);
+    
+    // Cancel all remaining rolling-window notification instances
+    const activeInstances = await getAllActiveRepeatNotificationInstances(notificationId);
+    for (const instance of activeInstances) {
+      try {
+        await Notifications.cancelScheduledNotificationAsync(instance.instanceNotificationId);
+        await markRepeatNotificationInstanceCancelled(instance.instanceNotificationId);
+      } catch (error: any) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (!errorMessage.includes('not found') && !errorMessage.includes('NOT_FOUND')) {
+          logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Warning: Failed to cancel instance ${instance.instanceNotificationId}: ${errorMessage}`);
+        }
+      }
+    }
+    logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Cancelled ${activeInstances.length} rolling-window notification instances`);
+    
+    // Schedule Expo DAILY repeating notification
+    const startDate = new Date(notification.scheduleDateTime);
+    const hour = startDate.getHours();
+    const minute = startDate.getMinutes();
+    
+    const expoTrigger: Notifications.NotificationTriggerInput = {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: hour,
+      minute: minute,
+    };
+    
+    const deepLinkUrl = notification.link
+      ? `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=${encodeURIComponent(notification.link)}`
+      : `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=`;
+    
+    const notificationContent: Notifications.NotificationContentInput = {
+      title: notification.title,
+      body: notification.message,
+      data: {
+        title: notification.title,
+        message: notification.message,
+        note: notification.note || '',
+        link: notification.link || '',
+        url: deepLinkUrl
+      },
+      sound: 'thenotifier.wav',
+      interruptionLevel: 'timeSensitive',
+    };
+    
+    await Notifications.scheduleNotificationAsync({
+      identifier: notificationId,
+      content: notificationContent,
+      trigger: expoTrigger,
+    });
+    logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Scheduled Expo DAILY repeating notification`);
+    
+    // Cancel all rolling-window daily alarms and schedule native daily repeating alarm
+    if (notification.hasAlarm) {
+      const { NativeAlarmManager } = await import('rn-native-alarmkit');
+      
+      // Cancel all rolling-window alarms
+      const dailyInstances = await getAllActiveDailyAlarmInstances(notificationId);
+      for (const instance of dailyInstances) {
+        try {
+          await NativeAlarmManager.cancelAlarm(instance.alarmId);
+          await markDailyAlarmInstanceCancelled(instance.alarmId);
+        } catch (alarmCancelError: any) {
+          const errorMessage = alarmCancelError instanceof Error ? alarmCancelError.message : String(alarmCancelError);
+          if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+            logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Warning: Failed to cancel alarm ${instance.alarmId}: ${errorMessage}`);
+          }
+        }
+      }
+      logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Cancelled ${dailyInstances.length} rolling-window alarms`);
+      
+      // Schedule native daily repeating alarm
+      const alarmId = notificationId.substring('thenotifier-'.length);
+      const alarmSchedule = {
+        id: alarmId,
+        type: 'recurring' as const,
+        repeatInterval: 'daily' as const,
+        time: { hour, minute },
+      };
+      
+      await NativeAlarmManager.scheduleAlarm(
+        alarmSchedule as any,
+        {
+          title: notification.title,
+          body: notification.message,
+          sound: 'thenotifier',
+          color: '#8ddaff',
+          data: {
+            notificationId: notificationId,
+            title: notification.title,
+            message: notification.message,
+            note: notification.note || '',
+            link: notification.link || '',
+            url: deepLinkUrl,
+          },
+          actions: [
+            { icon: 'ic_cancel', behavior: 'dismiss', title: 'Dismiss', id: 'dismiss' },
+            { icon: 'ic_snooze', snoozeDuration: 10, behavior: 'snooze', title: 'Snooze 10m', id: 'snooze' },
+          ],
+        }
+      );
+      logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Scheduled native daily repeating alarm: ${alarmId}`);
+    }
+    
+    // Update DB: set repeatMethod to 'expo'
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    await db.execAsync(
+      `UPDATE scheduledNotification 
+       SET repeatMethod = 'expo', updatedAt = CURRENT_TIMESTAMP 
+       WHERE notificationId = '${escapeSql(notificationId)}';`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Updated DB: set repeatMethod='expo'`);
+    
+    logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Successfully migrated ${notificationId}`);
+  } catch (error) {
+    logger.error(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Failed to migrate ${notificationId}:`, error);
+    throw error;
   }
 };
 
@@ -2039,6 +2219,20 @@ export const scheduleDailyAlarmWindow = async (
   // Schedule each alarm
   for (const alarmDate of dates) {
     try {
+      const fireDateTimeIso = alarmDate.toISOString();
+      
+      // iOS-only: Check if this alarm instance already exists in DB before scheduling
+      // This prevents duplicate OS alarms when replenisher runs overlap or migration happens
+      if (Platform.OS === 'ios') {
+        const allInstances = await getAllDailyAlarmInstances(notificationId);
+        const alreadyExists = allInstances.some(inst => inst.fireDateTime === fireDateTimeIso);
+        
+        if (alreadyExists) {
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `[iOS] Skipping duplicate alarm instance for ${notificationId} at ${fireDateTimeIso}`);
+          continue;
+        }
+      }
+      
       const alarmId = Crypto.randomUUID();
       const alarmSchedule = {
         id: alarmId,
@@ -2072,7 +2266,7 @@ export const scheduleDailyAlarmWindow = async (
       await insertDailyAlarmInstance(
         notificationId,
         alarmResult.id || alarmId,
-        alarmDate.toISOString()
+        fireDateTimeIso
       );
     } catch (error) {
       logger.error(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `Failed to schedule daily alarm instance for ${alarmDate.toISOString()}:`, error);
@@ -2081,17 +2275,55 @@ export const scheduleDailyAlarmWindow = async (
   }
 };
 
+// iOS-only mutex to prevent overlapping replenishment runs
+let iosReplenisherInFlight: Promise<void> | null = null;
+
 // Ensure daily alarm window for all daily notifications (replenisher)
 export const ensureDailyAlarmWindowForAllNotifications = async (): Promise<void> => {
+  // iOS-only: Prevent overlapping runs with a mutex
+  if (Platform.OS === 'ios') {
+    if (iosReplenisherInFlight) {
+      logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), '[iOS] Replenisher already in flight, waiting...');
+      await iosReplenisherInFlight;
+      return;
+    }
+    
+    iosReplenisherInFlight = (async () => {
+      try {
+        await ensureDailyAlarmWindowForAllNotificationsInternal();
+      } finally {
+        iosReplenisherInFlight = null;
+      }
+    })();
+    
+    await iosReplenisherInFlight;
+    return;
+  }
+  
+  // Android: Run directly without mutex
+  await ensureDailyAlarmWindowForAllNotificationsInternal();
+};
+
+// Internal implementation (called directly on Android, via mutex on iOS)
+const ensureDailyAlarmWindowForAllNotificationsInternal = async (): Promise<void> => {
   const scheduledNotifications = await getAllScheduledNotificationData();
 
   const now = new Date();
   const nowIso = now.toISOString();
   const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
 
-  // Filter for daily notifications with alarms enabled
+  // iOS-only: Filter for daily notifications with alarms enabled AND still using rolling-window strategy
+  // Once migrated to native daily repeat (repeatMethod === 'expo'), we stop replenishing the alarm window
   const dailyNotifications = scheduledNotifications.filter(
-    n => n.repeatOption === 'daily' && n.hasAlarm
+    n => {
+      if (n.repeatOption !== 'daily' || !n.hasAlarm) return false;
+      // iOS-only: Only replenish if still using rolling-window strategy
+      if (Platform.OS === 'ios') {
+        return n.repeatMethod === 'rollingWindow';
+      }
+      // Android: Continue existing behavior
+      return true;
+    }
   );
 
   for (const notification of dailyNotifications) {
@@ -2107,12 +2339,23 @@ export const ensureDailyAlarmWindowForAllNotifications = async (): Promise<void>
         const needed = 14 - activeInstances.length;
 
         // Parse the notification trigger to get time
+        // iOS-only: If trigger lacks hour/minute (e.g., DATE_WINDOW), derive from scheduleDateTime
         let hour = 8;
         let minute = 0;
         if (notification.notificationTrigger) {
           const trigger = notification.notificationTrigger as any;
           if (trigger.hour !== undefined) hour = trigger.hour;
           if (trigger.minute !== undefined) minute = trigger.minute;
+        }
+        
+        // iOS-only: If trigger doesn't have hour/minute (e.g., DATE_WINDOW), derive from scheduleDateTime
+        if (Platform.OS === 'ios' && (!notification.notificationTrigger || 
+            (notification.notificationTrigger as any).hour === undefined || 
+            (notification.notificationTrigger as any).minute === undefined)) {
+          const scheduleDate = new Date(notification.scheduleDateTime);
+          hour = scheduleDate.getHours();
+          minute = scheduleDate.getMinutes();
+          logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), `[iOS] Derived hour=${hour}, minute=${minute} from scheduleDateTime for ${notification.notificationId}`);
         }
 
         // Find the latest scheduled date or use scheduleDateTime

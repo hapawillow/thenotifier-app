@@ -1,5 +1,5 @@
 import * as Notifications from 'expo-notifications';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { NativeAlarmManager } from 'rn-native-alarmkit';
 import { cancelAlarmKitForParent, cancelExpoForParent } from './cancel-scheduling';
 import {
@@ -143,6 +143,9 @@ async function ensurePlatformMatchesDB(
       }).filter(Boolean) as string[]
     );
 
+    // iOS-only: Track if we need to replenish daily alarm windows (call once per pass, not per parent)
+    let iosNeedsDailyAlarmReplenish = false;
+    
     for (const parent of dbScheduledParents) {
       try {
         const existsOnPlatform = platformNotificationIds.has(parent.notificationId);
@@ -165,8 +168,21 @@ async function ensurePlatformMatchesDB(
           }
         }
 
-        // Ensure daily alarm window exists (if using daily window strategy)
+        // iOS-only: Track if we need to replenish daily alarm windows (call once per pass)
         if (
+          Platform.OS === 'ios' &&
+          parent.repeatOption === 'daily' &&
+          parent.hasAlarm &&
+          parent.repeatMethod === 'rollingWindow' &&
+          alarmPermissionAuthorized &&
+          notificationPermissionGranted
+        ) {
+          iosNeedsDailyAlarmReplenish = true;
+        }
+        
+        // Android: Continue calling per-parent (existing behavior)
+        if (
+          Platform.OS === 'android' &&
           parent.repeatOption === 'daily' &&
           parent.hasAlarm &&
           alarmPermissionAuthorized &&
@@ -186,6 +202,17 @@ async function ensurePlatformMatchesDB(
         // For now, we rely on the cancellation logic to remove orphans
       } catch (error) {
         logger.error(makeLogHeader(LOG_FILE, 'ensurePlatformMatchesDB'), `Failed to ensure platform matches DB for ${parent.notificationId}:`, error);
+        failures++;
+      }
+    }
+    
+    // iOS-only: Call replenisher once per reconcile pass (not per parent)
+    if (Platform.OS === 'ios' && iosNeedsDailyAlarmReplenish && alarmPermissionAuthorized && notificationPermissionGranted) {
+      try {
+        await ensureDailyAlarmWindowForAllNotifications();
+        rescheduled++;
+      } catch (error) {
+        logger.error(makeLogHeader(LOG_FILE, 'ensurePlatformMatchesDB'), `Failed to ensure daily alarm window (iOS batch):`, error);
         failures++;
       }
     }

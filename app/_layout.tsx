@@ -3,7 +3,7 @@ import { CalendarChangeModal } from '@/components/calendar-change-modal';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ChangedCalendarEvent, checkCalendarEventChanges } from '@/utils/calendar-check';
 import { calendarCheckEvents } from '@/utils/calendar-check-events';
-import { archiveScheduledNotifications, ensureDailyAlarmWindowForAllNotifications, ensureRollingWindowNotificationInstances, getAppLanguage, getOrCreateDeviceId, getScheduledNotificationData, initDatabase, insertRepeatOccurrence, migrateRollingWindowRepeatsToExpo, updateArchivedNotificationData } from '@/utils/database';
+import { archiveScheduledNotifications, ensureDailyAlarmWindowForAllNotifications, ensureRollingWindowNotificationInstances, getAppLanguage, getOrCreateDeviceId, getScheduledNotificationData, initDatabase, insertRepeatOccurrence, migrateDailyRollingWindowToNative, migrateRollingWindowRepeatsToExpo, updateArchivedNotificationData } from '@/utils/database';
 import { I18nProvider, initI18n, translate } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { ensureAndroidNotificationChannel } from '@/utils/notification-channel';
@@ -139,6 +139,16 @@ export default function RootLayout() {
 
           await insertRepeatOccurrence(parentId, fireDateTime, 'tap', snapshot);
           logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Recorded tap occurrence for ${parentId} at ${fireDateTime}`);
+          
+          // iOS-only: Migrate daily rolling-window to native daily repeat on first occurrence
+          if (scheduledNotification.repeatOption === 'daily' && scheduledNotification.repeatMethod === 'rollingWindow') {
+            try {
+              await migrateDailyRollingWindowToNative(parentId);
+              logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[DailyMigration] Triggered migration for ${parentId} on first occurrence`);
+            } catch (migrationError) {
+              logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[DailyMigration] Failed to migrate ${parentId}:`, migrationError);
+            }
+          }
         }
       } catch (error) {
         logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Failed to record repeat occurrence:', error);
