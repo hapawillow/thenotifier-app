@@ -105,7 +105,15 @@ export default function OSScheduledNotificationsScreen() {
         })
       );
 
-      setScheduledNotifications(enriched);
+      // Sort by earliest next trigger time (unknowns last) for easier debugging
+      const sorted = [...enriched].sort((a, b) => {
+        const aTime = a.nextTriggerDate ? a.nextTriggerDate.getTime() : Number.POSITIVE_INFINITY;
+        const bTime = b.nextTriggerDate ? b.nextTriggerDate.getTime() : Number.POSITIVE_INFINITY;
+        if (aTime !== bTime) return aTime - bTime;
+        return String(a.identifier).localeCompare(String(b.identifier));
+      });
+
+      setScheduledNotifications(sorted);
     } catch (error) {
       console.error('Failed to load scheduled notifications:', error);
     }

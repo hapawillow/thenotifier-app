@@ -36,7 +36,14 @@ export default function NativeAlarmsScreen() {
   const loadAlarms = useCallback(async () => {
     try {
       const allAlarms = await NativeAlarmManager.getAllAlarms();
-      setAlarms(allAlarms);
+      // Sort by earliest next fire time (unknowns last) for easier debugging
+      const sorted = [...allAlarms].sort((a, b) => {
+        const aTime = a.nextFireDate ? new Date(a.nextFireDate).getTime() : Number.POSITIVE_INFINITY;
+        const bTime = b.nextFireDate ? new Date(b.nextFireDate).getTime() : Number.POSITIVE_INFINITY;
+        if (aTime !== bTime) return aTime - bTime;
+        return String(a.id).localeCompare(String(b.id));
+      });
+      setAlarms(sorted);
     } catch (error) {
       console.error('Failed to load alarms:', error);
     }
