@@ -97,10 +97,10 @@
     "failedToLoadCalendarEvents": "Failed to load calendar events",
     "settingsInstructions": "Please go to Settings > The Notifier > Calendar and enable access.",
     "existingNotificationMessage": "There's an upcoming notification for this. Do you want to create another one?",
-    "dailyAlarmMessage": "To prevent your phone from stopping this daily alarm, you may need to use this app at least once every two week period after the start date.",
-    "weeklyNotificationMessage": "To prevent your phone from stopping this weekly notification, you may need to use use this app at least once a month after the start date.",
-    "monthlyNotificationMessage": "To prevent your phone from stopping this monthly notification, you may need to use use this app at least once a month after the start date.",
-    "yearlyNotificationMessage": "To prevent your phone from stopping this yearly notification, you may need to use use this app at least once a year after the start date.",
+    "dailyAlarmMessage": "To prevent your phone from stopping this daily alarm, you should open this app within a week after the start date.",
+    "weeklyNotificationMessage": "To prevent your phone from stopping this weekly notification, you should open this app within a month after the start date.",
+    "monthlyNotificationMessage": "To prevent your phone from stopping this monthly notification, you should open this app within a month after the start date.",
+    "yearlyNotificationMessage": "To prevent your phone from stopping this yearly notification, you should open this app within a year after the start date.",
     "alarmSchedulingWarning": "The notification was scheduled, but there was a problem scheduling the alarm: {{error}}",
     "notificationPermissionRemovedCleanup": "The Notifier has detected that it no longer has permission to schedule notifications and alarms. As a result, upcoming notifications have been removed.",
     "alarmPermissionRemovedCleanup": "The Notifier has detected that it no longer has permission to schedule alarms. As a result, alarms have been removed from your upcoming notifications."
@@ -125,7 +125,10 @@
   "toastMessages": {
     "notificationCancelled": "Your notification has been cancelled",
     "notificationScheduled": "Your notification has been scheduled!",
-    "notificationUpdated": "Your notification has been updated!"
+    "notificationUpdated": "Your notification has been updated!",
+    "messageLimitExceeded": "Messages are limited to 60 characters",
+    "noteLimitExceeded": "Notes are limited to 240 characters",
+    "linkLimitExceeded": "Links are limited to 2048 characters"
   },
   "emptyStates": {
     "noUpcomingNotifications": "No upcoming notifications",

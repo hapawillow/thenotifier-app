@@ -22,6 +22,7 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+*.apk
 
 # Metro
 .metro-health-check*
@@ -46,3 +47,8 @@ app-example
 # generated native folders
 /ios/*
 /android/*
+# But allow gradlew files needed for EAS builds
+!/android/gradlew
+!/android/gradlew.bat
+!/android/gradle/
+!/android/gradle/**

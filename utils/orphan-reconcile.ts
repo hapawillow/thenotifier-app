@@ -5,11 +5,9 @@ import { cancelAlarmKitForParent, cancelExpoForParent } from './cancel-schedulin
 import {
   ensureDailyAlarmWindowForAllNotifications,
   ensureRollingWindowNotificationInstances,
-  getAllActiveRepeatNotificationInstances,
-  getAllDailyAlarmInstances,
   getAllScheduledNotificationData,
   getAppPreference,
-  setAppPreference,
+  setAppPreference
 } from './database';
 import { logger, makeLogHeader } from './logger';
 import { notificationRefreshEvents } from './notification-refresh-events';
@@ -72,10 +70,11 @@ async function cancelPlatformOrphans(
   try {
     // Cancel orphaned Expo notifications
     const allScheduled = await Notifications.getAllScheduledNotificationsAsync();
-    
+
     for (const notif of allScheduled) {
       const identifier = notif.identifier;
-      const parentId = notif.content.data?.notificationId || identifier;
+      const maybeParentId = notif.content.data?.notificationId;
+      const parentId = typeof maybeParentId === 'string' ? maybeParentId : identifier;
 
       // Check if this notification belongs to our app
       if (!identifier.startsWith('thenotifier-')) {
@@ -91,7 +90,7 @@ async function cancelPlatformOrphans(
         } catch (error: any) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           if (!errorMessage.includes('not found') && !errorMessage.includes('NOT_FOUND')) {
-            logger.warn(makeLogHeader(LOG_FILE, 'cancelPlatformOrphans'), `Failed to cancel orphaned notification ${identifier}:`, error);
+            logger.info(makeLogHeader(LOG_FILE, 'cancelPlatformOrphans'), `Failed to cancel orphaned notification ${identifier}:`, error);
             failures++;
           }
         }
@@ -144,6 +143,9 @@ async function ensurePlatformMatchesDB(
       }).filter(Boolean) as string[]
     );
 
+    // iOS-only: Track if we need to replenish daily alarm windows (call once per pass, not per parent)
+    let iosNeedsDailyAlarmReplenish = false;
+    
     for (const parent of dbScheduledParents) {
       try {
         const existsOnPlatform = platformNotificationIds.has(parent.notificationId);
@@ -166,8 +168,21 @@ async function ensurePlatformMatchesDB(
           }
         }
 
-        // Ensure daily alarm window exists (if using daily window strategy)
+        // iOS-only: Track if we need to replenish daily alarm windows (call once per pass)
         if (
+          Platform.OS === 'ios' &&
+          parent.repeatOption === 'daily' &&
+          parent.hasAlarm &&
+          parent.repeatMethod === 'rollingWindow' &&
+          alarmPermissionAuthorized &&
+          notificationPermissionGranted
+        ) {
+          iosNeedsDailyAlarmReplenish = true;
+        }
+        
+        // Android: Continue calling per-parent (existing behavior)
+        if (
+          Platform.OS === 'android' &&
           parent.repeatOption === 'daily' &&
           parent.hasAlarm &&
           alarmPermissionAuthorized &&
@@ -187,6 +202,17 @@ async function ensurePlatformMatchesDB(
         // For now, we rely on the cancellation logic to remove orphans
       } catch (error) {
         logger.error(makeLogHeader(LOG_FILE, 'ensurePlatformMatchesDB'), `Failed to ensure platform matches DB for ${parent.notificationId}:`, error);
+        failures++;
+      }
+    }
+    
+    // iOS-only: Call replenisher once per reconcile pass (not per parent)
+    if (Platform.OS === 'ios' && iosNeedsDailyAlarmReplenish && alarmPermissionAuthorized && notificationPermissionGranted) {
+      try {
+        await ensureDailyAlarmWindowForAllNotifications();
+        rescheduled++;
+      } catch (error) {
+        logger.error(makeLogHeader(LOG_FILE, 'ensurePlatformMatchesDB'), `Failed to ensure daily alarm window (iOS batch):`, error);
         failures++;
       }
     }
@@ -211,15 +237,16 @@ async function cancelDbRemovedItems(
   try {
     // Get all scheduled notifications from platform
     const platformScheduled = await Notifications.getAllScheduledNotificationsAsync();
-    
+
     // Get all DB parents
     const dbParents = dbScheduledParents;
 
     // Find platform items whose parents are not in DB
     const orphanedParents = new Set<string>();
-    
+
     for (const notif of platformScheduled) {
-      const parentId = notif.content.data?.notificationId || notif.identifier;
+      const maybeParentId = notif.content.data?.notificationId;
+      const parentId = typeof maybeParentId === 'string' ? maybeParentId : notif.identifier;
       if (parentId.startsWith('thenotifier-') && !dbParents.has(parentId)) {
         orphanedParents.add(parentId);
       }
@@ -231,18 +258,18 @@ async function cancelDbRemovedItems(
         // Cancel Expo notifications (includes rolling-window instances)
         await cancelExpoForParent(parentId);
         cancelled++;
-        
+
         // Cancel alarms (try both daily and non-daily strategies)
         // First try as daily (will cancel window instances if they exist)
         await cancelAlarmKitForParent(parentId, 'daily').catch(() => {
           // Ignore - parent may not have had daily alarms
         });
-        
+
         // Also try as non-daily (will cancel derived alarm ID for recurring alarms)
         await cancelAlarmKitForParent(parentId, null).catch(() => {
           // Ignore - parent may not have had alarms or may have been daily
         });
-        
+
         cancelled++;
       } catch (error) {
         logger.error(makeLogHeader(LOG_FILE, 'cancelDbRemovedItems'), `Failed to cancel platform items for removed parent ${parentId}:`, error);

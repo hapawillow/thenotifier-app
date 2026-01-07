@@ -2,7 +2,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as Calendar from 'expo-calendar';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Animated, FlatList, Platform, StyleSheet, Switch, TouchableOpacity } from 'react-native';
+import { Alert, Animated, FlatList, StyleSheet, Switch, TouchableOpacity } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -759,7 +759,7 @@ export default function CalendarScreen() {
                   value={selectedCalendarIds.has(item.id)}
                   onValueChange={() => toggleCalendarSelection(item.id)}
                   trackColor={{ false: '#888', true: '#68CFAF' }}
-                  thumbColor={Platform.OS === 'ios' ? '#f0f0f0' : colors.background}
+                  thumbColor='#f0f0f0'
                 />
               </ThemedView>
             )}

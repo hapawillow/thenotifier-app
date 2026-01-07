@@ -1,8 +1,8 @@
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import * as Notifications from 'expo-notifications';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Dimensions, Keyboard, Platform, StyleSheet, Switch, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
+import { Alert, Dimensions, Keyboard, PixelRatio, Platform, StyleSheet, Switch, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
 import { NativeAlarmManager } from 'rn-native-alarmkit';
 
 import { ThemedText } from '@/components/themed-text';
@@ -13,15 +13,18 @@ import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-sch
 import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, getWindowSize, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
+import { ANDROID_NOTIFICATION_CHANNEL_ID, ensureAndroidNotificationChannel } from '@/utils/notification-channel';
 import { getPermissionInstructions } from '@/utils/permissions';
 import {
-  mapJsWeekdayToExpoWeekday,
-  mapJsMonthToExpoMonth,
   isNextDailyOccurrence,
   isNextWeeklyOccurrence,
+  mapJsMonthToExpoMonth,
+  mapJsWeekdayToExpoWeekday,
 } from '@/utils/repeat-start-date';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Toast } from 'toastify-react-native';
 
 const LOG_FILE = 'components/scheduleForm.tsx';
 
@@ -42,8 +45,8 @@ Notifications.setNotificationHandler({
 const theme: KeyboardToolbarProps["theme"] = {
   dark: {
     ...DefaultKeyboardToolbarTheme.dark,
-    primary: "#8ddaff",
-    background: "#1d1d1d",
+    primary: Platform.OS === 'android' ? "#ffffff" : "#8ddaff",
+    background: Platform.OS === 'android' ? "#2d2d2d" : "#1d1d1d",
   },
   light: {
     ...DefaultKeyboardToolbarTheme.light,
@@ -117,6 +120,15 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const t = useT();
+  const insets = useSafeAreaInsets();
+
+  // On Android, detect if using button navigation vs gesture navigation
+  // Button navigation typically has bottom inset of 16-24px
+  // Gesture navigation typically has bottom inset of 0-8px
+  // Note: Safe area insets may not update dynamically when navigation mode changes
+  // The app may need to be restarted for changes to take effect
+  // Using a threshold of 16px to distinguish between button (>=16px) and gesture (<16px)
+  const isButtonNavigation = Platform.OS === 'android' && insets.bottom >= 16;
   const scrollViewRef = useRef<any>(null);
   const messageInputRef = useRef<TextInput>(null);
   const noteInputRef = useRef<TextInput>(null);
@@ -327,6 +339,18 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   useEffect(() => {
     // Request permissions
     (async () => {
+      // Android: Ensure notification channel is set up before requesting permissions
+      // This is required per Expo docs - channel must exist before permissions prompt will appear
+      if (Platform.OS === 'android') {
+        try {
+          await ensureAndroidNotificationChannel();
+          logger.info(makeLogHeader(LOG_FILE), 'Android notification channel ensured before permission request');
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to ensure Android notification channel before permission request:', error);
+          // Continue anyway - channel might already exist from app initialization
+        }
+      }
+
       const { status } = await Notifications.requestPermissionsAsync();
       if (status !== 'granted') {
         // Don't show alert here - will be handled when user tries to schedule
@@ -441,6 +465,44 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
     }
   }, []);
 
+  // Handle Android date/time picker using native API
+  // Android requires separate date and time pickers
+  const handleAndroidDateTimePicker = useCallback(() => {
+    // First show date picker
+    DateTimePickerAndroid.open({
+      value: selectedDate,
+      mode: 'date',
+      onChange: (event, date) => {
+        if (event.type === 'set' && date) {
+          // Update date but keep the time
+          const updatedDate = new Date(date);
+          updatedDate.setHours(selectedDate.getHours());
+          updatedDate.setMinutes(selectedDate.getMinutes());
+          setSelectedDate(updatedDate);
+
+          // Then show time picker after a short delay
+          setTimeout(() => {
+            DateTimePickerAndroid.open({
+              value: updatedDate,
+              mode: 'time',
+              is24Hour: false,
+              onChange: (timeEvent, timeDate) => {
+                if (timeEvent.type === 'set' && timeDate) {
+                  setSelectedDate(timeDate);
+                }
+              },
+              positiveButton: { label: 'OK', textColor: colors.tint },
+              negativeButton: { label: 'Cancel', textColor: colors.text },
+            });
+          }, 300);
+        }
+      },
+      minimumDate: minimumDate,
+      positiveButton: { label: 'OK', textColor: colors.tint },
+      negativeButton: { label: 'Cancel', textColor: colors.text },
+    });
+  }, [selectedDate, minimumDate, colors.tint, colors.text]);
+
   // Helper function to scroll to show the button above keyboard
   const scrollToShowButton = useCallback((keyboardHeight: number) => {
     if (formTopInContent.current === 0 || buttonBottomInForm.current === 0) {
@@ -517,8 +579,12 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       return;
     }
     Keyboard.dismiss();
-    setShowDatePicker(true);
-  }, [checkNotificationLimit]);
+    if (Platform.OS === 'android') {
+      handleAndroidDateTimePicker();
+    } else {
+      setShowDatePicker(true);
+    }
+  }, [checkNotificationLimit, handleAndroidDateTimePicker]);
 
   const handleRepeatButtonPress = useCallback(async () => {
     const limitReached = await checkNotificationLimit();
@@ -560,6 +626,60 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   const handleDonePress = useCallback(() => {
     setShowDatePicker(false);
   }, []);
+
+  const handleMessageChange = useCallback((text: string) => {
+    const MAX_LENGTH = 60;
+    if (text.length > MAX_LENGTH) {
+      setMessage(text.substring(0, MAX_LENGTH));
+      Toast.show({
+        type: 'error',
+        text1: t('toastMessages.messageLimitExceeded'),
+        position: 'top',
+        visibilityTime: 2000,
+        autoHide: true,
+        backgroundColor: '#8B0000', // Dark red
+        textColor: '#f0f0f0', // Light text
+      });
+    } else {
+      setMessage(text);
+    }
+  }, [t]);
+
+  const handleNoteChange = useCallback((text: string) => {
+    const MAX_LENGTH = 240;
+    if (text.length > MAX_LENGTH) {
+      setNote(text.substring(0, MAX_LENGTH));
+      Toast.show({
+        type: 'error',
+        text1: t('toastMessages.noteLimitExceeded'),
+        position: 'top',
+        visibilityTime: 2000,
+        autoHide: true,
+        backgroundColor: '#8B0000', // Dark red
+        textColor: '#f0f0f0', // Light text
+      });
+    } else {
+      setNote(text);
+    }
+  }, [t]);
+
+  const handleLinkChange = useCallback((text: string) => {
+    const MAX_LENGTH = 2048;
+    if (text.length > MAX_LENGTH) {
+      setLink(text.substring(0, MAX_LENGTH));
+      Toast.show({
+        type: 'error',
+        text1: t('toastMessages.linkLimitExceeded'),
+        position: 'top',
+        visibilityTime: 2000,
+        autoHide: true,
+        backgroundColor: '#8B0000', // Dark red
+        textColor: '#f0f0f0', // Light text
+      });
+    } else {
+      setLink(text);
+    }
+  }, [t]);
 
   const handleMessageFocus = useCallback(async () => {
     const limitReached = await checkNotificationLimit();
@@ -727,8 +847,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
     setSelectedDate(new Date());
 
     // Check current alarm permission status before setting scheduleAlarm
+    // Only check if alarms are supported to avoid errors when native module isn't available
     let shouldEnableAlarm = false;
-    if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+    if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && alarmSupported) {
       try {
         // Check stored denial state
         const denied = await getAlarmPermissionDenied();
@@ -752,6 +873,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           }
         } catch (capabilityError) {
           // If we can't check capability, use stored denial state
+          logger.error(makeLogHeader(LOG_FILE, 'resetForm'), 'Failed to check alarm capability in resetForm:', capabilityError);
           shouldEnableAlarm = !denied;
         }
       } catch (error) {
@@ -851,8 +973,18 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
         // Cancel all AlarmKit alarms (daily and non-daily)
         // Always attempt cancellation regardless of editingHasAlarm flag (idempotent)
-        await cancelAlarmKitForParent(editingNotificationId, existingRepeatOption);
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled all AlarmKit alarms for edit:', editingNotificationId);
+        // Android-only: Use dual-strategy cancellation to handle alarm-only vs notification-only toggle behavior
+        if (Platform.OS === 'android') {
+          // Cancel using both strategies to avoid repeatOption ambiguity
+          // This ensures we catch all alarms regardless of DB state or daily-window instance tracking
+          await cancelAlarmKitForParent(editingNotificationId, 'daily');
+          await cancelAlarmKitForParent(editingNotificationId, null);
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Android] Cancelled all AlarmKit alarms for edit using dual-strategy:', editingNotificationId);
+        } else {
+          // iOS: Use single-strategy cancellation based on existing repeatOption
+          await cancelAlarmKitForParent(editingNotificationId, existingRepeatOption);
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Cancelled all AlarmKit alarms for edit:', editingNotificationId);
+        }
 
         // Mark rolling-window instances as cancelled in DB (if any)
         const isRollingWindow = existingNotification?.notificationTrigger && (existingNotification.notificationTrigger as any).type === 'DATE_WINDOW';
@@ -874,15 +1006,12 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
     const notificationTitle = title || 'Personal';
 
     try {
-      if (Platform.OS === 'android') {
-        await Notifications.setNotificationChannelAsync('thenotifier', {
-          name: 'The Notifier notifications',
-          importance: Notifications.AndroidImportance.HIGH,
-          sound: 'thenotifier.wav',
-        });
-      }
+      // Ensure Android notification channel is set up (idempotent)
+      await ensureAndroidNotificationChannel();
 
-      const deepLinkUrl = (link) ? `thenotifier://notification?title=${encodeURIComponent(title)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=${encodeURIComponent(link)}` : `thenotifier://notification?title=${encodeURIComponent(title)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}`;
+      const deepLinkUrl = (link)
+        ? `thenotifier://notification-display?title=${encodeURIComponent(notificationTitle)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=${encodeURIComponent(link)}`
+        : `thenotifier://notification-display?title=${encodeURIComponent(notificationTitle)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=`;
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'deepLinkUrl:', deepLinkUrl);
 
       let notificationContent: Notifications.NotificationContentInput = {
@@ -904,6 +1033,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         notificationContent.interruptionLevel = 'timeSensitive';
       }
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'notificationContent:', notificationContent);
+
+      // Android: if an alarm is enabled, use alarm-only mode (do not schedule Expo notifications)
+      // iOS: keep existing behavior (notifications + optional alarms)
+      const useAndroidAlarmOnly = Platform.OS === 'android' && scheduleAlarm && alarmSupported;
 
       let notificationTrigger: Notifications.NotificationTriggerInput;
       let useRollingWindow = false;
@@ -961,7 +1094,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           // Check if selected begin date matches the next daily occurrence
           // Only use Expo DAILY trigger if the first fire will be exactly on the selected date
           const isNextDaily = isNextDailyOccurrence(dateWithoutSeconds, hour, minute);
-          
+
           if (isNextDaily) {
             // Use Expo DAILY trigger - it will fire at the selected time
             notificationTrigger = {
@@ -979,14 +1112,14 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             useRollingWindow = true;
             notificationTrigger = {
               type: 'DATE_WINDOW' as any,
-              window: 'daily14',
+              window: 'daily7',
             } as any;
             logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Daily repeat: using rollingWindow (selected date does not match next occurrence)', {
               selectedISO: dateWithoutSeconds.toISOString(),
               hour: hour,
               minute: minute,
               diffMs: diffMs,
-              windowSize: 14,
+              windowSize: 7,
             });
           }
           break;
@@ -994,7 +1127,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           // Check if selected begin date matches the next weekly occurrence
           // Only use Expo WEEKLY trigger if the first fire will be exactly on the selected date
           const isNextWeekly = isNextWeeklyOccurrence(dateWithoutSeconds, expoWeekday, hour, minute);
-          
+
           if (isNextWeekly) {
             // Use Expo WEEKLY trigger - it will fire at the selected time
             notificationTrigger = {
@@ -1091,6 +1224,11 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           break;
       }
 
+      // Alarm-only mode on Android: never schedule rolling-window notifications
+      if (useAndroidAlarmOnly) {
+        useRollingWindow = false;
+      }
+
       // Log final decision with begin-date correctness details
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Final decision:', {
         useRollingWindow: useRollingWindow,
@@ -1110,7 +1248,34 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         }),
       });
 
-      if (useRollingWindow) {
+      if (useAndroidAlarmOnly) {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Android alarm-only mode: skipping notification scheduling');
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Saving notification with repeatMethod:', 'alarm');
+        // Android alarm-only: Store notificationTrigger as null to prevent window replenishment code
+        // from interpreting it as needing Expo window notifications
+        await saveScheduledNotificationData(
+          notificationId,
+          notificationTitle,
+          message,
+          note,
+          link ? link : '',
+          dateWithoutSeconds.toISOString(),
+          dateWithoutSeconds.toLocaleString(),
+          repeatOption,
+          null, // Store null instead of DATE_WINDOW trigger to prevent window replenishment
+          scheduleAlarm && alarmSupported,
+          initialParams?.calendarId,
+          initialParams?.originalEventId,
+          initialParams?.location,
+          initialParams?.originalEventTitle,
+          initialParams?.originalEventStartDate,
+          initialParams?.originalEventEndDate,
+          initialParams?.originalEventLocation,
+          initialParams?.originalEventRecurring,
+          'alarm'
+        );
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm-only notification data saved successfully');
+      } else if (useRollingWindow) {
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Using rollingWindow for notifications, repeatOption:', repeatOption);
 
         // Check OS notification limit before scheduling rolling window
@@ -1161,7 +1326,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         // Use existing repeating trigger approach (Expo triggers)
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Using Expo repeating trigger approach');
         if (Platform.OS === 'android') {
-          (notificationTrigger as any).channelId = "thenotifier";
+          (notificationTrigger as any).channelId = ANDROID_NOTIFICATION_CHANNEL_ID;
         }
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'notificationTrigger:', notificationTrigger);
 
@@ -1181,7 +1346,8 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       }
 
       // If editing and alarm is disabled, cancel all daily alarm instances
-      if (isEditMode && !scheduleAlarm && editingHasAlarm) {
+      // Only run this if alarms are actually supported
+      if (isEditMode && !scheduleAlarm && editingHasAlarm && alarmSupported) {
         try {
           const { getAllScheduledNotificationData } = await import('@/utils/database');
           const allNotifications = await getAllScheduledNotificationData();
@@ -1333,25 +1499,32 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Scheduling alarm with ID:', alarmId);
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm date:', dateWithoutSeconds.toISOString());
 
-          // Handle daily alarms differently - schedule 14 fixed alarms
+          // Handle daily alarms differently - schedule 7 fixed alarms
           if (repeatOption === 'daily') {
-            // Schedule 14-day rolling window for daily alarms (AlarmKit alarms, not notifications)
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling 14-day AlarmKit alarm window for daily repeat');
+            // Schedule 7-day rolling window for daily alarms (AlarmKit alarms, not notifications)
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling 7-day AlarmKit alarm window for daily repeat');
             await scheduleDailyAlarmWindow(
               notificationId,
               dateWithoutSeconds,
               { hour, minute: minutes },
               {
-                title: message,
+                title: notificationTitle,
+                body: message,
+                sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
                 color: '#8ddaff',
                 data: {
                   notificationId: notificationId,
+                  title: notificationTitle,
+                  message: message,
+                  note: note,
+                  link: link ? link : '',
+                  url: deepLinkUrl,
                 },
                 actions: ALARM_ACTIONS
               },
-              14
+              7
             );
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled 14 AlarmKit alarm instances for:', notificationId);
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled 7 AlarmKit alarm instances for:', notificationId);
           } else {
             // Build alarm schedule for one-time or weekly alarms
             let alarmSchedule: any;
@@ -1397,10 +1570,18 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             const alarmResult = await NativeAlarmManager.scheduleAlarm(
               alarmSchedule,
               {
-                title: message,
+                title: notificationTitle,
+                body: message,
+                sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
                 color: '#8ddaff',
+                ...(Platform.OS === 'android' ? { category: notificationId } : {}),
                 data: {
                   notificationId: notificationId,
+                  title: notificationTitle,
+                  message: message,
+                  note: note,
+                  link: link ? link : '',
+                  url: deepLinkUrl,
                 },
                 actions: ALARM_ACTIONS
               },
@@ -1419,8 +1600,17 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           }
 
         } catch (error) {
-          logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to schedule alarm:', error);
           const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorStack = error instanceof Error ? error.stack : undefined;
+          const errorDetails = {
+            message: errorMessage,
+            stack: errorStack,
+            error: error,
+            name: error instanceof Error ? error.name : typeof error,
+          };
+
+          logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to schedule alarm - error details:', errorDetails);
+          logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to schedule alarm - error message:', errorMessage);
 
           if (errorMessage.includes('permission') || errorMessage.includes('Permission') || errorMessage.includes('authorization')) {
             await saveAlarmPermissionDenied(true);
@@ -1484,8 +1674,13 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           [
             {
               text: t('buttonText.ok'),
-              onPress: () => {
-                resetForm();
+              onPress: async () => {
+                try {
+                  await resetForm();
+                } catch (resetError) {
+                  logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Error in resetForm (from alert):', resetError);
+                  // Continue anyway - form reset is not critical
+                }
                 onSuccess?.();
               },
             },
@@ -1493,22 +1688,37 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         );
       } else {
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] No alert shown (not rolling-window or one-time)');
-        resetForm();
+        try {
+          await resetForm();
+        } catch (resetError) {
+          logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Error in resetForm:', resetError);
+          // Continue anyway - form reset is not critical
+        }
         onSuccess?.();
       }
     } catch (error) {
-      if (isEditMode) {
-        Alert.alert(t('alertTitles.error'), t('alertMessages.failedToUpdateGeneric'));
-      } else {
-        Alert.alert(t('alertTitles.error'), t('alertMessages.failedToSchedule'));
-      }
-      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      const errorDetails = {
+        message: errorMessage,
+        stack: errorStack,
+        error: error,
+        name: error instanceof Error ? error.name : typeof error,
+      };
+
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Error details:', errorDetails);
       logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed to schedule notification with ID:', notificationId);
       logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed selected date:', dateWithoutSeconds);
       logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed title:', notificationTitle);
       logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed message:', message);
       logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed note:', note);
       logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed link:', link);
+
+      if (isEditMode) {
+        Alert.alert(t('alertTitles.error'), t('alertMessages.failedToUpdateGeneric'));
+      } else {
+        Alert.alert(t('alertTitles.error'), t('alertMessages.failedToSchedule'));
+      }
     }
   };
 
@@ -1524,7 +1734,12 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
   useEffect(() => {
     (async () => {
-      await archiveScheduledNotifications();
+      try {
+        await archiveScheduledNotifications();
+      } catch (error) {
+        // Error already logged in archiveScheduledNotifications, just prevent uncaught rejection
+        logger.error(makeLogHeader(LOG_FILE), 'Failed to archive notifications in useEffect:', error);
+      }
     })();
   }, []);
 
@@ -1573,15 +1788,15 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               </TouchableOpacity>
             </ThemedView>
 
-            {showDatePicker && (
+            {showDatePicker && Platform.OS === 'ios' && (
               <ThemedView style={pickerContainerStyle}>
                 <DateTimePicker
                   value={selectedDate}
                   mode="datetime"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  display="spinner"
                   onChange={handleDateChange}
                   minimumDate={minimumDate}
-                  textColor={Platform.OS === 'ios' ? colors.text : undefined}
+                  textColor={colors.text}
                   themeVariant={colorScheme === 'dark' ? 'dark' : 'light'}
                   accentColor={colors.tint}
                 />
@@ -1595,41 +1810,78 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               </TouchableOpacity>
             )}
 
-            <ThemedView style={styles.inputGroup}>
-              <TouchableOpacity
-                style={repeatButtonStyle}
-                onPress={handleRepeatButtonPress}>
-                <ThemedText maxFontSizeMultiplier={1.6}>{formatRepeatOption(repeatOption)}</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
+            {/* Android: Always visible picker */}
+            {Platform.OS === 'android' && (() => {
+              // Calculate font size respecting maxFontSizeMultiplier of 1.6
+              // Picker respects system font scaling, so we need to account for that
+              const baseFontSize = 18; // Match ThemedText default fontSize
+              const fontScale = PixelRatio.getFontScale();
+              const maxMultiplier = 1.6;
+              // Calculate desired final size, then divide by fontScale to account for Picker's scaling
+              const desiredFinalSize = baseFontSize * Math.min(fontScale, maxMultiplier);
+              const calculatedFontSize = desiredFinalSize / fontScale;
 
-            {
-              showRepeatPicker && (
-                <ThemedView style={pickerContainerStyle}>
-                  <Picker
-                    selectedValue={repeatOption}
-                    onValueChange={handleRepeatChange}
-                    style={[styles.picker, { color: colors.text }]}
-                    itemStyle={{ color: colors.text }}
-                  >
-                    <Picker.Item label={t('repeatOptions.doNotRepeat')} value="none" />
-                    <Picker.Item label={t('repeatOptions.repeatEveryDay')} value="daily" />
-                    <Picker.Item label={t('repeatOptions.repeatEveryWeek')} value="weekly" />
-                    <Picker.Item label={t('repeatOptions.repeatEveryMonth')} value="monthly" />
-                    <Picker.Item label={t('repeatOptions.repeatEveryYear')} value="yearly" />
-                  </Picker>
+              return (
+                <ThemedView style={styles.inputGroup}>
+                  <ThemedText style={{ fontSize: baseFontSize }} maxFontSizeMultiplier={1.6}>{t('inputLabels.repeat')}</ThemedText>
+                  <ThemedView style={[pickerContainerStyle, { paddingTop: 0, paddingBottom: 0, paddingHorizontal: 8 }]}>
+                    <Picker
+                      selectedValue={repeatOption}
+                      onValueChange={handleRepeatChange}
+                      style={[styles.picker, { color: colors.text, fontSize: calculatedFontSize, paddingLeft: 4 }]}
+                      itemStyle={{ color: colors.text, fontSize: calculatedFontSize }}
+                    >
+                      <Picker.Item label={t('repeatOptions.doNotRepeat')} value="none" />
+                      <Picker.Item label={t('repeatOptions.repeatEveryDay')} value="daily" />
+                      <Picker.Item label={t('repeatOptions.repeatEveryWeek')} value="weekly" />
+                      <Picker.Item label={t('repeatOptions.repeatEveryMonth')} value="monthly" />
+                      <Picker.Item label={t('repeatOptions.repeatEveryYear')} value="yearly" />
+                    </Picker>
+                  </ThemedView>
                 </ThemedView>
-              )
-            }
-            {
-              Platform.OS === 'ios' && showRepeatPicker && (
-                <TouchableOpacity
-                  style={doneButtonStyle}
-                  onPress={handleRepeatDonePress}>
-                  <ThemedText maxFontSizeMultiplier={1.6} style={doneButtonTextStyle}>{t('buttonText.done')}</ThemedText>
-                </TouchableOpacity >
-              )
-            }
+              );
+            })()}
+
+            {/* iOS: Button + conditional picker */}
+            {Platform.OS === 'ios' && (
+              <>
+                <ThemedView style={styles.inputGroup}>
+                  <TouchableOpacity
+                    style={repeatButtonStyle}
+                    onPress={handleRepeatButtonPress}>
+                    <ThemedText maxFontSizeMultiplier={1.6}>{formatRepeatOption(repeatOption)}</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+
+                {
+                  showRepeatPicker && (
+                    <ThemedView style={pickerContainerStyle}>
+                      <Picker
+                        selectedValue={repeatOption}
+                        onValueChange={handleRepeatChange}
+                        style={[styles.picker, { color: colors.text }]}
+                        itemStyle={{ color: colors.text }}
+                      >
+                        <Picker.Item label={t('repeatOptions.doNotRepeat')} value="none" />
+                        <Picker.Item label={t('repeatOptions.repeatEveryDay')} value="daily" />
+                        <Picker.Item label={t('repeatOptions.repeatEveryWeek')} value="weekly" />
+                        <Picker.Item label={t('repeatOptions.repeatEveryMonth')} value="monthly" />
+                        <Picker.Item label={t('repeatOptions.repeatEveryYear')} value="yearly" />
+                      </Picker>
+                    </ThemedView>
+                  )
+                }
+                {
+                  showRepeatPicker && (
+                    <TouchableOpacity
+                      style={doneButtonStyle}
+                      onPress={handleRepeatDonePress}>
+                      <ThemedText maxFontSizeMultiplier={1.6} style={doneButtonTextStyle}>{t('buttonText.done')}</ThemedText>
+                    </TouchableOpacity >
+                  )
+                }
+              </>
+            )}
 
             <ThemedView style={styles.inputGroup}>
               <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>{t('inputLabels.message')}</ThemedText>
@@ -1639,10 +1891,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 placeholder={t('inputPlaceholders.notificationMessage')}
                 placeholderTextColor={colors.placeholderText}
                 value={message}
-                onChangeText={setMessage}
+                onChangeText={handleMessageChange}
                 onFocus={handleMessageFocus}
-                multiline
-                numberOfLines={2}
+                // multiline
+                // numberOfLines={1}
                 maxFontSizeMultiplier={1.6}
               />
             </ThemedView >
@@ -1655,7 +1907,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 placeholder={t('inputPlaceholders.shortNote')}
                 placeholderTextColor={colors.placeholderText}
                 value={note}
-                onChangeText={setNote}
+                onChangeText={handleNoteChange}
                 onFocus={handleNoteFocus}
                 multiline
                 numberOfLines={6}
@@ -1671,7 +1923,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 placeholder={t('inputPlaceholders.linkToOpen')}
                 placeholderTextColor={colors.placeholderText}
                 value={link}
-                onChangeText={setLink}
+                onChangeText={handleLinkChange}
                 onFocus={handleLinkFocus}
                 onBlur={handleLinkBlur}
                 maxFontSizeMultiplier={1.6}
@@ -1687,7 +1939,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                     value={scheduleAlarm}
                     onValueChange={handleAlarmSwitchChange}
                     trackColor={{ false: '#888', true: '#68CFAF' }}
-                    thumbColor={Platform.OS === 'ios' ? '#f0f0f0' : colors.background}
+                    thumbColor='#f0f0f0'
                   />
                 </ThemedView>
               </ThemedView >
@@ -1711,14 +1963,27 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       <KeyboardToolbar
         opacity="CF"
         offset={{
-          opened: (source === 'tab' || source === 'schedule') ? 95 : 15,
+          opened: Platform.OS === 'android'
+            ? (() => {
+              // Adjust offset based on navigation mode and source
+              // Button navigation: toolbar needs to move down ~25px, so increase offset by 25px
+              // Gesture navigation: toolbar needs to move higher, so reduce offset by 15px (move up)
+              const baseOffset = (source === 'tab' || source === 'schedule') ? 95 : 10;
+              if (isButtonNavigation) {
+                // Button navigation: move toolbar down by increasing offset
+                return baseOffset + 20;
+              } else {
+                // Gesture navigation: move toolbar up more by reducing offset further
+                return baseOffset - 15;
+              }
+            })()
+            : ((source === 'tab' || source === 'schedule') ? 95 : 15),
           closed: 0
         }}
-        theme={theme}>
-        <KeyboardToolbar.Prev />
-        <KeyboardToolbar.Next />
-        <KeyboardToolbar.Done />
-      </KeyboardToolbar>
+        theme={theme}
+        showArrows={true}
+        doneText="Done"
+      />
     </ThemedView >
   );
 }

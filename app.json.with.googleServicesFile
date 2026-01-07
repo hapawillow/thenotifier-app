@@ -1,0 +1,108 @@
+{
+  "expo": {
+    "name": "The Notifier",
+    "slug": "the-notifier-basic",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/app-icon.png",
+    "scheme": "thenotifier",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.thenotifier.thenotifier",
+      "appleTeamId": "CW4NQJKB99",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "This app needs access to your calendar to display events and schedule notifications.",
+        "NSAlarmKitUsageDescription": "This app needs access to schedule alarms so you can be notified at specific times.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSSupportsLiveActivities": true,
+        "NSSupportsLiveActivitiesFrequentUpdates": true
+      },
+      "liveActivity": {
+        "supportedActivities": [
+          {
+            "type": "app.thenotifier.thenotifier.snooze"
+          }
+        ]
+      }
+    },
+    "android": {
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/adaptive-icon-foreground-512x512.png",
+        "backgroundImage": "./assets/images/adaptive-icon-background-512x512.png",
+        "monochromeImage": "./assets/images/adaptive-icon-monochrome-432x432.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.hapawillow.thenotifier",
+      "permissions": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.SCHEDULE_EXACT_ALARM_PERMISSION_CHANGE"
+      ]
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.svg"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/logo-1024x1024.png",
+          "imageWidth": 240,
+          "resizeMode": "contain",
+          "backgroundColor": "#000000",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon-white-96x96.png",
+          "color": "#8ddaff",
+          "vibrate": false,
+          "sounds": [
+            "./assets/sounds/thenotifier.wav"
+          ],
+          "channels": [
+            {
+              "id": "thenotifier",
+              "name": "The Notifier notifications",
+              "importance": "high",
+              "sound": "thenotifier.wav"
+            }
+          ],
+          "enableBackgroundRemoteNotifications": true
+        }
+      ],
+      "expo-sqlite",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "This app needs access to your calendar to display events and schedule notifications."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3b7f8e4e-93ca-43d0-b13d-0b7fff31a815"
+      }
+    },
+    "owner": "hapa-willow"
+  }
+}

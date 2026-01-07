@@ -39,7 +39,11 @@ export default function ScheduleTabScreen() {
       iconSize: 24,
     });
 
-  }, []);
+    setTimeout(() => {
+      router.replace('/(tabs)' as any);
+    }, 100);
+
+  }, [router]);
 
   const handleCancel = useCallback(() => {
     // Form handles its own cancel logic

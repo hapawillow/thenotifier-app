@@ -3,9 +3,13 @@ import { CalendarChangeModal } from '@/components/calendar-change-modal';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ChangedCalendarEvent, checkCalendarEventChanges } from '@/utils/calendar-check';
 import { calendarCheckEvents } from '@/utils/calendar-check-events';
-import { archiveScheduledNotifications, ensureDailyAlarmWindowForAllNotifications, ensureRollingWindowNotificationInstances, getAppLanguage, getOrCreateDeviceId, getScheduledNotificationData, initDatabase, insertRepeatOccurrence, migrateRollingWindowRepeatsToExpo, updateArchivedNotificationData } from '@/utils/database';
-import { I18nProvider, initI18n } from '@/utils/i18n';
+import { archiveScheduledNotifications, ensureDailyAlarmWindowForAllNotifications, ensureRollingWindowNotificationInstances, getAppLanguage, getOrCreateDeviceId, getScheduledNotificationData, initDatabase, insertRepeatOccurrence, migrateDailyRollingWindowToNative, migrateRollingWindowRepeatsToExpo, updateArchivedNotificationData } from '@/utils/database';
+import { I18nProvider, initI18n, translate } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
+import { ensureAndroidNotificationChannel } from '@/utils/notification-channel';
+import { reconcileOrphansOnForeground, reconcileOrphansOnStartup } from '@/utils/orphan-reconcile';
+import { reconcilePermissionsOnForeground } from '@/utils/permission-reconcile';
+import { ensurePushTokensUpToDate } from '@/utils/push-tokens';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { EventSubscription } from 'expo-modules-core';
@@ -14,16 +18,12 @@ import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, AppState, AppStateStatus, InteractionManager } from 'react-native';
+import { AppState, AppStateStatus, InteractionManager, Platform } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
+import { NativeAlarmManager } from 'rn-native-alarmkit';
 import ToastManager from 'toastify-react-native';
 import appJson from '../app.json';
-import { reconcilePermissionsOnForeground } from '@/utils/permission-reconcile';
-import { translate } from '@/utils/i18n';
-import { ensurePushTokensUpToDate } from '@/utils/push-tokens';
-import { NativeAlarmManager } from 'rn-native-alarmkit';
-import { reconcileOrphansOnStartup, reconcileOrphansOnForeground } from '@/utils/orphan-reconcile';
 
 const LOG_FILE = 'app/_layout.tsx';
 
@@ -72,7 +72,7 @@ export default function RootLayout() {
 
     const notificationId = notification.request.identifier;
     const data = notification.request.content.data;
-    
+
     // Compute dedupe key: use parent notification ID if available (for repeat notifications),
     // otherwise fall back to the instance identifier
     const parentId = (data?.notificationId as string) || null;
@@ -110,7 +110,12 @@ export default function RootLayout() {
       logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Marked notification as handled');
 
       // Check if we need to archive any scheduled notifications
-      await archiveScheduledNotifications();
+      try {
+        await archiveScheduledNotifications();
+      } catch (error) {
+        // Error already logged in archiveScheduledNotifications, just prevent uncaught rejection
+        logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'Failed to archive notifications:', error);
+      }
 
       logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Data:', data);
 
@@ -121,8 +126,88 @@ export default function RootLayout() {
         const scheduledNotification = await getScheduledNotificationData(parentId);
 
         if (scheduledNotification && scheduledNotification.repeatOption && scheduledNotification.repeatOption !== 'none') {
-          // Compute fireDateTime from notification.date or use current time
-          const fireDateTime = notification.date ? new Date(notification.date * 1000).toISOString() : new Date().toISOString();
+          // Compute fireDateTime from notification.date or derive from schedule
+          let fireDateTime: string;
+
+          if (notification.date) {
+            // Expo notification has date (in seconds, Unix timestamp)
+            fireDateTime = new Date(notification.date * 1000).toISOString();
+          } else {
+            // Android alarm-only mode: notification.date is undefined
+            // Derive fire time from schedule or use current time as fallback
+            if (Platform.OS === 'android' && scheduledNotification.repeatMethod === 'alarm' && scheduledNotification.repeatOption === 'daily') {
+              // For Android daily alarms, try to find the closest scheduled alarm time
+              try {
+                const { getAllDailyAlarmInstances } = await import('@/utils/database');
+                const alarmInstances = await getAllDailyAlarmInstances(parentId);
+                const now = new Date();
+
+                // Find the alarm instance that should have fired most recently
+                const pastInstances = alarmInstances
+                  .map(inst => new Date(inst.fireDateTime))
+                  .filter(date => date <= now)
+                  .sort((a, b) => b.getTime() - a.getTime()); // Most recent first
+
+                if (pastInstances.length > 0) {
+                  // Use the most recent scheduled alarm time
+                  fireDateTime = pastInstances[0].toISOString();
+                  logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Derived fireDateTime from alarm instance for ${parentId}: ${fireDateTime}`);
+                } else {
+                  // Fallback: calculate from scheduleDateTime
+                  const scheduleDate = new Date(scheduledNotification.scheduleDateTime);
+                  const hour = scheduleDate.getHours();
+                  const minute = scheduleDate.getMinutes();
+                  const today = new Date();
+                  today.setHours(hour, minute, 0, 0);
+
+                  // If today's time has passed, use today; otherwise use yesterday
+                  if (today <= now) {
+                    fireDateTime = today.toISOString();
+                  } else {
+                    const yesterday = new Date(today);
+                    yesterday.setDate(yesterday.getDate() - 1);
+                    fireDateTime = yesterday.toISOString();
+                  }
+                  logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Calculated fireDateTime from schedule for ${parentId}: ${fireDateTime}`);
+                }
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Failed to derive fireDateTime for ${parentId}, using current time:`, error);
+                fireDateTime = new Date().toISOString();
+              }
+            } else {
+              // For other cases, calculate from scheduleDateTime + repeat interval
+              const now = new Date();
+              const scheduleDate = new Date(scheduledNotification.scheduleDateTime);
+              const hour = scheduleDate.getHours();
+              const minute = scheduleDate.getMinutes();
+              const today = new Date();
+              today.setHours(hour, minute, 0, 0);
+
+              // If today's time has passed, use today; otherwise use previous occurrence
+              if (today <= now) {
+                fireDateTime = today.toISOString();
+              } else {
+                // Calculate previous occurrence based on repeatOption
+                const previous = new Date(today);
+                switch (scheduledNotification.repeatOption) {
+                  case 'daily':
+                    previous.setDate(previous.getDate() - 1);
+                    break;
+                  case 'weekly':
+                    previous.setDate(previous.getDate() - 7);
+                    break;
+                  case 'monthly':
+                    previous.setMonth(previous.getMonth() - 1);
+                    break;
+                  case 'yearly':
+                    previous.setFullYear(previous.getFullYear() - 1);
+                    break;
+                }
+                fireDateTime = previous.toISOString();
+              }
+              logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Calculated fireDateTime from schedule for ${parentId}: ${fireDateTime}`);
+            }
+          }
 
           // Get snapshot from parent notification
           const snapshot = {
@@ -134,6 +219,16 @@ export default function RootLayout() {
 
           await insertRepeatOccurrence(parentId, fireDateTime, 'tap', snapshot);
           logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Recorded tap occurrence for ${parentId} at ${fireDateTime}`);
+
+          // iOS-only: Migrate daily rolling-window to native daily repeat on first occurrence
+          if (scheduledNotification.repeatOption === 'daily' && scheduledNotification.repeatMethod === 'rollingWindow') {
+            try {
+              await migrateDailyRollingWindowToNative(parentId);
+              logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[DailyMigration] Triggered migration for ${parentId} on first occurrence`);
+            } catch (migrationError) {
+              logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[DailyMigration] Failed to migrate ${parentId}:`, migrationError);
+            }
+          }
         }
       } catch (error) {
         logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Failed to record repeat occurrence:', error);
@@ -164,58 +259,23 @@ export default function RootLayout() {
         // Increased cold start delay to 1000ms to ensure router is fully committed to initial route
         const navDelay = isColdStart ? 1000 : 100;
         const navigationMethod = isColdStart ? 'replace' : 'push';
-        
+
         pendingNavTimeoutRef.current = setTimeout(() => {
           logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `handleNotificationNavigation: Executing router.${navigationMethod} to notification-display (coldStart: ${isColdStart})`);
-          
+
           const navigationParams = {
-            pathname: '/notification-display',
+            pathname: '/notification-display' as const,
             params: { title: data.title as string, message: data.message as string, note: data.note as string, link: data.link as string },
           };
-          
+
           if (isColdStart) {
             router.replace(navigationParams);
           } else {
             router.push(navigationParams);
           }
-          
+
           pendingNavTimeoutRef.current = null;
         }, navDelay);
-
-        //   // Wait for app to be active and interactions to complete before navigating
-        //   const navigateToNotification = () => {
-        //     try {
-        //       // Use replace to ensure it shows even when coming from background
-        //       router.replace({
-        //         pathname: '/notification-display',
-        //         params: {
-        //           message: data.message as string,
-        //           link: (data.link as string) || ''
-        //         },
-        //       });
-        //       console.log('handleNotificationNavigation: Navigation triggered with replace');
-        //     } catch (error) {
-        //       console.error('handleNotificationNavigation: Navigation error:', error);
-        //       // Fallback: try push
-        //       try {
-        //         router.push({
-        //           pathname: '/notification-display',
-        //           params: {
-        //             message: data.message as string,
-        //             link: (data.link as string) || ''
-        //           },
-        //         });
-        //         console.log('handleNotificationNavigation: Navigation triggered with push (fallback)');
-        //       } catch (pushError) {
-        //         console.error('handleNotificationNavigation: Push navigation also failed:', pushError);
-        //       }
-        //     }
-        //   };
-
-        //   // Wait for interactions to complete and navigate
-        //   InteractionManager.runAfterInteractions(() => {
-        //     setTimeout(navigateToNotification, 200);
-        //   });
 
       }
     }
@@ -262,13 +322,15 @@ export default function RootLayout() {
       const data = notification.request.content.data;
       const parentId = (data?.notificationId as string) || null;
       const dedupeKey = parentId || notificationId;
-      
+
       // Create a unique response key to prevent React rerenders from retriggering
       // Use notification.date for stable key - this should be consistent across re-renders
       // If notification.date is not available, use a combination that's stable per notification instance
-      const dateValue = notification.date || notification.request.trigger?.date || 0;
+      const trigger = notification.request.trigger;
+      const triggerDate = trigger && 'date' in trigger ? trigger.date : undefined;
+      const dateValue = notification.date || triggerDate || 0;
       const responseKey = `${notificationId}-${actionIdentifier}-${dateValue}`;
-      
+
       logger.info(makeLogHeader(LOG_FILE), '=== LAST NOTIFICATION RESPONSE DETECTED ===');
       logger.info(makeLogHeader(LOG_FILE), 'Notification ID:', notificationId);
       logger.info(makeLogHeader(LOG_FILE), 'Parent ID:', parentId);
@@ -294,14 +356,14 @@ export default function RootLayout() {
       // But DON'T mark as handled yet - that will be done in handleNotificationNavigation
       // just before navigation to ensure we don't mark it handled too early (e.g., before dev menu is dismissed)
       lastProcessedResponseKeyRef.current = responseKey;
-      
+
       logger.info(makeLogHeader(LOG_FILE), 'Processing lastNotificationResponse - calling handleNotificationNavigation');
-      
+
       // On cold start, wait for all interactions to complete (including dev menu dismissal)
       // and use router.replace() to override the default (tabs) route
       // Check if this is a cold start by seeing if responseListener hasn't been set up yet
       const isColdStart = !responseListener.current;
-      
+
       if (isColdStart) {
         logger.info(makeLogHeader(LOG_FILE), 'Cold start detected, waiting for interactions to complete (dev menu dismissal)');
         // Wait for all interactions to complete - this includes dismissing the Expo dev menu
@@ -330,7 +392,7 @@ export default function RootLayout() {
       const data = notification.request.content.data;
       const parentId = (data?.notificationId as string) || null;
       const dedupeKey = parentId || notificationId;
-      
+
       logger.info(makeLogHeader(LOG_FILE), 'Notification ID:', notificationId);
       logger.info(makeLogHeader(LOG_FILE), 'Parent ID:', parentId);
       logger.info(makeLogHeader(LOG_FILE), 'Dedupe key:', dedupeKey);
@@ -343,7 +405,7 @@ export default function RootLayout() {
         // Check if this is the first response after cold start (fallback case)
         // If we were awaiting initial response, treat this as cold start navigation
         const isColdStartFallback = awaitingInitialResponseRef.current;
-        
+
         if (isColdStartFallback) {
           logger.info(makeLogHeader(LOG_FILE), 'Processing notification from listener - COLD START FALLBACK, using router.replace()');
           awaitingInitialResponseRef.current = false;
@@ -415,6 +477,11 @@ export default function RootLayout() {
       try {
         // Step 1: Initialize database
         await initDatabase();
+
+        // Step 1.25: Ensure Android notification channel is set up (must happen before scheduling)
+        await ensureAndroidNotificationChannel().catch((error) => {
+          logger.error(makeLogHeader(LOG_FILE, 'init'), 'Failed to ensure Android notification channel:', error);
+        });
 
         // Step 1.5: Ensure device ID exists and push tokens are up to date
         await getOrCreateDeviceId().catch((error) => {
@@ -513,7 +580,7 @@ export default function RootLayout() {
 
         try {
           const alarmCapability = await NativeAlarmManager.checkCapability();
-          alarmPermissionAuthorized = 
+          alarmPermissionAuthorized =
             alarmCapability.capability !== 'none' &&
             (!alarmCapability.requiresPermission || alarmCapability.platformDetails?.alarmKitAuthStatus === 'authorized');
         } catch (error) {
@@ -530,6 +597,51 @@ export default function RootLayout() {
           });
         }
 
+        // Proactively migrate daily rolling-window alarms to native recurring (iOS and Android)
+        // This runs when start date has passed and app is foregrounded
+        if (alarmPermissionAuthorized) {
+          const { migrateDailyRollingWindowToNative, migrateAndroidDailyAlarmToNative, getAllScheduledNotificationData } = await import('@/utils/database');
+          const scheduledNotifications = await getAllScheduledNotificationData();
+          const now = new Date();
+
+          // iOS: Migrate daily rolling-window notifications/alarms
+          if (Platform.OS === 'ios' && notificationPermissionGranted) {
+            const iosDailyRollingWindow = scheduledNotifications.filter(n => {
+              return n.repeatOption === 'daily' &&
+                n.repeatMethod === 'rollingWindow' &&
+                new Date(n.scheduleDateTime) <= now;
+            });
+
+            for (const notification of iosDailyRollingWindow) {
+              try {
+                await migrateDailyRollingWindowToNative(notification.notificationId);
+                logger.info(makeLogHeader(LOG_FILE), `[ProactiveMigration] Migrated iOS daily rolling-window: ${notification.notificationId}`);
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE), `[ProactiveMigration] Failed to migrate iOS daily rolling-window ${notification.notificationId}:`, error);
+              }
+            }
+          }
+
+          // Android: Migrate alarm-only daily alarms from window to native recurring
+          if (Platform.OS === 'android') {
+            const androidDailyAlarms = scheduledNotifications.filter(n => {
+              return n.repeatOption === 'daily' &&
+                n.hasAlarm &&
+                n.repeatMethod === 'alarm' &&
+                new Date(n.scheduleDateTime) <= now;
+            });
+
+            for (const notification of androidDailyAlarms) {
+              try {
+                await migrateAndroidDailyAlarmToNative(notification.notificationId);
+                logger.info(makeLogHeader(LOG_FILE), `[ProactiveMigration] Migrated Android daily alarm: ${notification.notificationId}`);
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE), `[ProactiveMigration] Failed to migrate Android daily alarm ${notification.notificationId}:`, error);
+              }
+            }
+          }
+        }
+
         // Catch up repeat occurrences (for notifications that fired while app was inactive)
         if (notificationPermissionGranted) {
           const { catchUpRepeatOccurrences } = await import('@/utils/database');
@@ -538,7 +650,7 @@ export default function RootLayout() {
           });
         }
 
-        // Replenish daily alarm windows (ensure 14 future alarms per daily notification)
+        // Replenish daily alarm windows (ensure 7 future alarms per daily notification)
         // Only if both notification and alarm permissions are granted
         if (notificationPermissionGranted && alarmPermissionAuthorized) {
           ensureDailyAlarmWindowForAllNotifications().catch((error) => {
@@ -592,6 +704,20 @@ export default function RootLayout() {
                   presentation: 'modal',
                   title: 'Notification', // This is a screen title, not user-facing text that needs i18n
                   headerShown: true,
+                }}
+              />
+              <Stack.Screen
+                name="debug/os-scheduled-notifications"
+                options={{
+                  headerShown: false,
+                  presentation: 'card',
+                }}
+              />
+              <Stack.Screen
+                name="debug/native-alarms"
+                options={{
+                  headerShown: false,
+                  presentation: 'card',
                 }}
               />
             </Stack>
