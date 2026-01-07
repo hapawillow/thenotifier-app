@@ -33,6 +33,8 @@ const MAPPING = {
   'sun.max.fill': 'brightness-7',
   'circle.lefthalf.filled': 'phone-iphone',
   'checkmark': 'check',
+  'bell.fill': 'notifications-active',
+  'antenna.radiowaves.left.and.right': 'broadcast',
 } as IconMapping;
 
 /**

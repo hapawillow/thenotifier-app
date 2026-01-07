@@ -18,7 +18,7 @@ import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, AppStateStatus, InteractionManager } from 'react-native';
+import { AppState, AppStateStatus, InteractionManager, Platform } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
 import { NativeAlarmManager } from 'rn-native-alarmkit';
@@ -126,8 +126,88 @@ export default function RootLayout() {
         const scheduledNotification = await getScheduledNotificationData(parentId);
 
         if (scheduledNotification && scheduledNotification.repeatOption && scheduledNotification.repeatOption !== 'none') {
-          // Compute fireDateTime from notification.date or use current time
-          const fireDateTime = notification.date ? new Date(notification.date * 1000).toISOString() : new Date().toISOString();
+          // Compute fireDateTime from notification.date or derive from schedule
+          let fireDateTime: string;
+
+          if (notification.date) {
+            // Expo notification has date (in seconds, Unix timestamp)
+            fireDateTime = new Date(notification.date * 1000).toISOString();
+          } else {
+            // Android alarm-only mode: notification.date is undefined
+            // Derive fire time from schedule or use current time as fallback
+            if (Platform.OS === 'android' && scheduledNotification.repeatMethod === 'alarm' && scheduledNotification.repeatOption === 'daily') {
+              // For Android daily alarms, try to find the closest scheduled alarm time
+              try {
+                const { getAllDailyAlarmInstances } = await import('@/utils/database');
+                const alarmInstances = await getAllDailyAlarmInstances(parentId);
+                const now = new Date();
+
+                // Find the alarm instance that should have fired most recently
+                const pastInstances = alarmInstances
+                  .map(inst => new Date(inst.fireDateTime))
+                  .filter(date => date <= now)
+                  .sort((a, b) => b.getTime() - a.getTime()); // Most recent first
+
+                if (pastInstances.length > 0) {
+                  // Use the most recent scheduled alarm time
+                  fireDateTime = pastInstances[0].toISOString();
+                  logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Derived fireDateTime from alarm instance for ${parentId}: ${fireDateTime}`);
+                } else {
+                  // Fallback: calculate from scheduleDateTime
+                  const scheduleDate = new Date(scheduledNotification.scheduleDateTime);
+                  const hour = scheduleDate.getHours();
+                  const minute = scheduleDate.getMinutes();
+                  const today = new Date();
+                  today.setHours(hour, minute, 0, 0);
+
+                  // If today's time has passed, use today; otherwise use yesterday
+                  if (today <= now) {
+                    fireDateTime = today.toISOString();
+                  } else {
+                    const yesterday = new Date(today);
+                    yesterday.setDate(yesterday.getDate() - 1);
+                    fireDateTime = yesterday.toISOString();
+                  }
+                  logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Calculated fireDateTime from schedule for ${parentId}: ${fireDateTime}`);
+                }
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Failed to derive fireDateTime for ${parentId}, using current time:`, error);
+                fireDateTime = new Date().toISOString();
+              }
+            } else {
+              // For other cases, calculate from scheduleDateTime + repeat interval
+              const now = new Date();
+              const scheduleDate = new Date(scheduledNotification.scheduleDateTime);
+              const hour = scheduleDate.getHours();
+              const minute = scheduleDate.getMinutes();
+              const today = new Date();
+              today.setHours(hour, minute, 0, 0);
+
+              // If today's time has passed, use today; otherwise use previous occurrence
+              if (today <= now) {
+                fireDateTime = today.toISOString();
+              } else {
+                // Calculate previous occurrence based on repeatOption
+                const previous = new Date(today);
+                switch (scheduledNotification.repeatOption) {
+                  case 'daily':
+                    previous.setDate(previous.getDate() - 1);
+                    break;
+                  case 'weekly':
+                    previous.setDate(previous.getDate() - 7);
+                    break;
+                  case 'monthly':
+                    previous.setMonth(previous.getMonth() - 1);
+                    break;
+                  case 'yearly':
+                    previous.setFullYear(previous.getFullYear() - 1);
+                    break;
+                }
+                fireDateTime = previous.toISOString();
+              }
+              logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Calculated fireDateTime from schedule for ${parentId}: ${fireDateTime}`);
+            }
+          }
 
           // Get snapshot from parent notification
           const snapshot = {
@@ -139,7 +219,7 @@ export default function RootLayout() {
 
           await insertRepeatOccurrence(parentId, fireDateTime, 'tap', snapshot);
           logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), `[RepeatOccurrence] Recorded tap occurrence for ${parentId} at ${fireDateTime}`);
-          
+
           // iOS-only: Migrate daily rolling-window to native daily repeat on first occurrence
           if (scheduledNotification.repeatOption === 'daily' && scheduledNotification.repeatMethod === 'rollingWindow') {
             try {
@@ -196,41 +276,6 @@ export default function RootLayout() {
 
           pendingNavTimeoutRef.current = null;
         }, navDelay);
-
-        //   // Wait for app to be active and interactions to complete before navigating
-        //   const navigateToNotification = () => {
-        //     try {
-        //       // Use replace to ensure it shows even when coming from background
-        //       router.replace({
-        //         pathname: '/notification-display',
-        //         params: {
-        //           message: data.message as string,
-        //           link: (data.link as string) || ''
-        //         },
-        //       });
-        //       console.log('handleNotificationNavigation: Navigation triggered with replace');
-        //     } catch (error) {
-        //       console.error('handleNotificationNavigation: Navigation error:', error);
-        //       // Fallback: try push
-        //       try {
-        //         router.push({
-        //           pathname: '/notification-display',
-        //           params: {
-        //             message: data.message as string,
-        //             link: (data.link as string) || ''
-        //           },
-        //         });
-        //         console.log('handleNotificationNavigation: Navigation triggered with push (fallback)');
-        //       } catch (pushError) {
-        //         console.error('handleNotificationNavigation: Push navigation also failed:', pushError);
-        //       }
-        //     }
-        //   };
-
-        //   // Wait for interactions to complete and navigate
-        //   InteractionManager.runAfterInteractions(() => {
-        //     setTimeout(navigateToNotification, 200);
-        //   });
 
       }
     }
@@ -552,6 +597,51 @@ export default function RootLayout() {
           });
         }
 
+        // Proactively migrate daily rolling-window alarms to native recurring (iOS and Android)
+        // This runs when start date has passed and app is foregrounded
+        if (alarmPermissionAuthorized) {
+          const { migrateDailyRollingWindowToNative, migrateAndroidDailyAlarmToNative, getAllScheduledNotificationData } = await import('@/utils/database');
+          const scheduledNotifications = await getAllScheduledNotificationData();
+          const now = new Date();
+
+          // iOS: Migrate daily rolling-window notifications/alarms
+          if (Platform.OS === 'ios' && notificationPermissionGranted) {
+            const iosDailyRollingWindow = scheduledNotifications.filter(n => {
+              return n.repeatOption === 'daily' &&
+                n.repeatMethod === 'rollingWindow' &&
+                new Date(n.scheduleDateTime) <= now;
+            });
+
+            for (const notification of iosDailyRollingWindow) {
+              try {
+                await migrateDailyRollingWindowToNative(notification.notificationId);
+                logger.info(makeLogHeader(LOG_FILE), `[ProactiveMigration] Migrated iOS daily rolling-window: ${notification.notificationId}`);
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE), `[ProactiveMigration] Failed to migrate iOS daily rolling-window ${notification.notificationId}:`, error);
+              }
+            }
+          }
+
+          // Android: Migrate alarm-only daily alarms from window to native recurring
+          if (Platform.OS === 'android') {
+            const androidDailyAlarms = scheduledNotifications.filter(n => {
+              return n.repeatOption === 'daily' &&
+                n.hasAlarm &&
+                n.repeatMethod === 'alarm' &&
+                new Date(n.scheduleDateTime) <= now;
+            });
+
+            for (const notification of androidDailyAlarms) {
+              try {
+                await migrateAndroidDailyAlarmToNative(notification.notificationId);
+                logger.info(makeLogHeader(LOG_FILE), `[ProactiveMigration] Migrated Android daily alarm: ${notification.notificationId}`);
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE), `[ProactiveMigration] Failed to migrate Android daily alarm ${notification.notificationId}:`, error);
+              }
+            }
+          }
+        }
+
         // Catch up repeat occurrences (for notifications that fired while app was inactive)
         if (notificationPermissionGranted) {
           const { catchUpRepeatOccurrences } = await import('@/utils/database');
@@ -560,7 +650,7 @@ export default function RootLayout() {
           });
         }
 
-        // Replenish daily alarm windows (ensure 14 future alarms per daily notification)
+        // Replenish daily alarm windows (ensure 7 future alarms per daily notification)
         // Only if both notification and alarm permissions are granted
         if (notificationPermissionGranted && alarmPermissionAuthorized) {
           ensureDailyAlarmWindowForAllNotifications().catch((error) => {
@@ -614,6 +704,20 @@ export default function RootLayout() {
                   presentation: 'modal',
                   title: 'Notification', // This is a screen title, not user-facing text that needs i18n
                   headerShown: true,
+                }}
+              />
+              <Stack.Screen
+                name="debug/os-scheduled-notifications"
+                options={{
+                  headerShown: false,
+                  presentation: 'card',
+                }}
+              />
+              <Stack.Screen
+                name="debug/native-alarms"
+                options={{
+                  headerShown: false,
+                  presentation: 'card',
                 }}
               />
             </Stack>

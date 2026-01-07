@@ -45,199 +45,99 @@ export const initDatabase = async () => {
     try {
       const db = await openDatabase();
 
-      // Create scheduledNotification table if it doesn't exist
+      // Drop all tables
+      // TODO: Remove this after initial release and use migrations after initial release
       await db.execAsync(`
-      CREATE TABLE IF NOT EXISTS scheduledNotification (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        notificationId TEXT NOT NULL,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        note TEXT DEFAULT NULL,
-        link TEXT DEFAULT NULL,
-        scheduleDateTime TEXT NOT NULL,
-        scheduleDateTimeLocal TEXT NOT NULL,
-        repeatOption TEXT DEFAULT NULL,
-        notificationTrigger TEXT DEFAULT NULL,
-        hasAlarm INTEGER DEFAULT 0,
-        createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
-        updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+        DROP TABLE IF EXISTS scheduledNotification;
+      `);
+      await db.execAsync(`
+        DROP TABLE IF EXISTS archivedNotification;
+      `);
+      await db.execAsync(`
+        DROP TABLE IF EXISTS calendarSelection;
+      `);
+      await db.execAsync(`
+        DROP TABLE IF EXISTS appPreferences;
+      `);
+      await db.execAsync(`
+        DROP TABLE IF EXISTS repeatNotificationInstance;
+        `);
+      await db.execAsync(`
+        DROP TABLE IF EXISTS repeatNotificationOccurrence;
+      `);
+      await db.execAsync(`
+        DROP TABLE IF EXISTS dailyAlarmInstance;
+      `);
+      await db.execAsync(`
+        DROP TABLE IF EXISTS pushToken;
+      `);
 
-      // Add new columns if they don't exist (migration for existing databases)
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN repeatOption TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatOption column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN notificationTrigger TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: notificationTrigger column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN hasAlarm INTEGER DEFAULT 0;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: hasAlarm column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN calendarId TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: calendarId column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventId TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventId column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN location TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: location column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventTitle TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventTitle column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventStartDate TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventStartDate column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventEndDate TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventEndDate column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventLocation TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventLocation column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN originalEventRecurring TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventRecurring column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE scheduledNotification ADD COLUMN repeatMethod TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatMethod column may already exist');
-        }
-      }
+      // Create all tables
+      // Create scheduledNotification table if it doesn't exist
+
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS scheduledNotification (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          notificationId TEXT NOT NULL,
+          title TEXT NOT NULL,
+          message TEXT NOT NULL,
+          note TEXT DEFAULT NULL,
+          link TEXT DEFAULT NULL,
+          scheduleDateTime TEXT NOT NULL,
+          scheduleDateTimeLocal TEXT NOT NULL,
+          repeatOption TEXT DEFAULT NULL,
+          repeatMethod TEXT DEFAULT NULL,
+          notificationTrigger TEXT DEFAULT NULL,
+          hasAlarm INTEGER DEFAULT 0,
+          calendarId TEXT DEFAULT NULL,
+          originalEventId TEXT DEFAULT NULL,
+          originalEventTitle TEXT DEFAULT NULL,
+          originalEventStartDate TEXT DEFAULT NULL,
+          originalEventEndDate TEXT DEFAULT NULL,
+          originalEventLocation TEXT DEFAULT NULL,
+          originalEventRecurring TEXT DEFAULT NULL,
+          location TEXT DEFAULT NULL,
+          createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+          updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
 
       // Create indexes for scheduledNotification table
       await db.execAsync(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduledNotification_notificationId ON scheduledNotification (notificationId);
-    `);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduledNotification_notificationId ON scheduledNotification (notificationId);
+      `);
 
       await db.execAsync(`
-      CREATE INDEX IF NOT EXISTS idx_scheduledNotification_scheduleDateTime ON scheduledNotification (scheduleDateTime);
-    `);
+        CREATE INDEX IF NOT EXISTS idx_scheduledNotification_scheduleDateTime ON scheduledNotification (scheduleDateTime);
+      `);
 
       await db.execAsync(`
-      CREATE INDEX IF NOT EXISTS idx_scheduledNotification_calendar_event ON scheduledNotification (calendarId, originalEventId);
-    `);
+        CREATE INDEX IF NOT EXISTS idx_scheduledNotification_calendar_event ON scheduledNotification (calendarId, originalEventId);
+      `);
 
       // Create archivedNotification table if it doesn't exist
       await db.execAsync(`
-      CREATE TABLE IF NOT EXISTS archivedNotification (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        notificationId TEXT NOT NULL,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        note TEXT DEFAULT NULL,
-        link TEXT DEFAULT NULL,
-        scheduleDateTime TEXT NOT NULL,
-        scheduleDateTimeLocal TEXT NOT NULL,
-        repeatOption TEXT DEFAULT NULL,
-        notificationTrigger TEXT DEFAULT NULL,
-        hasAlarm INTEGER DEFAULT 0,
-        createdAt TEXT NOT NULL,
-        updatedAt TEXT NOT NULL,
-        handledAt TEXT DEFAULT NULL,
-        cancelledAt TEXT DEFAULT NULL,
-        archivedAt TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-      // Add new columns if they don't exist (migration for existing databases)
-      try {
-        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN repeatOption TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: repeatOption column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN notificationTrigger TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: notificationTrigger column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN hasAlarm INTEGER DEFAULT 0;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: hasAlarm column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN calendarId TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: calendarId column may already exist');
-        }
-      }
-      try {
-        await db.execAsync(`ALTER TABLE archivedNotification ADD COLUMN originalEventId TEXT DEFAULT NULL;`);
-      } catch (error: any) {
-        // Column might already exist, ignore error
-        if (!error.message?.includes('duplicate column')) {
-          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: originalEventId column may already exist');
-        }
-      }
+        CREATE TABLE IF NOT EXISTS archivedNotification (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          notificationId TEXT NOT NULL,
+          title TEXT NOT NULL,
+          message TEXT NOT NULL,
+          note TEXT DEFAULT NULL,
+          link TEXT DEFAULT NULL,
+          scheduleDateTime TEXT NOT NULL,
+          scheduleDateTimeLocal TEXT NOT NULL,
+          repeatOption TEXT DEFAULT NULL,
+          notificationTrigger TEXT DEFAULT NULL,
+          hasAlarm INTEGER DEFAULT 0,
+          calendarId TEXT DEFAULT NULL,
+          originalEventId TEXT DEFAULT NULL,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          handledAt TEXT DEFAULT NULL,
+          cancelledAt TEXT DEFAULT NULL,
+          archivedAt TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
 
       // Create indexes for archivedNotification table
       await db.execAsync(`
@@ -1348,6 +1248,26 @@ export const getAllActiveRepeatNotificationInstances = async (
   }
 };
 
+// Get fireDateTime and updatedAt for a specific instance notification ID
+export const getRepeatNotificationInstanceFireDateTime = async (
+  instanceNotificationId: string
+): Promise<{ fireDateTime: string; updatedAt: string } | null> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const result = await db.getFirstAsync<{ fireDateTime: string; updatedAt: string }>(
+      `SELECT fireDateTime, updatedAt FROM repeatNotificationInstance 
+       WHERE instanceNotificationId = '${escapeSql(instanceNotificationId)}' 
+       AND isActive = 1;`
+    );
+    return result || null;
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'getRepeatNotificationInstanceFireDateTime'), 'Failed to get repeat notification instance fireDateTime:', error);
+    return null;
+  }
+};
+
 // Mark a repeat notification instance as cancelled
 export const markRepeatNotificationInstanceCancelled = async (instanceNotificationId: string): Promise<void> => {
   try {
@@ -1467,7 +1387,7 @@ export const generateOccurrenceDates = (
 export const getWindowSize = (repeatOption: 'daily' | 'weekly' | 'monthly' | 'yearly'): number => {
   switch (repeatOption) {
     case 'daily':
-      return 14;
+      return 7;
     case 'weekly':
       return 4;
     case 'monthly':
@@ -1475,7 +1395,7 @@ export const getWindowSize = (repeatOption: 'daily' | 'weekly' | 'monthly' | 'ye
     case 'yearly':
       return 2;
     default:
-      return 14;
+      return 7;
   }
 };
 
@@ -1717,7 +1637,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
             const { NativeAlarmManager } = await import('rn-native-alarmkit');
 
             if (notification.repeatOption === 'daily') {
-              // iOS-only: Migrate to native daily repeating alarm (single alarm chain, not window)
+              // iOS: Migrate to native daily repeating alarm (single alarm chain, not window)
               if (Platform.OS === 'ios') {
                 // Cancel all rolling-window daily alarms first
                 const dailyInstances = await getAllActiveDailyAlarmInstances(notification.notificationId);
@@ -1733,7 +1653,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                   }
                 }
                 logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Cancelled ${dailyInstances.length} old daily alarm instances`);
-                
+
                 // Schedule a single native daily repeating alarm
                 // Use stable alarm ID derived from notificationId (without prefix)
                 const alarmId = notification.notificationId.substring('thenotifier-'.length);
@@ -1743,7 +1663,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                   repeatInterval: 'daily' as const,
                   time: { hour, minute },
                 };
-                
+
                 await NativeAlarmManager.scheduleAlarm(
                   alarmSchedule as any,
                   {
@@ -1767,15 +1687,44 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                 );
                 logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduled native daily repeating alarm: ${alarmId}`);
               } else {
-                // Android: Continue using window strategy
-                await scheduleDailyAlarmWindow(
-                  notification.notificationId,
-                  startDate,
-                  { hour, minute },
+                // Android: Migrate to native daily repeating alarm (single alarm, not window)
+                // Cancel all rolling-window daily alarms first
+                const dailyInstances = await getAllActiveDailyAlarmInstances(notification.notificationId);
+                for (const instance of dailyInstances) {
+                  try {
+                    await NativeAlarmManager.cancelAlarm(instance.alarmId);
+                    await markDailyAlarmInstanceCancelled(instance.alarmId);
+                  } catch (alarmCancelError: any) {
+                    const errorMessage = alarmCancelError instanceof Error ? alarmCancelError.message : String(alarmCancelError);
+                    if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+                      logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Warning: Failed to cancel old alarm ${instance.alarmId}: ${errorMessage}`);
+                    }
+                  }
+                }
+                logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Cancelled ${dailyInstances.length} old daily alarm instances (Android)`);
+
+                // Schedule a single native daily repeating alarm for Android
+                const alarmId = notification.notificationId.substring('thenotifier-'.length);
+                const alarmSchedule = {
+                  id: alarmId,
+                  type: 'recurring' as const,
+                  repeatInterval: 'daily' as const,
+                  startDate: startDate.getTime(), // Android needs startDate
+                  time: { hour, minute },
+                };
+
+                const deepLinkUrl = notification.link
+                  ? `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=${encodeURIComponent(notification.link)}`
+                  : `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=`;
+
+                await NativeAlarmManager.scheduleAlarm(
+                  alarmSchedule as any,
                   {
                     title: notification.title,
                     body: notification.message,
+                    sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
                     color: '#8ddaff',
+                    ...(Platform.OS === 'android' ? { category: notification.notificationId } : {}),
                     data: {
                       notificationId: notification.notificationId,
                       title: notification.title,
@@ -1784,10 +1733,13 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                       link: notification.link || '',
                       url: deepLinkUrl,
                     },
-                  },
-                  14
+                    actions: [
+                      { icon: 'ic_cancel', behavior: 'dismiss', title: 'Dismiss', id: 'dismiss' },
+                      { icon: 'ic_snooze', snoozeDuration: 10, behavior: 'snooze', title: 'Snooze 10m', id: 'snooze' },
+                    ],
+                  }
                 );
-                logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduled new daily alarm window (Android)`);
+                logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Scheduled native daily repeating alarm for Android: ${alarmId}`);
               }
             } else {
               // Weekly/monthly/yearly: schedule new alarm first
@@ -1924,27 +1876,125 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
 
 // iOS-only: Migrate a single daily rolling-window notification to native daily repeat
 // Called when the first occurrence is detected (tap/foreground)
+// Migrate Android alarm-only daily alarms from window strategy to native recurring
+export const migrateAndroidDailyAlarmToNative = async (notificationId: string): Promise<void> => {
+  try {
+    const notification = await getScheduledNotificationData(notificationId);
+    if (!notification) {
+      logger.error(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Notification not found: ${notificationId}`);
+      return;
+    }
+
+    if (Platform.OS !== 'android') {
+      logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Skipping non-Android platform`);
+      return;
+    }
+
+    if (notification.repeatOption !== 'daily' || !notification.hasAlarm || notification.repeatMethod !== 'alarm') {
+      logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Not eligible for migration: ${notificationId}`);
+      return;
+    }
+
+    logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Migrating Android alarm-only daily: ${notificationId}`);
+
+    const { NativeAlarmManager } = await import('rn-native-alarmkit');
+
+    // Cancel all rolling-window daily alarms
+    const dailyInstances = await getAllActiveDailyAlarmInstances(notificationId);
+    for (const instance of dailyInstances) {
+      try {
+        await NativeAlarmManager.cancelAlarm(instance.alarmId);
+        await markDailyAlarmInstanceCancelled(instance.alarmId);
+      } catch (alarmCancelError: any) {
+        const errorMessage = alarmCancelError instanceof Error ? alarmCancelError.message : String(alarmCancelError);
+        if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+          logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Warning: Failed to cancel alarm ${instance.alarmId}: ${errorMessage}`);
+        }
+      }
+    }
+    logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Cancelled ${dailyInstances.length} window alarms`);
+
+    // Schedule native daily repeating alarm
+    const startDate = new Date(notification.scheduleDateTime);
+    const hour = startDate.getHours();
+    const minute = startDate.getMinutes();
+    const alarmId = notificationId.substring('thenotifier-'.length);
+
+    const deepLinkUrl = notification.link
+      ? `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=${encodeURIComponent(notification.link)}`
+      : `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=`;
+
+    const alarmSchedule = {
+      id: alarmId,
+      type: 'recurring' as const,
+      repeatInterval: 'daily' as const,
+      startDate: startDate.getTime(),
+      time: { hour, minute },
+    };
+
+    await NativeAlarmManager.scheduleAlarm(
+      alarmSchedule as any,
+      {
+        title: notification.title,
+        body: notification.message,
+        sound: 'thenotifier',
+        color: '#8ddaff',
+        category: notificationId,
+        data: {
+          notificationId: notificationId,
+          title: notification.title,
+          message: notification.message,
+          note: notification.note || '',
+          link: notification.link || '',
+          url: deepLinkUrl,
+        },
+        actions: [
+          { icon: 'ic_cancel', behavior: 'dismiss', title: 'Dismiss', id: 'dismiss' },
+          { icon: 'ic_snooze', snoozeDuration: 10, behavior: 'snooze', title: 'Snooze 10m', id: 'snooze' },
+        ],
+      }
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Scheduled native daily recurring alarm: ${alarmId}`);
+
+    // Update DB: set repeatMethod to 'alarmNative' to indicate migration
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    await db.execAsync(
+      `UPDATE scheduledNotification 
+       SET repeatMethod = 'alarmNative', updatedAt = CURRENT_TIMESTAMP 
+       WHERE notificationId = '${escapeSql(notificationId)}';`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Updated DB: set repeatMethod='alarmNative'`);
+
+    logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Successfully migrated ${notificationId}`);
+  } catch (error) {
+    logger.error(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Failed to migrate ${notificationId}:`, error);
+    throw error;
+  }
+};
+
 export const migrateDailyRollingWindowToNative = async (notificationId: string): Promise<void> => {
   if (Platform.OS !== 'ios') {
     return; // iOS-only function
   }
-  
+
   try {
     const notification = await getScheduledNotificationData(notificationId);
-    
+
     if (!notification) {
       logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Notification ${notificationId} not found`);
       return;
     }
-    
+
     // Only migrate if it's a daily rolling-window notification
     if (notification.repeatOption !== 'daily' || notification.repeatMethod !== 'rollingWindow') {
       logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Notification ${notificationId} is not a daily rolling-window notification`);
       return;
     }
-    
+
     logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Starting migration for ${notificationId}`);
-    
+
     // Cancel all remaining rolling-window notification instances
     const activeInstances = await getAllActiveRepeatNotificationInstances(notificationId);
     for (const instance of activeInstances) {
@@ -1959,22 +2009,22 @@ export const migrateDailyRollingWindowToNative = async (notificationId: string):
       }
     }
     logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Cancelled ${activeInstances.length} rolling-window notification instances`);
-    
+
     // Schedule Expo DAILY repeating notification
     const startDate = new Date(notification.scheduleDateTime);
     const hour = startDate.getHours();
     const minute = startDate.getMinutes();
-    
+
     const expoTrigger: Notifications.NotificationTriggerInput = {
       type: Notifications.SchedulableTriggerInputTypes.DAILY,
       hour: hour,
       minute: minute,
     };
-    
+
     const deepLinkUrl = notification.link
       ? `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=${encodeURIComponent(notification.link)}`
       : `thenotifier://notification-display?title=${encodeURIComponent(notification.title)}&message=${encodeURIComponent(notification.message)}&note=${encodeURIComponent(notification.note || '')}&link=`;
-    
+
     const notificationContent: Notifications.NotificationContentInput = {
       title: notification.title,
       body: notification.message,
@@ -1988,18 +2038,18 @@ export const migrateDailyRollingWindowToNative = async (notificationId: string):
       sound: 'thenotifier.wav',
       interruptionLevel: 'timeSensitive',
     };
-    
+
     await Notifications.scheduleNotificationAsync({
       identifier: notificationId,
       content: notificationContent,
       trigger: expoTrigger,
     });
     logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Scheduled Expo DAILY repeating notification`);
-    
+
     // Cancel all rolling-window daily alarms and schedule native daily repeating alarm
     if (notification.hasAlarm) {
       const { NativeAlarmManager } = await import('rn-native-alarmkit');
-      
+
       // Cancel all rolling-window alarms
       const dailyInstances = await getAllActiveDailyAlarmInstances(notificationId);
       for (const instance of dailyInstances) {
@@ -2014,7 +2064,7 @@ export const migrateDailyRollingWindowToNative = async (notificationId: string):
         }
       }
       logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Cancelled ${dailyInstances.length} rolling-window alarms`);
-      
+
       // Schedule native daily repeating alarm
       const alarmId = notificationId.substring('thenotifier-'.length);
       const alarmSchedule = {
@@ -2023,7 +2073,7 @@ export const migrateDailyRollingWindowToNative = async (notificationId: string):
         repeatInterval: 'daily' as const,
         time: { hour, minute },
       };
-      
+
       await NativeAlarmManager.scheduleAlarm(
         alarmSchedule as any,
         {
@@ -2047,7 +2097,7 @@ export const migrateDailyRollingWindowToNative = async (notificationId: string):
       );
       logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Scheduled native daily repeating alarm: ${alarmId}`);
     }
-    
+
     // Update DB: set repeatMethod to 'expo'
     const db = await openDatabase();
     await initDatabase();
@@ -2058,7 +2108,7 @@ export const migrateDailyRollingWindowToNative = async (notificationId: string):
        WHERE notificationId = '${escapeSql(notificationId)}';`
     );
     logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Updated DB: set repeatMethod='expo'`);
-    
+
     logger.info(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Successfully migrated ${notificationId}`);
   } catch (error) {
     logger.error(makeLogHeader(LOG_FILE, 'migrateDailyRollingWindowToNative'), `[DailyMigration] Failed to migrate ${notificationId}:`, error);
@@ -2074,11 +2124,16 @@ export const ensureRollingWindowNotificationInstances = async (): Promise<void> 
   const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
 
   // Filter for rolling-window managed notifications
+  // Android: Skip notifications with hasAlarm=true (alarm-only mode, no Expo notifications needed)
   const rollingWindowNotifications = scheduledNotifications.filter(
     n => {
       if (!n.repeatOption || n.repeatOption === 'none') return false;
       if (!n.notificationTrigger) return false;
       const trigger = n.notificationTrigger as any;
+      // Android: Don't schedule rolling-window Expo notifications for alarm-only parents
+      if (Platform.OS === 'android' && n.hasAlarm) {
+        return false;
+      }
       return trigger.type === 'DATE_WINDOW';
     }
   );
@@ -2172,21 +2227,21 @@ export const ensureRollingWindowNotificationInstances = async (): Promise<void> 
   }
 };
 
-// Higher-level orchestrator: Schedule daily alarm window (14 fixed alarms)
+// Higher-level orchestrator: Schedule daily alarm window (7 fixed alarms)
 // This should be called from scheduleForm.tsx when scheduling a daily alarm
 export const scheduleDailyAlarmWindow = async (
   notificationId: string,
   baseDate: Date,
   time: { hour: number; minute: number },
   alarmConfig: { title: string; body?: string; sound?: string; color?: string; data?: any; actions?: any[] },
-  count: number = 14
+  count: number = 7
 ): Promise<void> => {
   const { NativeAlarmManager } = await import('rn-native-alarmkit');
 
   const now = new Date();
   const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
 
-  // Calculate dates for the next 14 occurrences
+  // Calculate dates for the next 7 occurrences
   // CRITICAL: First alarm must be exactly on baseDate (with hour/minute set)
   // This ensures daily alarms begin on the user-selected date
   const dates: Date[] = [];
@@ -2220,19 +2275,19 @@ export const scheduleDailyAlarmWindow = async (
   for (const alarmDate of dates) {
     try {
       const fireDateTimeIso = alarmDate.toISOString();
-      
+
       // iOS-only: Check if this alarm instance already exists in DB before scheduling
       // This prevents duplicate OS alarms when replenisher runs overlap or migration happens
       if (Platform.OS === 'ios') {
         const allInstances = await getAllDailyAlarmInstances(notificationId);
         const alreadyExists = allInstances.some(inst => inst.fireDateTime === fireDateTimeIso);
-        
+
         if (alreadyExists) {
           logger.info(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `[iOS] Skipping duplicate alarm instance for ${notificationId} at ${fireDateTimeIso}`);
           continue;
         }
       }
-      
+
       const alarmId = Crypto.randomUUID();
       const alarmSchedule = {
         id: alarmId,
@@ -2287,7 +2342,7 @@ export const ensureDailyAlarmWindowForAllNotifications = async (): Promise<void>
       await iosReplenisherInFlight;
       return;
     }
-    
+
     iosReplenisherInFlight = (async () => {
       try {
         await ensureDailyAlarmWindowForAllNotificationsInternal();
@@ -2295,11 +2350,11 @@ export const ensureDailyAlarmWindowForAllNotifications = async (): Promise<void>
         iosReplenisherInFlight = null;
       }
     })();
-    
+
     await iosReplenisherInFlight;
     return;
   }
-  
+
   // Android: Run directly without mutex
   await ensureDailyAlarmWindowForAllNotificationsInternal();
 };
@@ -2312,17 +2367,21 @@ const ensureDailyAlarmWindowForAllNotificationsInternal = async (): Promise<void
   const nowIso = now.toISOString();
   const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
 
-  // iOS-only: Filter for daily notifications with alarms enabled AND still using rolling-window strategy
-  // Once migrated to native daily repeat (repeatMethod === 'expo'), we stop replenishing the alarm window
+  // Filter for daily notifications with alarms enabled AND still using rolling-window/window strategy
+  // Once migrated to native daily repeat (repeatMethod === 'expo' or 'alarmNative'), we stop replenishing the alarm window
   const dailyNotifications = scheduledNotifications.filter(
     n => {
       if (n.repeatOption !== 'daily' || !n.hasAlarm) return false;
-      // iOS-only: Only replenish if still using rolling-window strategy
+      // iOS: Only replenish if still using rolling-window strategy
       if (Platform.OS === 'ios') {
         return n.repeatMethod === 'rollingWindow';
       }
-      // Android: Continue existing behavior
-      return true;
+      // Android: Only replenish if still using window strategy (repeatMethod === 'alarm')
+      // Skip if already migrated to native recurring (repeatMethod === 'alarmNative' or 'expo')
+      if (Platform.OS === 'android') {
+        return n.repeatMethod === 'alarm';
+      }
+      return false;
     }
   );
 
@@ -2334,9 +2393,9 @@ const ensureDailyAlarmWindowForAllNotificationsInternal = async (): Promise<void
         oneMinuteFromNow.toISOString()
       );
 
-      // If we have fewer than 14, schedule more
-      if (activeInstances.length < 14) {
-        const needed = 14 - activeInstances.length;
+      // If we have fewer than 7, schedule more
+      if (activeInstances.length < 7) {
+        const needed = 7 - activeInstances.length;
 
         // Parse the notification trigger to get time
         // iOS-only: If trigger lacks hour/minute (e.g., DATE_WINDOW), derive from scheduleDateTime
@@ -2347,11 +2406,11 @@ const ensureDailyAlarmWindowForAllNotificationsInternal = async (): Promise<void
           if (trigger.hour !== undefined) hour = trigger.hour;
           if (trigger.minute !== undefined) minute = trigger.minute;
         }
-        
+
         // iOS-only: If trigger doesn't have hour/minute (e.g., DATE_WINDOW), derive from scheduleDateTime
-        if (Platform.OS === 'ios' && (!notification.notificationTrigger || 
-            (notification.notificationTrigger as any).hour === undefined || 
-            (notification.notificationTrigger as any).minute === undefined)) {
+        if (Platform.OS === 'ios' && (!notification.notificationTrigger ||
+          (notification.notificationTrigger as any).hour === undefined ||
+          (notification.notificationTrigger as any).minute === undefined)) {
           const scheduleDate = new Date(notification.scheduleDateTime);
           hour = scheduleDate.getHours();
           minute = scheduleDate.getMinutes();
@@ -2575,9 +2634,62 @@ export const catchUpRepeatOccurrences = async (): Promise<void> => {
 
     for (const notification of repeatingNotifications) {
       try {
+        // Android-only: For daily alarms, use actual fireDateTime from dailyAlarmInstance when available
+        if (Platform.OS === 'android' && notification.repeatOption === 'daily' && notification.repeatMethod === 'alarm') {
+          try {
+            const alarmInstances = await getAllDailyAlarmInstances(notification.notificationId);
+            const pastAlarmInstances = alarmInstances.filter(inst => {
+              const fireDate = new Date(inst.fireDateTime);
+              return fireDate <= now;
+            });
+
+            if (pastAlarmInstances.length > 0) {
+              // Get snapshot data from parent notification
+              const snapshot = {
+                title: notification.title,
+                message: notification.message,
+                note: notification.note || null,
+                link: notification.link || null,
+              };
+
+              // Check which alarm instances don't have recorded occurrences yet
+              const lastFireIso = await getLatestRepeatOccurrenceFireDate(notification.notificationId);
+              const lastFireDate = lastFireIso ? new Date(lastFireIso) : null;
+
+              for (const instance of pastAlarmInstances) {
+                const fireDate = new Date(instance.fireDateTime);
+                // Only insert if this fire time hasn't been recorded yet
+                if (!lastFireDate || fireDate > lastFireDate) {
+                  await insertRepeatOccurrence(
+                    notification.notificationId,
+                    instance.fireDateTime,
+                    'catchup',
+                    snapshot
+                  );
+                }
+              }
+
+              logger.info(makeLogHeader(LOG_FILE, 'catchUpRepeatOccurrences'), `[CatchUp] Used ${pastAlarmInstances.length} actual alarm fire times for ${notification.notificationId}`);
+              continue; // Skip calculation-based catchup for this notification
+            }
+          } catch (alarmError) {
+            logger.info(makeLogHeader(LOG_FILE, 'catchUpRepeatOccurrences'), `[CatchUp] Failed to get alarm instances for ${notification.notificationId}, falling back to calculation:`, alarmError);
+            // Fall through to calculation-based catchup
+          }
+        }
+
+        // Extract scheduled hour/minute from scheduleDateTime to preserve time
+        const scheduleDate = new Date(notification.scheduleDateTime);
+        const scheduledHour = scheduleDate.getHours();
+        const scheduledMinute = scheduleDate.getMinutes();
+        const scheduledSecond = scheduleDate.getSeconds();
+
         // Get latest recorded occurrence, or use scheduleDateTime as starting point
         const lastFireIso = await getLatestRepeatOccurrenceFireDate(notification.notificationId);
-        const startDate = lastFireIso ? new Date(lastFireIso) : new Date(notification.scheduleDateTime);
+        let startDate = lastFireIso ? new Date(lastFireIso) : new Date(notification.scheduleDateTime);
+
+        // Ensure startDate has the correct scheduled time (hour/minute/second)
+        startDate.setHours(scheduledHour, scheduledMinute, scheduledSecond, 0);
 
         // Skip if startDate is in the future
         if (startDate >= now) {
@@ -2603,15 +2715,21 @@ export const catchUpRepeatOccurrences = async (): Promise<void> => {
           switch (notification.repeatOption) {
             case 'daily':
               currentDate.setDate(currentDate.getDate() + 1);
+              // Ensure time matches scheduled time
+              currentDate.setHours(scheduledHour, scheduledMinute, scheduledSecond, 0);
               break;
             case 'weekly':
               currentDate.setDate(currentDate.getDate() + 7);
+              // Ensure time matches scheduled time
+              currentDate.setHours(scheduledHour, scheduledMinute, scheduledSecond, 0);
               break;
             case 'monthly': {
               const originalDay = new Date(notification.scheduleDateTime).getDate();
               currentDate.setMonth(currentDate.getMonth() + 1);
               const clampedDay = clampDayOfMonth(currentDate.getFullYear(), currentDate.getMonth(), originalDay);
               currentDate.setDate(clampedDay);
+              // Ensure time matches scheduled time
+              currentDate.setHours(scheduledHour, scheduledMinute, scheduledSecond, 0);
               break;
             }
             case 'yearly': {
@@ -2621,6 +2739,8 @@ export const catchUpRepeatOccurrences = async (): Promise<void> => {
               const clampedDay = clampDayOfMonth(currentDate.getFullYear(), originalMonth, originalDay);
               currentDate.setDate(clampedDay);
               currentDate.setMonth(originalMonth);
+              // Ensure time matches scheduled time
+              currentDate.setHours(scheduledHour, scheduledMinute, scheduledSecond, 0);
               break;
             }
           }

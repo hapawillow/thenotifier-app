@@ -28,6 +28,7 @@
             <intent-filter>
                 <action android:name="com.nativealarms.ACTION_DISMISS" />
                 <action android:name="com.nativealarms.ACTION_SNOOZE" />
+                <action android:name="com.nativealarms.ACTION_OPEN" />
             </intent-filter>
         </receiver>
 

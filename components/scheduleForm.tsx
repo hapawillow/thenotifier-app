@@ -339,6 +339,18 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   useEffect(() => {
     // Request permissions
     (async () => {
+      // Android: Ensure notification channel is set up before requesting permissions
+      // This is required per Expo docs - channel must exist before permissions prompt will appear
+      if (Platform.OS === 'android') {
+        try {
+          await ensureAndroidNotificationChannel();
+          logger.info(makeLogHeader(LOG_FILE), 'Android notification channel ensured before permission request');
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE), 'Failed to ensure Android notification channel before permission request:', error);
+          // Continue anyway - channel might already exist from app initialization
+        }
+      }
+
       const { status } = await Notifications.requestPermissionsAsync();
       if (status !== 'granted') {
         // Don't show alert here - will be handled when user tries to schedule
@@ -1100,14 +1112,14 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             useRollingWindow = true;
             notificationTrigger = {
               type: 'DATE_WINDOW' as any,
-              window: 'daily14',
+              window: 'daily7',
             } as any;
             logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Daily repeat: using rollingWindow (selected date does not match next occurrence)', {
               selectedISO: dateWithoutSeconds.toISOString(),
               hour: hour,
               minute: minute,
               diffMs: diffMs,
-              windowSize: 14,
+              windowSize: 7,
             });
           }
           break;
@@ -1239,6 +1251,8 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       if (useAndroidAlarmOnly) {
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Android alarm-only mode: skipping notification scheduling');
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Saving notification with repeatMethod:', 'alarm');
+        // Android alarm-only: Store notificationTrigger as null to prevent window replenishment code
+        // from interpreting it as needing Expo window notifications
         await saveScheduledNotificationData(
           notificationId,
           notificationTitle,
@@ -1248,7 +1262,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           dateWithoutSeconds.toISOString(),
           dateWithoutSeconds.toLocaleString(),
           repeatOption,
-          notificationTrigger,
+          null, // Store null instead of DATE_WINDOW trigger to prevent window replenishment
           scheduleAlarm && alarmSupported,
           initialParams?.calendarId,
           initialParams?.originalEventId,
@@ -1485,10 +1499,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Scheduling alarm with ID:', alarmId);
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm date:', dateWithoutSeconds.toISOString());
 
-          // Handle daily alarms differently - schedule 14 fixed alarms
+          // Handle daily alarms differently - schedule 7 fixed alarms
           if (repeatOption === 'daily') {
-            // Schedule 14-day rolling window for daily alarms (AlarmKit alarms, not notifications)
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling 14-day AlarmKit alarm window for daily repeat');
+            // Schedule 7-day rolling window for daily alarms (AlarmKit alarms, not notifications)
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling 7-day AlarmKit alarm window for daily repeat');
             await scheduleDailyAlarmWindow(
               notificationId,
               dateWithoutSeconds,
@@ -1508,9 +1522,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 },
                 actions: ALARM_ACTIONS
               },
-              14
+              7
             );
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled 14 AlarmKit alarm instances for:', notificationId);
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled 7 AlarmKit alarm instances for:', notificationId);
           } else {
             // Build alarm schedule for one-time or weekly alarms
             let alarmSchedule: any;

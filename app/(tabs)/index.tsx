@@ -91,9 +91,17 @@ const getPastKey = (item: PastItem): string => {
 
 type TabType = 'scheduled' | 'archived';
 
+// Debug menu item labels (constants for comparison)
+const DEBUG_NOTIFICATIONS_MENU_ITEM = 'Debug: OS Scheduled Notifications';
+const DEBUG_ALARMS_MENU_ITEM = 'Debug: Native Scheduled Alarms';
+
 export default function HomeScreen() {
   const router = useRouter();
   const t = useT();
+
+  // Debug menu items (gated by environment variables)
+  const showDebugNotificationsMenu = process.env.EXPO_PUBLIC_DEBUG_SCHEDULED_NOTIFICATIONS_MENU === 'true';
+  const showDebugAlarmsMenu = process.env.EXPO_PUBLIC_DEBUG_SCHEDULED_ALARMS_MENU === 'true';
 
   const MENU_ITEMS = [
     t('menuItemText.payments'),
@@ -102,6 +110,8 @@ export default function HomeScreen() {
     t('menuItemText.help'),
     t('menuItemText.aboutUs'),
     t('menuItemText.appearance'),
+    ...(showDebugNotificationsMenu ? [DEBUG_NOTIFICATIONS_MENU_ITEM] : []),
+    ...(showDebugAlarmsMenu ? [DEBUG_ALARMS_MENU_ITEM] : []),
   ];
   const [activeTab, setActiveTab] = useState<TabType>('scheduled');
   const [scheduledNotifications, setScheduledNotifications] = useState<ScheduledNotification[]>([]);
@@ -247,8 +257,88 @@ export default function HomeScreen() {
         const scheduledNotification = await getScheduledNotificationData(parentId);
 
         if (scheduledNotification && scheduledNotification.repeatOption && scheduledNotification.repeatOption !== 'none') {
-          // Compute fireDateTime from notification.date or use current time
-          const fireDateTime = notification.date ? new Date(notification.date * 1000).toISOString() : new Date().toISOString();
+          // Compute fireDateTime from notification.date or derive from schedule
+          let fireDateTime: string;
+
+          if (notification.date) {
+            // Expo notification has date (in seconds, Unix timestamp)
+            fireDateTime = new Date(notification.date * 1000).toISOString();
+          } else {
+            // Android alarm-only mode: notification.date is undefined
+            // Derive fire time from schedule or use current time as fallback
+            if (Platform.OS === 'android' && scheduledNotification.repeatMethod === 'alarm' && scheduledNotification.repeatOption === 'daily') {
+              // For Android daily alarms, try to find the closest scheduled alarm time
+              try {
+                const { getAllDailyAlarmInstances } = await import('@/utils/database');
+                const alarmInstances = await getAllDailyAlarmInstances(parentId);
+                const now = new Date();
+
+                // Find the alarm instance that should have fired most recently
+                const pastInstances = alarmInstances
+                  .map(inst => new Date(inst.fireDateTime))
+                  .filter(date => date <= now)
+                  .sort((a, b) => b.getTime() - a.getTime()); // Most recent first
+
+                if (pastInstances.length > 0) {
+                  // Use the most recent scheduled alarm time
+                  fireDateTime = pastInstances[0].toISOString();
+                  logger.info(makeLogHeader(LOG_FILE), `[RepeatOccurrence] Derived fireDateTime from alarm instance for ${parentId}: ${fireDateTime}`);
+                } else {
+                  // Fallback: calculate from scheduleDateTime
+                  const scheduleDate = new Date(scheduledNotification.scheduleDateTime);
+                  const hour = scheduleDate.getHours();
+                  const minute = scheduleDate.getMinutes();
+                  const today = new Date();
+                  today.setHours(hour, minute, 0, 0);
+
+                  // If today's time has passed, use today; otherwise use yesterday
+                  if (today <= now) {
+                    fireDateTime = today.toISOString();
+                  } else {
+                    const yesterday = new Date(today);
+                    yesterday.setDate(yesterday.getDate() - 1);
+                    fireDateTime = yesterday.toISOString();
+                  }
+                  logger.info(makeLogHeader(LOG_FILE), `[RepeatOccurrence] Calculated fireDateTime from schedule for ${parentId}: ${fireDateTime}`);
+                }
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE), `[RepeatOccurrence] Failed to derive fireDateTime for ${parentId}, using current time:`, error);
+                fireDateTime = new Date().toISOString();
+              }
+            } else {
+              // For other cases, calculate from scheduleDateTime + repeat interval
+              const now = new Date();
+              const scheduleDate = new Date(scheduledNotification.scheduleDateTime);
+              const hour = scheduleDate.getHours();
+              const minute = scheduleDate.getMinutes();
+              const today = new Date();
+              today.setHours(hour, minute, 0, 0);
+
+              // If today's time has passed, use today; otherwise use previous occurrence
+              if (today <= now) {
+                fireDateTime = today.toISOString();
+              } else {
+                // Calculate previous occurrence based on repeatOption
+                const previous = new Date(today);
+                switch (scheduledNotification.repeatOption) {
+                  case 'daily':
+                    previous.setDate(previous.getDate() - 1);
+                    break;
+                  case 'weekly':
+                    previous.setDate(previous.getDate() - 7);
+                    break;
+                  case 'monthly':
+                    previous.setMonth(previous.getMonth() - 1);
+                    break;
+                  case 'yearly':
+                    previous.setFullYear(previous.getFullYear() - 1);
+                    break;
+                }
+                fireDateTime = previous.toISOString();
+              }
+              logger.info(makeLogHeader(LOG_FILE), `[RepeatOccurrence] Calculated fireDateTime from schedule for ${parentId}: ${fireDateTime}`);
+            }
+          }
 
           // Get snapshot from parent notification
           const snapshot = {
@@ -260,7 +350,7 @@ export default function HomeScreen() {
 
           await insertRepeatOccurrence(parentId, fireDateTime, 'foreground', snapshot);
           logger.info(makeLogHeader(LOG_FILE), `[RepeatOccurrence] Recorded foreground occurrence for ${parentId} at ${fireDateTime}`);
-          
+
           // iOS-only: Migrate daily rolling-window to native daily repeat on first occurrence
           if (scheduledNotification.repeatOption === 'daily' && scheduledNotification.repeatMethod === 'rollingWindow') {
             try {
@@ -930,6 +1020,10 @@ export default function HomeScreen() {
       router.push('/about');
     } else if (item === t('menuItemText.appearance')) {
       setAppearanceModalVisible(true);
+    } else if (item === DEBUG_NOTIFICATIONS_MENU_ITEM) {
+      router.push('/debug/os-scheduled-notifications');
+    } else if (item === DEBUG_ALARMS_MENU_ITEM) {
+      router.push('/debug/native-alarms');
     } else {
       // Use InteractionManager to ensure Alert shows after interactions complete
       InteractionManager.runAfterInteractions(() => {
