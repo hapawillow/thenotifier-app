@@ -1,6 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { NativeAlarmManager } from 'rn-native-alarmkit';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
 import { getAllDailyAlarmInstances, markDailyAlarmInstanceCancelled } from './database';
 import { logger, makeLogHeader } from './logger';
 

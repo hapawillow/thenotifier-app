@@ -47,30 +47,30 @@ export const initDatabase = async () => {
 
       // Drop all tables
       // TODO: Remove this after initial release and use migrations after initial release
-      await db.execAsync(`
-        DROP TABLE IF EXISTS scheduledNotification;
-      `);
-      await db.execAsync(`
-        DROP TABLE IF EXISTS archivedNotification;
-      `);
-      await db.execAsync(`
-        DROP TABLE IF EXISTS calendarSelection;
-      `);
-      await db.execAsync(`
-        DROP TABLE IF EXISTS appPreferences;
-      `);
-      await db.execAsync(`
-        DROP TABLE IF EXISTS repeatNotificationInstance;
-        `);
-      await db.execAsync(`
-        DROP TABLE IF EXISTS repeatNotificationOccurrence;
-      `);
-      await db.execAsync(`
-        DROP TABLE IF EXISTS dailyAlarmInstance;
-      `);
-      await db.execAsync(`
-        DROP TABLE IF EXISTS pushToken;
-      `);
+      // await db.execAsync(`
+      //   DROP TABLE IF EXISTS scheduledNotification;
+      // `);
+      // await db.execAsync(`
+      //   DROP TABLE IF EXISTS archivedNotification;
+      // `);
+      // await db.execAsync(`
+      //   DROP TABLE IF EXISTS calendarSelection;
+      // `);
+      // await db.execAsync(`
+      //   DROP TABLE IF EXISTS appPreferences;
+      // `);
+      // await db.execAsync(`
+      //   DROP TABLE IF EXISTS repeatNotificationInstance;
+      //   `);
+      // await db.execAsync(`
+      //   DROP TABLE IF EXISTS repeatNotificationOccurrence;
+      // `);
+      // await db.execAsync(`
+      //   DROP TABLE IF EXISTS dailyAlarmInstance;
+      // `);
+      // await db.execAsync(`
+      //   DROP TABLE IF EXISTS pushToken;
+      // `);
 
       // Create all tables
       // Create scheduledNotification table if it doesn't exist
@@ -284,6 +284,24 @@ export const initDatabase = async () => {
       await db.execAsync(`
       INSERT OR IGNORE INTO pushToken (id, deviceId, updatedAt)
       VALUES (1, '', CURRENT_TIMESTAMP);
+    `);
+
+
+      // Create rollingWindowSemaphore table if it doesn't exist (for tracking rolling-window migration status)
+      await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS rollingWindowSemaphore (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        activeNotificationMigration INTEGER NOT NULL DEFAULT 0,
+        lastNotificationMigrationAt TEXT DEFAULT NULL,
+        activeAlarmMigration INTEGER NOT NULL DEFAULT 0,
+        lastAlarmMigrationAt TEXT DEFAULT NULL
+      );
+    `);
+
+      // Insert default row if it doesn't exist (will be populated with initial values on first use)
+      await db.execAsync(`
+      INSERT OR IGNORE INTO rollingWindowSemaphore (id, activeNotificationMigration, lastNotificationMigrationAt, activeAlarmMigration, lastAlarmMigrationAt)
+      VALUES (1, 0, NULL, 0, NULL);
     `);
 
       isInitialized = true;
@@ -1634,7 +1652,7 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
           logger.info(makeLogHeader(LOG_FILE, 'migrateRollingWindowRepeatsToExpo'), `[RepeatMigration] Handling alarms for ${notification.notificationId}`);
 
           try {
-            const { NativeAlarmManager } = await import('rn-native-alarmkit');
+            const { NativeAlarmManager } = await import('notifier-alarm-manager');
 
             if (notification.repeatOption === 'daily') {
               // iOS: Migrate to native daily repeating alarm (single alarm chain, not window)
@@ -1897,7 +1915,7 @@ export const migrateAndroidDailyAlarmToNative = async (notificationId: string): 
 
     logger.info(makeLogHeader(LOG_FILE, 'migrateAndroidDailyAlarmToNative'), `[AndroidDailyMigration] Migrating Android alarm-only daily: ${notificationId}`);
 
-    const { NativeAlarmManager } = await import('rn-native-alarmkit');
+    const { NativeAlarmManager } = await import('notifier-alarm-manager');
 
     // Cancel all rolling-window daily alarms
     const dailyInstances = await getAllActiveDailyAlarmInstances(notificationId);
@@ -2048,7 +2066,7 @@ export const migrateDailyRollingWindowToNative = async (notificationId: string):
 
     // Cancel all rolling-window daily alarms and schedule native daily repeating alarm
     if (notification.hasAlarm) {
-      const { NativeAlarmManager } = await import('rn-native-alarmkit');
+      const { NativeAlarmManager } = await import('notifier-alarm-manager');
 
       // Cancel all rolling-window alarms
       const dailyInstances = await getAllActiveDailyAlarmInstances(notificationId);
@@ -2236,7 +2254,7 @@ export const scheduleDailyAlarmWindow = async (
   alarmConfig: { title: string; body?: string; sound?: string; color?: string; data?: any; actions?: any[] },
   count: number = 7
 ): Promise<void> => {
-  const { NativeAlarmManager } = await import('rn-native-alarmkit');
+  const { NativeAlarmManager } = await import('notifier-alarm-manager');
 
   const now = new Date();
   const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
@@ -2936,3 +2954,66 @@ export const clearPushTokens = async (): Promise<void> => {
   }
 };
 
+
+export const getRollingWindowSemaphore = async (): Promise<{
+  activeNotificationMigration: number;
+  lastNotificationMigrationAt: string | null;
+  activeAlarmMigration: number;
+  lastAlarmMigrationAt: string | null;
+} | null> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const result = await db.getFirstAsync<{
+      activeNotificationMigration: number;
+      lastNotificationMigrationAt: string | null;
+      activeAlarmMigration: number;
+      lastAlarmMigrationAt: string | null;
+    }>(
+      `SELECT activeNotificationMigration, lastNotificationMigrationAt, activeAlarmMigration, lastAlarmMigrationAt FROM rollingWindowSemaphore WHERE id = 1;`
+    );
+    return result || null;
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'getRollingWindowSemaphore'), 'Failed to get rolling-window semaphore:', error);
+    return null;
+  }
+};
+
+export const updateRollingWindowNotificationSemaphore = async (activeNotificationMigration: number, lastNotificationMigrationAt: string | null): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+
+    // Preserve existing deviceId
+    await db.execAsync(
+      `UPDATE rollingWindowSemaphore 
+        SET activeNotificationMigration = ${activeNotificationMigration},
+            lastNotificationMigrationAt = ${lastNotificationMigrationAt ? `'${escapeSql(lastNotificationMigrationAt)}'` : 'NULL'},
+        WHERE id = 1;`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'updateRollingWindowNotificationSemaphore'), 'Rolling-window notification semaphore updated');
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'updateRollingWindowNotificationSemaphore'), 'Failed to update rolling-window notification semaphore:', error);
+    throw new Error(`Failed to update rolling-window notification semaphore: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+export const updateRollingWindowAlarmSemaphore = async (activeAlarmMigration: number, lastAlarmMigrationAt: string | null): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+
+    await db.execAsync(
+      `UPDATE rollingWindowSemaphore 
+      SET activeAlarmMigration = ${activeAlarmMigration},
+          lastAlarmMigrationAt = ${lastAlarmMigrationAt ? `'${escapeSql(lastAlarmMigrationAt)}'` : 'NULL'},
+      WHERE id = 1;`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'updateRollingWindowAlarmSemaphore'), 'Rolling-window alarm semaphore updated');
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'updateRollingWindowAlarmSemaphore'), 'Failed to update rolling-window alarm semaphore:', error);
+    throw new Error(`Failed to update rolling-window alarm semaphore: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};

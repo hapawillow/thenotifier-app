@@ -1,14 +1,14 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { FlatList, RefreshControl, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
-import { NativeAlarmManager } from 'rn-native-alarmkit';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { ScheduledAlarm } from 'rn-native-alarmkit/src/types';
+import { ScheduledAlarm } from 'notifier-alarm-manager/src/types';
 
 // Helper to safely stringify objects with Date handling
 const safePretty = (obj: any, indent: number = 2): string => {
