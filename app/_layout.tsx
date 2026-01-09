@@ -21,7 +21,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, AppStateStatus, InteractionManager, Platform } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
-import { NativeAlarmManager } from 'rn-native-alarmkit';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
 import ToastManager from 'toastify-react-native';
 import appJson from '../app.json';
 

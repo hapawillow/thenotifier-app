@@ -390,7 +390,7 @@ const unsubscribe = NativeAlarmManager.onPermissionChanged((event) => {
 ## Error Handling
 
 ```typescript
-import { AlarmError, AlarmErrorCode } from 'rn-native-alarmkit';
+import { AlarmError, AlarmErrorCode } from 'notifier-alarm-manager';
 
 try {
   await NativeAlarmManager.scheduleAlarm(schedule, config);

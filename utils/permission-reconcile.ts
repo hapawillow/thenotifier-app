@@ -1,6 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { Alert } from 'react-native';
-import { NativeAlarmManager } from 'rn-native-alarmkit';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
 import { cancelAlarmKitForParent, cancelExpoForParent } from './cancel-scheduling';
 import {
   archiveAllScheduledNotificationsAsCancelled,
@@ -104,7 +104,7 @@ async function cleanupNotificationPermissionRemoved(t: (key: string) => string):
         const allDailyInstances = await getAllDailyAlarmInstances(notification.notificationId);
         for (const instance of allDailyInstances) {
           try {
-            const { NativeAlarmManager } = await import('rn-native-alarmkit');
+            const { NativeAlarmManager } = await import('notifier-alarm-manager');
             await NativeAlarmManager.cancelAlarm(instance.alarmId);
             logger.info(makeLogHeader(LOG_FILE, 'cleanupNotificationPermissionRemoved'), `Cancelled daily alarm instance from DB sweep: ${instance.alarmId}`);
             if (instance.isActive === 1) {
@@ -193,7 +193,7 @@ async function cleanupAlarmPermissionRemoved(t: (key: string) => string): Promis
         const allDailyInstances = await getAllDailyAlarmInstances(notification.notificationId);
         for (const instance of allDailyInstances) {
           try {
-            const { NativeAlarmManager } = await import('rn-native-alarmkit');
+            const { NativeAlarmManager } = await import('notifier-alarm-manager');
             await NativeAlarmManager.cancelAlarm(instance.alarmId);
             logger.info(makeLogHeader(LOG_FILE, 'cleanupAlarmPermissionRemoved'), `Cancelled daily alarm instance from DB sweep: ${instance.alarmId}`);
             if (instance.isActive === 1) {

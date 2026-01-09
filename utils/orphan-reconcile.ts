@@ -1,6 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { Alert, Platform } from 'react-native';
-import { NativeAlarmManager } from 'rn-native-alarmkit';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
 import { cancelAlarmKitForParent, cancelExpoForParent } from './cancel-scheduling';
 import {
   ensureDailyAlarmWindowForAllNotifications,
