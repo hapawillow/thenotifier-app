@@ -87,7 +87,8 @@
         {
           "calendarPermission": "This app needs access to your calendar to display events and schedule notifications."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

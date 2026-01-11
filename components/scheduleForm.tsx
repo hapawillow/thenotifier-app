@@ -32,6 +32,29 @@ const LOG_FILE = 'components/scheduleForm.tsx';
 const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 64 : 25);
 logger.info(makeLogHeader(LOG_FILE), 'Maximum scheduled notification count for', Platform.OS, ':', MAX_SCHEDULED_NOTIFICATION_COUNT);
 
+// Minimum iOS version required for alarms
+const MIN_IOS_ALARM_VERSION = 26;
+
+/**
+ * Parse iOS version from Platform.Version
+ * Platform.Version can be a string like "17.2" or a number
+ * Returns the major version number as a number
+ */
+const parseIosVersion = (): number | null => {
+  if (Platform.OS !== 'ios') {
+    return null;
+  }
+  const version = Platform.Version;
+  if (typeof version === 'number') {
+    return version;
+  }
+  if (typeof version === 'string') {
+    const majorVersion = parseFloat(version.split('.')[0]);
+    return isNaN(majorVersion) ? null : majorVersion;
+  }
+  return null;
+};
+
 // Configure notification handler
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -154,10 +177,29 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   // Memoize minimum date to prevent creating new Date object on each render
   const minimumDate = useMemo(() => new Date(), []);
 
+  // Check if iOS version allows alarms
+  const iosVersionNumber = useMemo(() => parseIosVersion(), []);
+  const isIosAlarmAllowed = useMemo(() => {
+    if (Platform.OS !== 'ios') {
+      return true; // Not iOS, so no restriction
+    }
+    if (iosVersionNumber === null) {
+      return false; // Can't parse version, err on the side of caution
+    }
+    return iosVersionNumber >= MIN_IOS_ALARM_VERSION;
+  }, [iosVersionNumber]);
+
   // Check stored alarm permission denial state on mount and set initial scheduleAlarm state
   useEffect(() => {
     (async () => {
       try {
+        // If iOS version doesn't allow alarms, don't proceed with alarm setup
+        if (!isIosAlarmAllowed) {
+          setScheduleAlarm(false);
+          setAlarmPermissionDenied(false);
+          return;
+        }
+
         const denied = await getAlarmPermissionDenied();
         let currentDenied = denied;
 
@@ -197,17 +239,20 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
         // For new notifications (not edit mode), set default based on source and current denial state
         if (!isEditMode) {
-          // Only set to true if permissions are NOT denied
-          if ((source === 'tab' || source === 'calendar' || source === 'schedule') && !currentDenied) {
+          // Only set to true if permissions are NOT denied AND iOS version allows alarms
+          if ((source === 'tab' || source === 'calendar' || source === 'schedule') && !currentDenied && isIosAlarmAllowed) {
             setScheduleAlarm(true);
           } else {
             setScheduleAlarm(false);
           }
         } else {
-          // For edit mode, use initialParams.hasAlarm if provided
-          if (initialParams?.hasAlarm === 'true') {
+          // For edit mode, use initialParams.hasAlarm if provided, but only if iOS version allows
+          if (initialParams?.hasAlarm === 'true' && isIosAlarmAllowed) {
             setScheduleAlarm(true);
           } else if (initialParams?.hasAlarm === 'false') {
+            setScheduleAlarm(false);
+          } else if (initialParams?.hasAlarm === 'true' && !isIosAlarmAllowed) {
+            // iOS version doesn't support alarms, disable it
             setScheduleAlarm(false);
           }
         }
@@ -219,7 +264,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         }
       }
     })();
-  }, [isEditMode, source]);
+  }, [isEditMode, source, isIosAlarmAllowed]);
 
   // Update state when initialParams change
   useEffect(() => {
@@ -356,6 +401,14 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         // Don't show alert here - will be handled when user tries to schedule
       }
 
+      // Check if iOS version allows alarms before checking capability
+      if (!isIosAlarmAllowed) {
+        setAlarmSupported(false);
+        setScheduleAlarm(false);
+        logger.info(makeLogHeader(LOG_FILE), 'Alarms not supported on iOS version:', iosVersionNumber);
+        return;
+      }
+
       // Check if alarm module is available
       try {
         const capability = await NativeAlarmManager.checkCapability();
@@ -395,8 +448,8 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                   // Clear denial state if permission was granted
                   await saveAlarmPermissionDenied(false);
                   setAlarmPermissionDenied(false);
-                  // If creating new notification, set scheduleAlarm to true
-                  if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+                  // If creating new notification, set scheduleAlarm to true (only if iOS version allows)
+                  if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && isIosAlarmAllowed) {
                     setScheduleAlarm(true);
                   }
                 } else {
@@ -425,7 +478,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             // No permission required, clear denial state
             await saveAlarmPermissionDenied(false);
             setAlarmPermissionDenied(false);
-            if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+            if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && isIosAlarmAllowed) {
               setScheduleAlarm(true);
             }
           }
@@ -438,7 +491,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         setAlarmSupported(false);
       }
     })();
-  }, [isEditMode, source]);
+  }, [isEditMode, source, isIosAlarmAllowed, iosVersionNumber]);
 
   // Memoize form onLayout handler
   const handleFormLayout = useCallback((event: any) => {
@@ -729,6 +782,17 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
   // Handle alarm switch toggle with permission check
   const handleAlarmSwitchChange = useCallback(async (value: boolean) => {
+    // Check iOS version first
+    if (!isIosAlarmAllowed) {
+      // iOS version doesn't support alarms, show alert
+      Alert.alert(
+        t('alertTitles.warning'),
+        t('alertMessages.iosVersionRequiredForAlarm', { minVersion: MIN_IOS_ALARM_VERSION }),
+        [{ text: t('buttonText.ok') }]
+      );
+      return;
+    }
+
     if (value) {
       // User is trying to enable alarm - check permissions
       try {
@@ -803,7 +867,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       // User is disabling alarm, just update the state
       setScheduleAlarm(false);
     }
-  }, []);
+  }, [isIosAlarmAllowed, t]);
 
   useEffect(() => {
     const keyboardWillShowListener = Keyboard.addListener(
@@ -848,8 +912,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
     // Check current alarm permission status before setting scheduleAlarm
     // Only check if alarms are supported to avoid errors when native module isn't available
+    // Also check if iOS version allows alarms
     let shouldEnableAlarm = false;
-    if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && alarmSupported) {
+    if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && alarmSupported && isIosAlarmAllowed) {
       try {
         // Check stored denial state
         const denied = await getAlarmPermissionDenied();
@@ -2050,16 +2115,39 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               />
             </ThemedView >
 
-            {alarmSupported && (
+            {(alarmSupported || (Platform.OS === 'ios' && !isIosAlarmAllowed)) && (
               <ThemedView style={styles.inputGroup}>
                 <ThemedView style={styles.switchContainer}>
                   <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>{t('inputLabels.alarm')}</ThemedText>
-                  <Switch
-                    value={scheduleAlarm}
-                    onValueChange={handleAlarmSwitchChange}
-                    trackColor={{ false: '#888', true: '#68CFAF' }}
-                    thumbColor='#f0f0f0'
-                  />
+                  <ThemedView style={{ position: 'relative' }}>
+                    <Switch
+                      value={scheduleAlarm}
+                      onValueChange={handleAlarmSwitchChange}
+                      trackColor={{ false: '#888', true: '#68CFAF' }}
+                      thumbColor='#f0f0f0'
+                      disabled={!isIosAlarmAllowed}
+                    />
+                    {!isIosAlarmAllowed && (
+                      <TouchableOpacity
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          backgroundColor: 'transparent',
+                        }}
+                        onPress={() => {
+                          Alert.alert(
+                            t('alertTitles.warning'),
+                            t('alertMessages.iosVersionRequiredForAlarm', { minVersion: MIN_IOS_ALARM_VERSION }),
+                            [{ text: t('buttonText.ok') }]
+                          );
+                        }}
+                        activeOpacity={1}
+                      />
+                    )}
+                  </ThemedView>
                 </ThemedView>
               </ThemedView >
             )}
