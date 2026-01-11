@@ -10,17 +10,17 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-scheduling';
-import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, getWindowSize, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
+import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { ANDROID_NOTIFICATION_CHANNEL_ID, ensureAndroidNotificationChannel } from '@/utils/notification-channel';
 import { getPermissionInstructions } from '@/utils/permissions';
 import {
-  isNextDailyOccurrence,
-  isNextWeeklyOccurrence,
   mapJsMonthToExpoMonth,
-  mapJsWeekdayToExpoWeekday,
+  mapJsWeekdayToExpoWeekday
 } from '@/utils/repeat-start-date';
+import { getRollingWindowSize } from '@/utils/rolling-window-config';
+import { getCurrentTimeZoneAbbr, getCurrentTimeZoneId } from '@/utils/timezone';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1009,20 +1009,12 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       // Ensure Android notification channel is set up (idempotent)
       await ensureAndroidNotificationChannel();
 
-      const deepLinkUrl = (link)
-        ? `thenotifier://notification-display?title=${encodeURIComponent(notificationTitle)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=${encodeURIComponent(link)}`
-        : `thenotifier://notification-display?title=${encodeURIComponent(notificationTitle)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=`;
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'deepLinkUrl:', deepLinkUrl);
-
       let notificationContent: Notifications.NotificationContentInput = {
         title: notificationTitle,
         body: message,
         data: {
-          title: notificationTitle,
-          message: message,
-          note: note,
-          link: link ? link : '',
-          url: deepLinkUrl
+          note: note || '',
+          link: link || '',
         },
         sound: 'thenotifier.wav'
       };
@@ -1034,9 +1026,11 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       }
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'notificationContent:', notificationContent);
 
-      // Android: if an alarm is enabled, use alarm-only mode (do not schedule Expo notifications)
-      // iOS: keep existing behavior (notifications + optional alarms)
-      const useAndroidAlarmOnly = Platform.OS === 'android' && scheduleAlarm && alarmSupported;
+      // Alarm toggle is now exclusive: ON = alarm only, OFF = expo only (both platforms)
+      const useAlarmOnly = scheduleAlarm && alarmSupported;
+
+      // Detect if this is a calendar event
+      const isCalendarEvent = !!(initialParams?.calendarId && initialParams?.originalEventId);
 
       let notificationTrigger: Notifications.NotificationTriggerInput;
       let useRollingWindow = false;
@@ -1057,14 +1051,23 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       const diffHours = diffMs / (60 * 60 * 1000);
       const diffDays = diffMs / (24 * 60 * 60 * 1000);
 
-      // Calendar-based thresholds for monthly/yearly
+      // Thresholds for manual scheduling
+      const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
       const oneMonthFromNow = new Date(now);
       oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
       const oneYearFromNow = new Date(now);
       oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
 
+      // Get timezone metadata for calendar events
+      const createdTimeZoneId = isCalendarEvent ? getCurrentTimeZoneId() : null;
+      const createdTimeZoneAbbr = isCalendarEvent ? getCurrentTimeZoneAbbr() : null;
+      const timeZoneMode = isCalendarEvent ? 'independent' : 'dependent';
+
       // Log decision inputs
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Decision inputs:', {
+        isCalendarEvent,
+        useAlarmOnly,
         nowISO: now.toISOString(),
         selectedISO: dateWithoutSeconds.toISOString(),
         selectedLocal: dateWithoutSeconds.toLocaleString(),
@@ -1078,154 +1081,200 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         expoWeekday: expoWeekday,
         jsMonth: month,
         expoMonth: expoMonth,
-        oneMonthFromNowISO: oneMonthFromNow.toISOString(),
-        oneYearFromNowISO: oneYearFromNow.toISOString(),
+        timeZoneMode,
+        createdTimeZoneId,
+        createdTimeZoneAbbr,
       });
 
-      switch (repeatOption) {
-        case 'none':
-          notificationTrigger = {
-            type: Notifications.SchedulableTriggerInputTypes.DATE,
-            date: dateWithoutSeconds,
-          };
-          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] One-time notification, using DATE trigger');
-          break;
-        case 'daily':
-          // Check if selected begin date matches the next daily occurrence
-          // Only use Expo DAILY trigger if the first fire will be exactly on the selected date
-          const isNextDaily = isNextDailyOccurrence(dateWithoutSeconds, hour, minute);
-
-          if (isNextDaily) {
-            // Use Expo DAILY trigger - it will fire at the selected time
+      // Calendar events use TIME_INTERVAL (timezone-independent)
+      // Manual notifications use DATE/DAILY/WEEKLY/MONTHLY/YEARLY (timezone-dependent)
+      if (isCalendarEvent) {
+        // Calendar event scheduling: always use TIME_INTERVAL
+        switch (repeatOption) {
+          case 'none':
+            // One-time TIME_INTERVAL notification
+            const timeUntilFire = dateWithoutSeconds.getTime() - now.getTime();
+            if (timeUntilFire <= 0) {
+              Alert.alert(t('alertTitles.error'), t('alertMessages.pastDateError'));
+              return;
+            }
             notificationTrigger = {
-              type: Notifications.SchedulableTriggerInputTypes.DAILY,
-              hour: hour,
-              minute: minute,
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: Math.floor(timeUntilFire / 1000),
             };
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Daily repeat: using Expo DAILY trigger (selected date matches next occurrence)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              hour: hour,
-              minute: minute,
-            });
-          } else {
-            // Use rolling window to ensure first fire is exactly on selected date
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] One-time TIME_INTERVAL notification');
+            break;
+          case 'daily':
+            // Daily rolling window of TIME_INTERVAL notifications
             useRollingWindow = true;
             notificationTrigger = {
-              type: 'DATE_WINDOW' as any,
-              window: 'daily7',
+              type: 'TIME_INTERVAL_WINDOW' as any,
+              window: 'daily',
             } as any;
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Daily repeat: using rollingWindow (selected date does not match next occurrence)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              hour: hour,
-              minute: minute,
-              diffMs: diffMs,
-              windowSize: 7,
-            });
-          }
-          break;
-        case 'weekly':
-          // Check if selected begin date matches the next weekly occurrence
-          // Only use Expo WEEKLY trigger if the first fire will be exactly on the selected date
-          const isNextWeekly = isNextWeeklyOccurrence(dateWithoutSeconds, expoWeekday, hour, minute);
-
-          if (isNextWeekly) {
-            // Use Expo WEEKLY trigger - it will fire at the selected time
-            notificationTrigger = {
-              type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
-              weekday: expoWeekday,
-              hour: hour,
-              minute: minute,
-            };
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Weekly repeat: using Expo WEEKLY trigger (selected date matches next occurrence)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              jsWeekday: dayOfWeek,
-              expoWeekday: expoWeekday,
-              hour: hour,
-              minute: minute,
-            });
-          } else {
-            // Use rolling window to ensure first fire is exactly on selected date
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Daily TIME_INTERVAL rolling window');
+            break;
+          case 'weekly':
+            // Weekly rolling window of TIME_INTERVAL notifications
             useRollingWindow = true;
             notificationTrigger = {
-              type: 'DATE_WINDOW' as any,
-              window: 'weekly4',
+              type: 'TIME_INTERVAL_WINDOW' as any,
+              window: 'weekly',
             } as any;
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Weekly repeat: using rollingWindow (selected date does not match next occurrence)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              jsWeekday: dayOfWeek,
-              expoWeekday: expoWeekday,
-              hour: hour,
-              minute: minute,
-              diffMs: diffMs,
-              windowSize: 4,
-            });
-          }
-          break;
-        case 'monthly':
-          // Keep calendar-based comparison for monthly but log it
-          const monthlyComparison = dateWithoutSeconds >= oneMonthFromNow;
-          if (monthlyComparison) {
-            // Use rolling window
-            useRollingWindow = true;
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Weekly TIME_INTERVAL rolling window');
+            break;
+          case 'monthly':
+            // Single TIME_INTERVAL for next month, will reschedule when it fires
+            const timeUntilMonthly = dateWithoutSeconds.getTime() - now.getTime();
+            if (timeUntilMonthly <= 0) {
+              Alert.alert(t('alertTitles.error'), t('alertMessages.pastDateError'));
+              return;
+            }
             notificationTrigger = {
-              type: 'DATE_WINDOW' as any,
-              window: 'monthly4',
-            } as any;
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Monthly repeat: using rollingWindow (selected >= oneMonthFromNow)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              oneMonthFromNowISO: oneMonthFromNow.toISOString(),
-              windowSize: 4,
-            });
-          } else {
-            // Use existing MONTHLY trigger
-            notificationTrigger = {
-              type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
-              day: day,
-              hour: hour,
-              minute: minute,
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: Math.floor(timeUntilMonthly / 1000),
             };
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Monthly repeat: using Expo MONTHLY trigger (selected < oneMonthFromNow)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              oneMonthFromNowISO: oneMonthFromNow.toISOString(),
-            });
-          }
-          break;
-        case 'yearly':
-          // Keep calendar-based comparison for yearly but log it
-          const yearlyComparison = dateWithoutSeconds >= oneYearFromNow;
-          if (yearlyComparison) {
-            // Use rolling window
-            useRollingWindow = true;
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Monthly TIME_INTERVAL (will reschedule on fire)');
+            break;
+          case 'yearly':
+            // Single TIME_INTERVAL for next year, will reschedule when it fires
+            const timeUntilYearly = dateWithoutSeconds.getTime() - now.getTime();
+            if (timeUntilYearly <= 0) {
+              Alert.alert(t('alertTitles.error'), t('alertMessages.pastDateError'));
+              return;
+            }
             notificationTrigger = {
-              type: 'DATE_WINDOW' as any,
-              window: 'yearly2',
-            } as any;
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Yearly repeat: using rollingWindow (selected >= oneYearFromNow)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              oneYearFromNowISO: oneYearFromNow.toISOString(),
-              windowSize: 2,
-            });
-          } else {
-            // Use existing YEARLY trigger with corrected month mapping
-            notificationTrigger = {
-              type: Notifications.SchedulableTriggerInputTypes.YEARLY,
-              month: expoMonth,
-              day: day,
-              hour: hour,
-              minute: minute,
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: Math.floor(timeUntilYearly / 1000),
             };
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Yearly repeat: using Expo YEARLY trigger (selected < oneYearFromNow)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              oneYearFromNowISO: oneYearFromNow.toISOString(),
-              jsMonth: month,
-              expoMonth: expoMonth,
-            });
-          }
-          break;
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Yearly TIME_INTERVAL (will reschedule on fire)');
+            break;
+        }
+      } else {
+        // Manual scheduling: timezone-dependent triggers
+        // iOS uses CALENDAR triggers, Android uses DATE triggers
+        switch (repeatOption) {
+          case 'none':
+            if (Platform.OS === 'ios') {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+                // year: dateWithoutSeconds.getFullYear(),
+                // month: dateWithoutSeconds.getMonth() + 1, // CALENDAR uses 1-based months
+                // day: dateWithoutSeconds.getDate(),
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual iOS] One-time notification, using CALENDAR trigger');
+            } else {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.DATE,
+                date: dateWithoutSeconds,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual Android] One-time notification, using DATE trigger');
+            }
+            break;
+          case 'daily':
+            // Use DAILY if start < 24h, else rolling window
+            if (diffHours < 24) {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.DAILY,
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual] Daily repeat: using Expo DAILY trigger (start < 24h)');
+            } else {
+              useRollingWindow = true;
+              notificationTrigger = {
+                type: Platform.OS === 'ios' ? 'CALENDAR_WINDOW' as any : 'DATE_WINDOW' as any,
+                window: 'daily',
+              } as any;
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), `[Manual] Daily repeat: using ${Platform.OS === 'ios' ? 'CALENDAR' : 'DATE'} rolling window (start >= 24h)`);
+            }
+            break;
+          case 'weekly':
+            // Use WEEKLY if start < 7d, else rolling window
+            if (diffDays < 7) {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+                weekday: expoWeekday,
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual] Weekly repeat: using Expo WEEKLY trigger (start < 7d)');
+            } else {
+              useRollingWindow = true;
+              notificationTrigger = {
+                type: Platform.OS === 'ios' ? 'CALENDAR_WINDOW' as any : 'DATE_WINDOW' as any,
+                window: 'weekly',
+              } as any;
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), `[Manual] Weekly repeat: using ${Platform.OS === 'ios' ? 'CALENDAR' : 'DATE'} rolling window (start >= 7d)`);
+            }
+            break;
+          case 'monthly':
+            // Use MONTHLY if start < 1mo, else CALENDAR (iOS) or DATE (Android)
+            if (dateWithoutSeconds < oneMonthFromNow) {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
+                day: day,
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual] Monthly repeat: using Expo MONTHLY trigger (start < 1mo)');
+            } else {
+              if (Platform.OS === 'ios') {
+                notificationTrigger = {
+                  type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+                  year: dateWithoutSeconds.getFullYear(),
+                  month: dateWithoutSeconds.getMonth() + 1,
+                  day: day,
+                  hour: hour,
+                  minute: minute,
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual iOS] Monthly repeat: using CALENDAR trigger (start >= 1mo, will migrate to MONTHLY)');
+              } else {
+                notificationTrigger = {
+                  type: Notifications.SchedulableTriggerInputTypes.DATE,
+                  date: dateWithoutSeconds,
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual Android] Monthly repeat: using DATE trigger (start >= 1mo, will migrate to MONTHLY)');
+              }
+            }
+            break;
+          case 'yearly':
+            // Use YEARLY if start < 1y, else CALENDAR (iOS) or DATE (Android)
+            if (dateWithoutSeconds < oneYearFromNow) {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.YEARLY,
+                month: expoMonth,
+                day: day,
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual] Yearly repeat: using Expo YEARLY trigger (start < 1y)');
+            } else {
+              if (Platform.OS === 'ios') {
+                notificationTrigger = {
+                  type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+                  year: dateWithoutSeconds.getFullYear(),
+                  month: dateWithoutSeconds.getMonth() + 1,
+                  day: day,
+                  hour: hour,
+                  minute: minute,
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual iOS] Yearly repeat: using CALENDAR trigger (start >= 1y, will migrate to YEARLY)');
+              } else {
+                notificationTrigger = {
+                  type: Notifications.SchedulableTriggerInputTypes.DATE,
+                  date: dateWithoutSeconds,
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual Android] Yearly repeat: using DATE trigger (start >= 1y, will migrate to YEARLY)');
+              }
+            }
+            break;
+        }
       }
 
-      // Alarm-only mode on Android: never schedule rolling-window notifications
-      if (useAndroidAlarmOnly) {
+      // Alarm-only mode: never schedule Expo notifications
+      if (useAlarmOnly) {
         useRollingWindow = false;
       }
 
@@ -1248,10 +1297,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         }),
       });
 
-      if (useAndroidAlarmOnly) {
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Android alarm-only mode: skipping notification scheduling');
+      if (useAlarmOnly) {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Alarm-only mode: skipping Expo notification scheduling');
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Saving notification with repeatMethod:', 'alarm');
-        // Android alarm-only: Store notificationTrigger as null to prevent window replenishment code
+        // Alarm-only: Store notificationTrigger as null to prevent window replenishment code
         // from interpreting it as needing Expo window notifications
         await saveScheduledNotificationData(
           notificationId,
@@ -1262,7 +1311,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           dateWithoutSeconds.toISOString(),
           dateWithoutSeconds.toLocaleString(),
           repeatOption,
-          null, // Store null instead of DATE_WINDOW trigger to prevent window replenishment
+          null, // Store null instead of trigger to prevent window replenishment
           scheduleAlarm && alarmSupported,
           initialParams?.calendarId,
           initialParams?.originalEventId,
@@ -1272,7 +1321,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           initialParams?.originalEventEndDate,
           initialParams?.originalEventLocation,
           initialParams?.originalEventRecurring,
-          'alarm'
+          'alarm',
+          createdTimeZoneId,
+          createdTimeZoneAbbr,
+          timeZoneMode as 'dependent' | 'independent'
         );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm-only notification data saved successfully');
       } else if (useRollingWindow) {
@@ -1280,7 +1332,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
         // Check OS notification limit before scheduling rolling window
         const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
-        const windowSize = getWindowSize(repeatOption as 'daily' | 'weekly' | 'monthly' | 'yearly');
+        const windowSize = getRollingWindowSize(repeatOption as 'daily' | 'weekly');
         const remainingCapacity = MAX_SCHEDULED_NOTIFICATION_COUNT - scheduledNotifications.length;
 
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Notification capacity check:', {
@@ -1303,24 +1355,74 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           return;
         }
 
-        // Schedule rolling window DATE notifications
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Scheduling rolling-window notification instances...');
-        const result = await scheduleRollingWindowNotifications(
-          notificationId,
-          dateWithoutSeconds,
-          repeatOption as 'daily' | 'weekly' | 'monthly' | 'yearly',
-          notificationContent
-        );
+        if (isCalendarEvent && (repeatOption === 'daily' || repeatOption === 'weekly')) {
+          // Calendar event: schedule TIME_INTERVAL rolling window
+          // TODO: Implement TIME_INTERVAL rolling window scheduling in database.ts
+          // For now, schedule first occurrence as TIME_INTERVAL
+          const timeUntilFire = dateWithoutSeconds.getTime() - now.getTime();
+          if (timeUntilFire > 0) {
+            const firstTrigger: Notifications.NotificationTriggerInput = {
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: Math.floor(timeUntilFire / 1000),
+            };
 
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Rolling-window notification instances scheduled:', {
-          scheduled: result.scheduled,
-          skipped: result.skipped,
-          repeatOption: repeatOption,
-          windowSize: windowSize,
-        });
+            if (Platform.OS === 'android') {
+              (firstTrigger as any).channelId = ANDROID_NOTIFICATION_CHANNEL_ID;
+            }
+
+            await Notifications.scheduleNotificationAsync({
+              identifier: notificationId,
+              content: notificationContent,
+              trigger: firstTrigger,
+            });
+
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Scheduled first TIME_INTERVAL notification (rolling window TODO)');
+          }
+        } else {
+          // Manual notification: schedule rolling window (CALENDAR on iOS, DATE on Android)
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), `[RepeatDecision] Scheduling rolling-window ${Platform.OS === 'ios' ? 'CALENDAR' : 'DATE'} notification instances...`);
+          const result = await scheduleRollingWindowNotifications(
+            notificationId,
+            dateWithoutSeconds,
+            repeatOption as 'daily' | 'weekly',
+            notificationContent,
+            undefined, // count (will use default from getWindowSize)
+            Platform.OS === 'ios' // useCalendarTrigger: true for iOS manual notifications
+          );
+
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Rolling-window notification instances scheduled:', {
+            scheduled: result.scheduled,
+            skipped: result.skipped,
+            repeatOption: repeatOption,
+            windowSize: windowSize,
+          });
+        }
 
         // Save parent notification record
-        await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location, initialParams?.originalEventTitle, initialParams?.originalEventStartDate, initialParams?.originalEventEndDate, initialParams?.originalEventLocation, initialParams?.originalEventRecurring, 'rollingWindow');
+        await saveScheduledNotificationData(
+          notificationId,
+          notificationTitle,
+          message,
+          note,
+          link ? link : '',
+          dateWithoutSeconds.toISOString(),
+          dateWithoutSeconds.toLocaleString(),
+          repeatOption,
+          notificationTrigger,
+          scheduleAlarm && alarmSupported,
+          initialParams?.calendarId,
+          initialParams?.originalEventId,
+          initialParams?.location,
+          initialParams?.originalEventTitle,
+          initialParams?.originalEventStartDate,
+          initialParams?.originalEventEndDate,
+          initialParams?.originalEventLocation,
+          initialParams?.originalEventRecurring,
+          'rollingWindow',
+          createdTimeZoneId,
+          createdTimeZoneAbbr,
+          timeZoneMode as 'dependent' | 'independent'
+        );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Rolling-window notification data saved successfully');
       } else {
         // Use existing repeating trigger approach (Expo triggers)
@@ -1341,7 +1443,30 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         // Determine repeatMethod: 'expo' for Expo repeating triggers, null for one-time
         const repeatMethodValue = (repeatOption && repeatOption !== 'none' && !useRollingWindow) ? 'expo' : null;
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Saving notification with repeatMethod:', repeatMethodValue);
-        await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location, initialParams?.originalEventTitle, initialParams?.originalEventStartDate, initialParams?.originalEventEndDate, initialParams?.originalEventLocation, initialParams?.originalEventRecurring, repeatMethodValue);
+        await saveScheduledNotificationData(
+          notificationId,
+          notificationTitle,
+          message,
+          note,
+          link ? link : '',
+          dateWithoutSeconds.toISOString(),
+          dateWithoutSeconds.toLocaleString(),
+          repeatOption,
+          notificationTrigger,
+          scheduleAlarm && alarmSupported,
+          initialParams?.calendarId,
+          initialParams?.originalEventId,
+          initialParams?.location,
+          initialParams?.originalEventTitle,
+          initialParams?.originalEventStartDate,
+          initialParams?.originalEventEndDate,
+          initialParams?.originalEventLocation,
+          initialParams?.originalEventRecurring,
+          repeatMethodValue,
+          createdTimeZoneId,
+          createdTimeZoneAbbr,
+          timeZoneMode as 'dependent' | 'independent'
+        );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification data saved successfully');
       }
 
@@ -1514,11 +1639,8 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 color: '#8ddaff',
                 data: {
                   notificationId: notificationId,
-                  title: notificationTitle,
-                  message: message,
-                  note: note,
-                  link: link ? link : '',
-                  url: deepLinkUrl,
+                  note: note || '',
+                  link: link || '',
                 },
                 actions: ALARM_ACTIONS
               },
@@ -1577,11 +1699,8 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 ...(Platform.OS === 'android' ? { category: notificationId } : {}),
                 data: {
                   notificationId: notificationId,
-                  title: notificationTitle,
-                  message: message,
-                  note: note,
-                  link: link ? link : '',
-                  url: deepLinkUrl,
+                  note: note || '',
+                  link: link || '',
                 },
                 actions: ALARM_ACTIONS
               },

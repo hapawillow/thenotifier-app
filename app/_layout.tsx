@@ -17,11 +17,11 @@ import * as Notifications from 'expo-notifications';
 import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, AppStateStatus, InteractionManager, Platform } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
-import { NativeAlarmManager } from 'notifier-alarm-manager';
 import ToastManager from 'toastify-react-native';
 import appJson from '../app.json';
 
@@ -234,8 +234,9 @@ export default function RootLayout() {
         logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Failed to record repeat occurrence:', error);
       }
 
-      if (data?.message && typeof data.message === 'string') {
-        logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Navigating to notification display with message:', data.message);
+      // Navigate if notification has content (title/body) and data (note/link)
+      if (notification.request.content.title || notification.request.content.body) {
+        logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Navigating to notification display with title:', notification.request.content.title);
         try {
           await updateArchivedNotificationData(notificationId);
           logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Archived notification data updated successfully');
@@ -265,7 +266,12 @@ export default function RootLayout() {
 
           const navigationParams = {
             pathname: '/notification-display' as const,
-            params: { title: data.title as string, message: data.message as string, note: data.note as string, link: data.link as string },
+            params: {
+              title: notification.request.content.title || '',
+              message: notification.request.content.body || '',
+              note: (data?.note as string) || '',
+              link: (data?.link as string) || ''
+            },
           };
 
           if (isColdStart) {
