@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReadableMap
@@ -24,6 +25,14 @@ class ExactAlarmManager(private val context: Context) {
         val alarmId = schedule.getString("id") ?: throw IllegalArgumentException("Alarm ID required")
         val type = schedule.getString("type") ?: "fixed"
 
+        // CRITICAL: Cancel any existing alarm with this ID first to prevent duplicates
+        // This handles cases where scheduleAlarm is called multiple times for the same alarm
+        try {
+            cancelAlarm(alarmId)
+        } catch (e: Exception) {
+            // Ignore if alarm doesn't exist - that's fine
+        }
+
         // Check if we can schedule exact alarms
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
             throw SecurityException("Cannot schedule exact alarms - permission denied")
@@ -43,7 +52,7 @@ class ExactAlarmManager(private val context: Context) {
             "interval", "fixed" -> scheduleSingleAlarm(alarmId, schedule, config, triggerTime)
         }
 
-        // Save to storage
+        // Save to storage (only once, after scheduling)
         AlarmStorage.saveAlarm(context, alarmId, schedule, config, triggerTime)
 
         // Build response

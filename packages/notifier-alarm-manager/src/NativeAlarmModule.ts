@@ -82,10 +82,31 @@ const NativeAlarmsModule = NativeModules.NotifierNativeAlarms
 
 /**
  * Event emitter for native events
+ * Only create if the module supports event listeners (has addListener method)
+ * This prevents warnings on Android where the module may not implement the required methods
  */
-const eventEmitter = new NativeEventEmitter(
-  NativeModules.NotifierNativeAlarms || undefined
-);
+const createEventEmitter = () => {
+  const module = NativeModules.NotifierNativeAlarms;
+  if (!module) {
+    return null;
+  }
+  
+  // Check if module supports event listeners (required for NativeEventEmitter)
+  // On Android, some modules may not implement addListener/removeListeners
+  if (Platform.OS === 'android' && typeof module.addListener !== 'function') {
+    console.warn('[NativeAlarmModule] Native module does not support event listeners, events will not work');
+    return null;
+  }
+  
+  try {
+    return new NativeEventEmitter(module);
+  } catch (error) {
+    console.warn('[NativeAlarmModule] Failed to create NativeEventEmitter:', error);
+    return null;
+  }
+};
+
+const eventEmitter = createEventEmitter();
 
 /**
  * Event names from native module
@@ -354,6 +375,11 @@ export const NativeAlarmModule = {
    * Subscribe to alarm fired events
    */
   onAlarmFired(callback: (event: AlarmFiredEvent) => void): () => void {
+    if (!eventEmitter) {
+      console.warn('[NativeAlarmModule] Event emitter not available, cannot subscribe to alarm fired events');
+      return () => {}; // Return no-op unsubscribe function
+    }
+    
     const subscription = eventEmitter.addListener(
       EVENTS.ALARM_FIRED_EVENT,
       (event: any) => {
@@ -378,6 +404,11 @@ export const NativeAlarmModule = {
   onPermissionChanged(
     callback: (event: PermissionChangedEvent) => void
   ): () => void {
+    if (!eventEmitter) {
+      console.warn('[NativeAlarmModule] Event emitter not available, cannot subscribe to permission changed events');
+      return () => {}; // Return no-op unsubscribe function
+    }
+    
     const subscription = eventEmitter.addListener(
       EVENTS.PERMISSION_CHANGED_EVENT,
       callback
@@ -390,6 +421,11 @@ export const NativeAlarmModule = {
    * Listen for native deep link requests (e.g. alarm dismissed).
    */
   onDeepLink(callback: (event: DeepLinkEvent) => void): () => void {
+    if (!eventEmitter) {
+      console.warn('[NativeAlarmModule] Event emitter not available, cannot subscribe to deep link events');
+      return () => {}; // Return no-op unsubscribe function
+    }
+    
     const sub = eventEmitter.addListener(
       (EVENTS as any).DEEP_LINK_EVENT || 'NotifierNativeAlarms_DeepLink',
       (payload: any) => {

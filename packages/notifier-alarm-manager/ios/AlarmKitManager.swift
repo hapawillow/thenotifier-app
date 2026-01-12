@@ -6,6 +6,7 @@ import AppIntents
 import OSLog
 
 private let PENDING_ALARM_DEEPLINK_KEY = "thenotifier_pending_alarm_deeplink_url"
+private let PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY = "thenotifier_pending_alarm_deeplink_timestamp"
 private let logger = Logger(subsystem: "com.thenotifier.alarmkit", category: "AlarmKitManager")
 
 /// Live Activity intent used by AlarmKit to trigger the secondary (Snooze) action.
@@ -67,6 +68,8 @@ struct AlarmKitStopIntent: LiveActivityIntent {
         if let finalUrlString = urlString, !finalUrlString.isEmpty {
             logger.info("[AlarmKitStopIntent] Storing deep link URL in UserDefaults: \(finalUrlString)")
             UserDefaults.standard.set(finalUrlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
+            // Store timestamp to validate freshness
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY)
             UserDefaults.standard.synchronize() // Force immediate write
             
             // Verify it was stored correctly
@@ -166,6 +169,8 @@ class AlarmKitManager {
             // Also store under the main key (for backward compatibility and easy lookup)
             logger.info("[AlarmKitManager] Also storing under main key: \(PENDING_ALARM_DEEPLINK_KEY)")
             UserDefaults.standard.set(urlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
+            // Store timestamp to validate freshness (prevent old deep links from triggering navigation)
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY)
             UserDefaults.standard.synchronize()
             logger.info("[AlarmKitManager] Deep link URL stored successfully for alarm: \(canonicalAlarmId)")
         } else {
@@ -998,6 +1003,8 @@ class AlarmKitManager {
                            !url.isEmpty {
                             logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults: \(url)")
                             UserDefaults.standard.set(url, forKey: PENDING_ALARM_DEEPLINK_KEY)
+                            // Store timestamp to validate freshness
+                            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY)
                             UserDefaults.standard.synchronize() // Force immediate write
                             logger.info("[AlarmKitManager] Deep link URL stored, calling delegate")
                             delegate?.alarmDidRequestDeepLink(url: url)
@@ -1081,6 +1088,8 @@ class AlarmKitManager {
                 if let finalUrl = url, !finalUrl.isEmpty {
                     logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (disappeared): \(finalUrl)")
                     UserDefaults.standard.set(finalUrl, forKey: PENDING_ALARM_DEEPLINK_KEY)
+                    // Store timestamp to validate freshness
+                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY)
                     UserDefaults.standard.synchronize() // Force immediate write
                     logger.info("[AlarmKitManager] Deep link URL stored (disappeared), calling delegate")
                     delegate?.alarmDidRequestDeepLink(url: finalUrl)

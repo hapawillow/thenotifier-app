@@ -228,7 +228,7 @@ export default function OSScheduledNotificationsScreen() {
           style={styles.backButton}
           onPress={() => router.back()}
           activeOpacity={0.7}>
-          <IconSymbol name="chevron.left" size={24} color={colors.icon} />
+          <IconSymbol name="chevron.left" size={24} color={colors.text} />
         </TouchableOpacity>
         <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.4} style={styles.headerTitle}>
           OS Scheduled Notifications

@@ -36,16 +36,45 @@ export default function NativeAlarmsScreen() {
   const loadAlarms = useCallback(async () => {
     try {
       const allAlarms = await NativeAlarmManager.getAllAlarms();
+      console.log('[NativeAlarmsDebug] Loaded alarms:', allAlarms.length);
+      
+      // Validate and filter alarms
+      const validAlarms = allAlarms.filter((alarm) => {
+        if (!alarm || !alarm.id) {
+          console.warn('[NativeAlarmsDebug] Invalid alarm (missing id):', alarm);
+          return false;
+        }
+        
+        // Validate nextFireDate if present
+        if (alarm.nextFireDate) {
+          try {
+            const fireDate = new Date(alarm.nextFireDate);
+            if (isNaN(fireDate.getTime())) {
+              console.warn('[NativeAlarmsDebug] Invalid nextFireDate for alarm:', alarm.id, alarm.nextFireDate);
+              // Don't filter out - just log the warning
+            }
+          } catch (e) {
+            console.warn('[NativeAlarmsDebug] Error parsing nextFireDate for alarm:', alarm.id, e);
+          }
+        }
+        
+        return true;
+      });
+      
       // Sort by earliest next fire time (unknowns last) for easier debugging
-      const sorted = [...allAlarms].sort((a, b) => {
+      const sorted = [...validAlarms].sort((a, b) => {
         const aTime = a.nextFireDate ? new Date(a.nextFireDate).getTime() : Number.POSITIVE_INFINITY;
         const bTime = b.nextFireDate ? new Date(b.nextFireDate).getTime() : Number.POSITIVE_INFINITY;
         if (aTime !== bTime) return aTime - bTime;
         return String(a.id).localeCompare(String(b.id));
       });
+      
+      console.log('[NativeAlarmsDebug] Valid alarms after filtering:', sorted.length);
       setAlarms(sorted);
     } catch (error) {
-      console.error('Failed to load alarms:', error);
+      console.error('[NativeAlarmsDebug] Failed to load alarms:', error);
+      // Set empty array on error to prevent crashes
+      setAlarms([]);
     }
   }, []);
 
@@ -164,7 +193,7 @@ export default function NativeAlarmsScreen() {
           style={styles.backButton}
           onPress={() => router.back()}
           activeOpacity={0.7}>
-          <IconSymbol name="chevron.left" size={24} color={colors.icon} />
+          <IconSymbol name="chevron.left" size={24} color={colors.text} />
         </TouchableOpacity>
         <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.4} style={styles.headerTitle}>
           Native Scheduled Alarms

@@ -89,12 +89,38 @@ class NotifierNativeAlarms: RCTEventEmitter {
         logger.info("[NotifierNativeAlarms] getPendingDeepLink called, found URL in main key: \(url ?? "nil")")
         
         if url != nil && !url!.isEmpty {
-            NSLog("[NotifierNativeAlarms] Found URL in main key, returning: %@", url!)
-            defaults.removeObject(forKey: key)
-            defaults.synchronize()
-            logger.info("[NotifierNativeAlarms] Removed URL from UserDefaults main key")
-            resolve(url)
-            return
+            // Check timestamp to ensure deep link is recent (within last 10 minutes)
+            // This prevents old deep links from triggering navigation when app gains focus later
+            let timestampKey = "thenotifier_pending_alarm_deeplink_timestamp"
+            let timestamp = defaults.double(forKey: timestampKey)
+            let now = Date().timeIntervalSince1970
+            let ageInSeconds = now - timestamp
+            let maxAgeInSeconds: TimeInterval = 10 * 60 // 10 minutes
+            
+            if timestamp > 0 && ageInSeconds <= maxAgeInSeconds {
+                NSLog("[NotifierNativeAlarms] Found URL in main key (age: %.1f seconds), returning: %@", ageInSeconds, url!)
+                defaults.removeObject(forKey: key)
+                defaults.removeObject(forKey: timestampKey)
+                defaults.synchronize()
+                logger.info("[NotifierNativeAlarms] Removed URL from UserDefaults main key (age: \(ageInSeconds)s)")
+                resolve(url)
+                return
+            } else if timestamp > 0 {
+                // URL exists but is too old, remove it
+                NSLog("[NotifierNativeAlarms] Found URL in main key but it's too old (age: %.1f seconds), removing", ageInSeconds)
+                logger.warning("[NotifierNativeAlarms] Deep link URL is too old (age: \(ageInSeconds)s), removing")
+                defaults.removeObject(forKey: key)
+                defaults.removeObject(forKey: timestampKey)
+                defaults.synchronize()
+            } else {
+                // No timestamp found, but URL exists - might be from old version, still return it but log warning
+                NSLog("[NotifierNativeAlarms] Found URL in main key but no timestamp (legacy?), returning: %@", url!)
+                logger.warning("[NotifierNativeAlarms] Deep link URL found but no timestamp (legacy data), returning anyway")
+                defaults.removeObject(forKey: key)
+                defaults.synchronize()
+                resolve(url)
+                return
+            }
         }
         
         // Debug: Check all UserDefaults keys to see what's stored
@@ -110,12 +136,16 @@ class NotifierNativeAlarms: RCTEventEmitter {
         logger.info("[NotifierNativeAlarms] Found alarm-specific keys: \(Array(alarmKeys))")
         
         // Check all alarm-specific keys, not just the first one
+        // These are fallback URLs stored when alarms are scheduled (before they fire)
+        // We'll move them to the main key with a current timestamp when found
         for alarmKey in alarmKeys {
             if let alarmUrl = defaults.string(forKey: alarmKey), !alarmUrl.isEmpty {
                 NSLog("[NotifierNativeAlarms] Found URL in alarm-specific key %@: %@", alarmKey, alarmUrl)
                 logger.info("[NotifierNativeAlarms] Found URL in alarm-specific key \(alarmKey): \(alarmUrl)")
-                // Move it to the main key and return it
+                // Move it to the main key with current timestamp and return it
+                let now = Date().timeIntervalSince1970
                 defaults.set(alarmUrl, forKey: key)
+                defaults.set(now, forKey: "thenotifier_pending_alarm_deeplink_timestamp")
                 defaults.removeObject(forKey: alarmKey)
                 defaults.synchronize()
                 NSLog("[NotifierNativeAlarms] Moved URL from alarm-specific key to main key")

@@ -13,6 +13,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.notifiernativealarms.AlarmStorage.AlarmData
 
 /**
  * BroadcastReceiver that handles alarm trigger events
@@ -286,12 +287,22 @@ class AlarmActionReceiver : BroadcastReceiver() {
                         component = mainComponent
                         addCategory(Intent.CATEGORY_DEFAULT)
                         addCategory(Intent.CATEGORY_BROWSABLE)
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        // FLAG_ACTIVITY_NEW_TASK: Required for starting activity from non-activity context
+                        // FLAG_ACTIVITY_CLEAR_TOP: Clear activities on top of target
+                        // FLAG_ACTIVITY_SINGLE_TOP: Don't create new instance if already on top
+                        // FLAG_ACTIVITY_REORDER_TO_FRONT: Bring existing activity to front if it exists
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         putExtra("alarmId", alarmId)
                     }
                 } else {
                     mainLaunchIntent?.apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         putExtra("alarmId", alarmId)
                         if (url != null) {
                             putExtra("url", url)
@@ -332,12 +343,22 @@ class AlarmActionReceiver : BroadcastReceiver() {
                         component = mainComponent
                         addCategory(Intent.CATEGORY_DEFAULT)
                         addCategory(Intent.CATEGORY_BROWSABLE)
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        // FLAG_ACTIVITY_NEW_TASK: Required for starting activity from non-activity context
+                        // FLAG_ACTIVITY_CLEAR_TOP: Clear activities on top of target
+                        // FLAG_ACTIVITY_SINGLE_TOP: Don't create new instance if already on top
+                        // FLAG_ACTIVITY_REORDER_TO_FRONT: Bring existing activity to front if it exists
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         putExtra("alarmId", alarmId)
                     }
                 } else {
                     mainLaunchIntent?.apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         putExtra("alarmId", alarmId)
                         if (url != null) putExtra("url", url)
                     }

@@ -49,6 +49,7 @@ export default function RootLayout() {
   const retryTimeoutRef = useRef<NodeJS.Timeout | number | null>(null);
   const pendingDeepLinkUrlRef = useRef<string | null>(null);
   const lastHandledDeepLinkRef = useRef<{ url: string; at: number } | null>(null);
+  const handledDeepLinksRef = useRef<Set<string>>(new Set());
   const [changedEvents, setChangedEvents] = useState<ChangedCalendarEvent[]>([]);
   const [showCalendarChangeModal, setShowCalendarChangeModal] = useState(false);
   const lastCheckTimeRef = useRef<number>(0);
@@ -91,11 +92,19 @@ export default function RootLayout() {
         return;
       }
 
-      // Dedupe to avoid reopen loops
+      // Aggressive deduplication to prevent loops
       const now = Date.now();
       const last = lastHandledDeepLinkRef.current;
-      if (last && last.url === url && (now - last.at) < 5000) {
+      
+      // Check if this exact URL was handled recently (within 10 seconds)
+      if (last && last.url === url && (now - last.at) < 10000) {
         logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Deep link cooldown active, skipping');
+        return;
+      }
+      
+      // Check if this URL is already in the handled set (prevents rapid re-processing)
+      if (handledDeepLinksRef.current.has(url)) {
+        logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Deep link already handled, skipping');
         return;
       }
 
@@ -105,7 +114,14 @@ export default function RootLayout() {
         return;
       }
 
+      // Mark as handled IMMEDIATELY before processing to prevent re-entry
+      handledDeepLinksRef.current.add(url);
       lastHandledDeepLinkRef.current = { url, at: now };
+      
+      // Clear from pending ref if it was stored there
+      if (pendingDeepLinkUrlRef.current === url) {
+        pendingDeepLinkUrlRef.current = null;
+      }
 
       const params = (parsed.queryParams || {}) as Record<string, any>;
       const normalize = (v: any) => (Array.isArray(v) ? String(v[0] ?? '') : String(v ?? ''));
