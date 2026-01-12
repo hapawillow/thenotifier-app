@@ -11,6 +11,7 @@ import type {
   AlarmCapabilityCheck,
   AlarmFiredEvent,
   PermissionChangedEvent,
+  DeepLinkEvent,
 } from './types';
 import { AlarmError, AlarmErrorCode } from './types';
 
@@ -52,6 +53,9 @@ interface NativeAlarmsSpec {
   // Actions
   snoozeAlarm(id: string, minutes: number): Promise<void>;
 
+  // Deep link handoff (iOS only)
+  getPendingDeepLink(): Promise<string | null>;
+
   // Constants
   getConstants(): {
     ALARM_FIRED_EVENT: string;
@@ -89,6 +93,7 @@ const eventEmitter = new NativeEventEmitter(
 const EVENTS = NativeAlarmsModule.getConstants?.() || {
   ALARM_FIRED_EVENT: 'NotifierNativeAlarms_AlarmFired',
   PERMISSION_CHANGED_EVENT: 'NotifierNativeAlarms_PermissionChanged',
+  DEEP_LINK_EVENT: 'NotifierNativeAlarms_DeepLink',
 };
 
 /**
@@ -322,6 +327,30 @@ export const NativeAlarmModule = {
   },
 
   /**
+   * iOS-only: consume a pending deep link saved by AlarmKit intents.
+   */
+  async getPendingDeepLink(): Promise<string | null> {
+    if (Platform.OS !== 'ios') {
+      console.log('[NativeAlarmModule] getPendingDeepLink: Not iOS, returning null');
+      return null;
+    }
+    try {
+      // Not all builds will have this method; treat missing as no-op.
+      if (typeof (NativeAlarmsModule as any).getPendingDeepLink !== 'function') {
+        console.log('[NativeAlarmModule] getPendingDeepLink: Method not available');
+        return null;
+      }
+      console.log('[NativeAlarmModule] getPendingDeepLink: Calling native method');
+      const result = await (NativeAlarmsModule as any).getPendingDeepLink();
+      console.log('[NativeAlarmModule] getPendingDeepLink: Native method returned:', result);
+      return result;
+    } catch (error) {
+      console.error('[NativeAlarmModule] getPendingDeepLink: Error calling native method:', error);
+      return null;
+    }
+  },
+
+  /**
    * Subscribe to alarm fired events
    */
   onAlarmFired(callback: (event: AlarmFiredEvent) => void): () => void {
@@ -355,6 +384,22 @@ export const NativeAlarmModule = {
     );
 
     return () => subscription.remove();
+  },
+
+  /**
+   * Listen for native deep link requests (e.g. alarm dismissed).
+   */
+  onDeepLink(callback: (event: DeepLinkEvent) => void): () => void {
+    const sub = eventEmitter.addListener(
+      (EVENTS as any).DEEP_LINK_EVENT || 'NotifierNativeAlarms_DeepLink',
+      (payload: any) => {
+        callback({
+          url: String(payload?.url ?? ''),
+          at: payload?.at ? String(payload.at) : undefined,
+        });
+      }
+    );
+    return () => sub.remove();
   },
 };
 

@@ -13,15 +13,16 @@ import { ensurePushTokensUpToDate } from '@/utils/push-tokens';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { EventSubscription } from 'expo-modules-core';
+import * as Linking from 'expo-linking';
 import * as Notifications from 'expo-notifications';
 import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, AppStateStatus, InteractionManager, Platform } from 'react-native';
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import 'react-native-reanimated';
-import { NativeAlarmManager } from 'notifier-alarm-manager';
 import ToastManager from 'toastify-react-native';
 import appJson from '../app.json';
 
@@ -46,6 +47,8 @@ export default function RootLayout() {
   const lastProcessedResponseKeyRef = useRef<string | null>(null);
   const awaitingInitialResponseRef = useRef<boolean>(false);
   const retryTimeoutRef = useRef<NodeJS.Timeout | number | null>(null);
+  const pendingDeepLinkUrlRef = useRef<string | null>(null);
+  const lastHandledDeepLinkRef = useRef<{ url: string; at: number } | null>(null);
   const [changedEvents, setChangedEvents] = useState<ChangedCalendarEvent[]>([]);
   const [showCalendarChangeModal, setShowCalendarChangeModal] = useState(false);
   const lastCheckTimeRef = useRef<number>(0);
@@ -64,6 +67,145 @@ export default function RootLayout() {
     FiraSansBlack: require('../assets/fonts/FiraSans-Black.ttf'),
     FiraSansBlackItalic: require('../assets/fonts/FiraSans-BlackItalic.ttf'),
   });
+
+  const handleDeepLinkNavigation = useCallback(async (url: string, isColdStart: boolean = false) => {
+    try {
+      if (!url) return;
+
+      const parsed = Linking.parse(url);
+      // For custom schemes like thenotifier://notification-display?... the route can appear as hostname.
+      const routeKey = String(parsed.path || parsed.hostname || '');
+
+      logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Deep link received:', {
+        url,
+        parsed,
+        routeKey,
+        isColdStart,
+        loaded,
+        i18nLoaded,
+        hasI18nPack: !!i18nPack,
+        appState: AppState.currentState,
+      });
+
+      if (routeKey !== 'notification-display') {
+        return;
+      }
+
+      // Dedupe to avoid reopen loops
+      const now = Date.now();
+      const last = lastHandledDeepLinkRef.current;
+      if (last && last.url === url && (now - last.at) < 5000) {
+        logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Deep link cooldown active, skipping');
+        return;
+      }
+
+      if (!loaded || !i18nLoaded || !i18nPack) {
+        pendingDeepLinkUrlRef.current = url;
+        logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'App not ready; deferring deep link handling');
+        return;
+      }
+
+      lastHandledDeepLinkRef.current = { url, at: now };
+
+      const params = (parsed.queryParams || {}) as Record<string, any>;
+      const normalize = (v: any) => (Array.isArray(v) ? String(v[0] ?? '') : String(v ?? ''));
+
+      // Cold start: use replace to override the default route stack
+      const nav = {
+        pathname: '/notification-display' as const,
+        params: {
+          title: normalize(params.title),
+          message: normalize(params.message),
+          note: normalize(params.note),
+          link: normalize(params.link),
+        },
+      };
+
+      // When app launches from background, wait for interactions to complete before navigating
+      // This ensures the router is ready and the app is fully interactive
+      const performNavigation = () => {
+        try {
+          logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Performing navigation:', nav);
+          if (isColdStart) {
+            router.replace(nav);
+          } else {
+            router.push(nav);
+          }
+          logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Navigation completed');
+        } catch (navError) {
+          logger.error(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Navigation error:', navError);
+        }
+      };
+
+      // If app is launching from background, wait for interactions to complete
+      if (AppState.currentState === 'active' && !isColdStart) {
+        InteractionManager.runAfterInteractions(() => {
+          // Small additional delay to ensure router is ready
+          setTimeout(performNavigation, 100);
+        });
+      } else {
+        performNavigation();
+      }
+    } catch (error) {
+      logger.error(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Failed to handle deep link:', error);
+    }
+  }, [router, loaded, i18nLoaded, i18nPack]);
+
+  // Deep link handling (cold start + runtime)
+  useEffect(() => {
+    let isMounted = true;
+
+    Linking.getInitialURL()
+      .then((url) => {
+        if (!isMounted || !url) return;
+        logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Initial URL:', url);
+        handleDeepLinkNavigation(url, true);
+      })
+      .catch((error) => {
+        logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to get initial URL:', error);
+      });
+
+    const sub = Linking.addEventListener('url', (event) => {
+      if (!event?.url) return;
+      logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'URL event:', event.url);
+      handleDeepLinkNavigation(event.url, false);
+    });
+
+    return () => {
+      isMounted = false;
+      sub.remove();
+    };
+  }, [handleDeepLinkNavigation]);
+
+  // Listen for deep link requests coming from native alarm UI (iOS AlarmKit / Android alarms).
+  useEffect(() => {
+    const unsubscribe = NativeAlarmManager.onDeepLink?.((event: any) => {
+      const url = event?.url;
+      if (typeof url === 'string' && url.length > 0) {
+        logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Received deep link event from native alarms:', url, 'AppState:', AppState.currentState);
+        
+        // When app launches from background, wait for interactions to ensure router is ready
+        if (AppState.currentState === 'active') {
+          InteractionManager.runAfterInteractions(() => {
+            setTimeout(() => {
+              handleDeepLinkNavigation(url, false);
+            }, 100);
+          });
+        } else {
+          // App might be launching, handle immediately (will defer if not ready)
+          handleDeepLinkNavigation(url, false);
+        }
+      }
+    });
+
+    return () => {
+      try {
+        unsubscribe?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, [handleDeepLinkNavigation]);
 
   // Helper function to handle notification navigation
   const handleNotificationNavigation = useCallback(async (notification: Notifications.Notification, actionIdentifier: string, isColdStart: boolean = false) => {
@@ -234,8 +376,9 @@ export default function RootLayout() {
         logger.error(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Failed to record repeat occurrence:', error);
       }
 
-      if (data?.message && typeof data.message === 'string') {
-        logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Navigating to notification display with message:', data.message);
+      // Navigate if notification has content (title/body) and data (note/link)
+      if (notification.request.content.title || notification.request.content.body) {
+        logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Navigating to notification display with title:', notification.request.content.title);
         try {
           await updateArchivedNotificationData(notificationId);
           logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Archived notification data updated successfully');
@@ -265,7 +408,12 @@ export default function RootLayout() {
 
           const navigationParams = {
             pathname: '/notification-display' as const,
-            params: { title: data.title as string, message: data.message as string, note: data.note as string, link: data.link as string },
+            params: {
+              title: notification.request.content.title || '',
+              message: notification.request.content.body || '',
+              note: (data?.note as string) || '',
+              link: (data?.link as string) || ''
+            },
           };
 
           if (isColdStart) {
@@ -487,8 +635,19 @@ export default function RootLayout() {
         await getOrCreateDeviceId().catch((error) => {
           logger.error(makeLogHeader(LOG_FILE, 'init'), 'Failed to get or create device ID:', error);
         });
+        // Note: Push token update may fail with keychain errors when app launches from background.
+        // That's OK - we'll retry on next foreground or the tokens will be updated when user interacts.
         await ensurePushTokensUpToDate().catch((error) => {
-          logger.error(makeLogHeader(LOG_FILE, 'init'), 'Failed to ensure push tokens up to date:', error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const isKeychainError = errorMessage.includes('Keychain access failed') || 
+                                   errorMessage.includes('User interaction is not allowed') ||
+                                   errorMessage.includes('getRegistrationInfoAsync');
+          
+          if (isKeychainError) {
+            logger.warn(makeLogHeader(LOG_FILE, 'init'), 'Push token update skipped during init (keychain access not available when app launches from background)');
+          } else {
+            logger.error(makeLogHeader(LOG_FILE, 'init'), 'Failed to ensure push tokens up to date:', error);
+          }
         });
 
         // Step 2: Get language from database
@@ -547,8 +706,79 @@ export default function RootLayout() {
 
   // AppState listener for focus detection
   useEffect(() => {
+    logger.info(makeLogHeader(LOG_FILE), 'Setting up AppState listener, current state:', AppState.currentState);
+    
+    // Also check immediately if app is already active (in case it launched from background)
+    // This handles the case where the app is already 'active' when the listener is set up
+    const checkImmediately = async () => {
+      if (AppState.currentState === 'active' && loaded && i18nLoaded && i18nPack) {
+        logger.info(makeLogHeader(LOG_FILE), 'App already active on mount, checking for pending deep links immediately');
+        try {
+          const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
+          if (pendingFromAlarmKit) {
+            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Found pending deep link on mount (app already active):', pendingFromAlarmKit);
+            await handleDeepLinkNavigation(pendingFromAlarmKit, false);
+          } else {
+            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'No pending deep link found on mount (app already active)');
+          }
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to check pending deep link on mount:', error);
+        }
+      }
+    };
+    
+    // Check after a short delay to ensure app is ready
+    setTimeout(checkImmediately, 100);
+    
     const subscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
+      logger.info(makeLogHeader(LOG_FILE), `AppState changed to: ${nextAppState}, current: ${AppState.currentState}`);
       if (nextAppState === 'active') {
+        // Wait for interactions to complete before handling deep links
+        // This ensures the app is fully interactive and router is ready
+        InteractionManager.runAfterInteractions(async () => {
+          // Check multiple times with delays to catch deep links that were stored while app was backgrounded
+          const checkPendingDeepLink = async (attempt: number): Promise<boolean> => {
+            try {
+              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Checking for pending deep link from AlarmKit (attempt ${attempt}), AppState: ${AppState.currentState}`);
+              const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
+              if (pendingFromAlarmKit) {
+                logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Consumed pending deep link from AlarmKit on AppState active (attempt ${attempt}):`, pendingFromAlarmKit);
+                await handleDeepLinkNavigation(pendingFromAlarmKit, false);
+                return true; // Found and handled
+              } else {
+                logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `No pending deep link found from AlarmKit (attempt ${attempt})`);
+              }
+              return false; // Not found
+            } catch (error) {
+              logger.error(makeLogHeader(LOG_FILE, 'deepLink'), `Failed to consume pending deep link from AlarmKit on AppState active (attempt ${attempt}):`, error);
+              return false;
+            }
+          };
+
+          // Check immediately
+          let found = await checkPendingDeepLink(1);
+
+          // If not found, check again after delays
+          if (!found) {
+            setTimeout(async () => {
+              found = await checkPendingDeepLink(2);
+              if (!found) {
+                setTimeout(async () => {
+                  await checkPendingDeepLink(3);
+                }, 500);
+              }
+            }, 300);
+          }
+
+          // Also check if there's a pending deep link stored in the ref (from onDeepLink event)
+          const pendingFromRef = pendingDeepLinkUrlRef.current;
+          if (pendingFromRef && loaded && i18nLoaded && i18nPack) {
+            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Consumed pending deep link from ref on AppState active:', pendingFromRef);
+            pendingDeepLinkUrlRef.current = null;
+            await handleDeepLinkNavigation(pendingFromRef, false);
+          }
+        });
+
         // First, reconcile permissions (detect transitions and cleanup if needed)
         if (i18nPack) {
           const t = (key: string) => translate(i18nPack, key);
@@ -563,8 +793,19 @@ export default function RootLayout() {
         }
 
         // Ensure push tokens are up to date (handles permission revoke/restore)
+        // Note: This may fail with keychain errors when app launches from background state.
+        // That's OK - we'll retry on next foreground or the tokens will be updated when user interacts.
         await ensurePushTokensUpToDate().catch((error) => {
-          logger.error(makeLogHeader(LOG_FILE), 'Failed to ensure push tokens up to date on foreground:', error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const isKeychainError = errorMessage.includes('Keychain access failed') || 
+                                   errorMessage.includes('User interaction is not allowed') ||
+                                   errorMessage.includes('getRegistrationInfoAsync');
+          
+          if (isKeychainError) {
+            logger.warn(makeLogHeader(LOG_FILE), 'Push token update skipped (keychain access not available when app launches from background)');
+          } else {
+            logger.error(makeLogHeader(LOG_FILE), 'Failed to ensure push tokens up to date on foreground:', error);
+          }
         });
 
         // Check current permissions for gating replenishers
@@ -675,10 +916,82 @@ export default function RootLayout() {
 
 
   useEffect(() => {
-    if (loaded && i18nLoaded) {
+    // Only handle pending deep links once the app is *fully* initialized.
+    // Otherwise we can defer inside handleDeepLinkNavigation() and never re-run this effect.
+    if (loaded && i18nLoaded && i18nPack) {
+      logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'App fully initialized, checking for pending deep links');
       SplashScreen.hideAsync();
+
+      // If we received a deep link before app initialization completed, handle it now.
+      const pending = pendingDeepLinkUrlRef.current;
+      if (pending) {
+        pendingDeepLinkUrlRef.current = null;
+        logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Handling pending deep link from ref:', pending);
+        handleDeepLinkNavigation(pending, true);
+      }
+
+      // iOS AlarmKit: consume a pending deep link saved by the stop/dismiss LiveActivityIntent.
+      // Check multiple times with delays to catch deep links that were stored while app was backgrounded.
+      (async () => {
+        const checkPendingDeepLink = async (attempt: number) => {
+          try {
+            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Checking for pending deep link from AlarmKit (attempt ${attempt}), AppState: ${AppState.currentState}`);
+            
+            // Add a small delay before checking to ensure UserDefaults has synced
+            if (attempt > 1) {
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
+            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `getPendingDeepLink returned (attempt ${attempt}):`, pendingFromAlarmKit || 'null');
+            
+            if (pendingFromAlarmKit) {
+              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Consumed pending deep link from AlarmKit (attempt ${attempt}):`, pendingFromAlarmKit);
+              handleDeepLinkNavigation(pendingFromAlarmKit, true);
+              return true; // Found and handled
+            } else {
+              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `No pending deep link found from AlarmKit (attempt ${attempt})`);
+            }
+            return false; // Not found
+          } catch (error) {
+            logger.error(makeLogHeader(LOG_FILE, 'deepLink'), `Failed to consume pending deep link from AlarmKit (attempt ${attempt}):`, error);
+            return false;
+          }
+        };
+
+        // Check immediately
+        let found = await checkPendingDeepLink(1);
+        
+        // If not found, check multiple times with increasing delays
+        // This handles the case where perform() stores the URL after the app starts launching
+        if (!found) {
+          // Check after 500ms
+          setTimeout(async () => {
+            found = await checkPendingDeepLink(2);
+            if (!found) {
+              // Check after another 500ms (total 1s)
+              setTimeout(async () => {
+                found = await checkPendingDeepLink(3);
+                if (!found) {
+                  // Check after another 1s (total 2s)
+                  setTimeout(async () => {
+                    await checkPendingDeepLink(4);
+                  }, 1000);
+                }
+              }, 500);
+            }
+          }, 500);
+        }
+
+        // Also check after interactions complete (in case there's a delay in storing the URL)
+        InteractionManager.runAfterInteractions(async () => {
+          setTimeout(async () => {
+            await checkPendingDeepLink(5);
+          }, 500);
+        });
+      })();
     }
-  }, [loaded, i18nLoaded]);
+  }, [loaded, i18nLoaded, i18nPack, handleDeepLinkNavigation]);
 
   if (!loaded || !i18nLoaded || !i18nPack) {
     return null;

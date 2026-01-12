@@ -71,7 +71,7 @@ export interface AlarmCapabilityCheck {
 /**
  * Alarm schedule types
  */
-export type AlarmScheduleType = 'fixed' | 'recurring' | 'interval';
+export type AlarmScheduleType = 'fixed' | 'relative' | 'recurring' | 'interval';
 
 /**
  * Day of week (Sunday = 0, Saturday = 6)
@@ -104,6 +104,13 @@ export interface AlarmSchedule {
    * Required for 'fixed' and 'recurring'
    */
   time?: AlarmTime;
+
+  /**
+   * iOS (AlarmKit): relative schedule repeats
+   * - 'never' maps to Alarm.Schedule.Relative.Recurrence.never
+   * - 'weekly' maps to Alarm.Schedule.Relative.Recurrence.weekly(...)
+   */
+  repeats?: 'never' | 'weekly';
 
   /**
    * Specific date (for 'fixed' type only)
@@ -275,6 +282,14 @@ export interface PermissionChangedEvent {
 
   /** Platform */
   platform: 'ios' | 'android';
+}
+
+/**
+ * Deep link request event (typically from native alarm UI interactions)
+ */
+export interface DeepLinkEvent {
+  url: string;
+  at?: string;
 }
 
 /**
@@ -515,6 +530,16 @@ export interface NativeAlarmManager {
    * ```
    */
   snoozeAlarm(id: string, minutes: number): Promise<void>;
+
+  /**
+   * iOS-only: consume a pending deep link saved by AlarmKit intents.
+   */
+  getPendingDeepLink(): Promise<string | null>;
+
+  /**
+   * Listen for native deep link requests (e.g. alarm dismissed via system UI).
+   */
+  onDeepLink(callback: (event: DeepLinkEvent) => void): EventUnsubscribe;
 }
 
 /**
@@ -576,6 +601,25 @@ export const AlarmValidation = {
     }
 
     switch (schedule.type) {
+      case 'relative': {
+        if (!schedule.time) return false;
+        if (schedule.time.hour < 0 || schedule.time.hour > 23) return false;
+        if (schedule.time.minute < 0 || schedule.time.minute > 59) return false;
+
+        // iOS AlarmKit relative schedules support repeats: never or weekly
+        if (schedule.repeats && schedule.repeats !== 'never' && schedule.repeats !== 'weekly') {
+          return false;
+        }
+        if (schedule.repeats === 'weekly') {
+          if (!schedule.daysOfWeek || schedule.daysOfWeek.length === 0) {
+            return false;
+          }
+          if (schedule.daysOfWeek.some(day => day < 0 || day > 6)) {
+            return false;
+          }
+        }
+        break;
+      }
       case 'fixed':
       case 'recurring':
         if (!schedule.time) return false;

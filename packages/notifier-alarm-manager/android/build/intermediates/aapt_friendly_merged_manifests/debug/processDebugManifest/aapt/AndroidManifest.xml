@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.nativealarms" >
+    package="com.notifiernativealarms" >
 
     <uses-sdk android:minSdkVersion="24" />
 
@@ -16,28 +16,29 @@
 
         <!-- Alarm Receiver - Handles alarm trigger events -->
         <receiver
-            android:name="com.nativealarms.AlarmReceiver"
+            android:name="com.notifiernativealarms.AlarmReceiver"
             android:enabled="true"
             android:exported="false" >
             <intent-filter>
-                <action android:name="com.nativealarms.ALARM_ACTION" />
+                <action android:name="com.notifiernativealarms.ALARM_ACTION" />
             </intent-filter>
         </receiver>
 
         <!-- Alarm Action Receiver - Handles notification actions -->
         <receiver
-            android:name="com.nativealarms.AlarmActionReceiver"
+            android:name="com.notifiernativealarms.AlarmActionReceiver"
             android:enabled="true"
             android:exported="false" >
             <intent-filter>
-                <action android:name="com.nativealarms.ACTION_DISMISS" />
-                <action android:name="com.nativealarms.ACTION_SNOOZE" />
+                <action android:name="com.notifiernativealarms.ACTION_DISMISS" />
+                <action android:name="com.notifiernativealarms.ACTION_SNOOZE" />
+                <action android:name="com.notifiernativealarms.ACTION_OPEN" />
             </intent-filter>
         </receiver>
 
         <!-- Boot Receiver - Reschedules alarms after reboot -->
         <receiver
-            android:name="com.nativealarms.BootReceiver"
+            android:name="com.notifiernativealarms.BootReceiver"
             android:enabled="true"
             android:exported="true" >
             <intent-filter>
@@ -48,7 +49,7 @@
 
         <!-- Permission Receiver - Listens for permission changes (Android 12+) -->
         <receiver
-            android:name="com.nativealarms.PermissionReceiver"
+            android:name="com.notifiernativealarms.PermissionReceiver"
             android:enabled="true"
             android:exported="false" >
             <intent-filter>

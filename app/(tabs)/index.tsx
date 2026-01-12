@@ -17,6 +17,7 @@ import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { notificationRefreshEvents } from '@/utils/notification-refresh-events';
 import { openNotifierLink } from '@/utils/open-link';
+import { formatDateTimeWithTimeZone } from '@/utils/timezone';
 import { Toast } from 'toastify-react-native';
 
 const LOG_FILE = 'app/(tabs)/index.tsx';
@@ -35,6 +36,9 @@ type ScheduledNotification = {
   hasAlarm: boolean;
   calendarId?: string | null;
   originalEventId?: string | null;
+  createdTimeZoneId?: string | null;
+  createdTimeZoneAbbr?: string | null;
+  timeZoneMode?: 'dependent' | 'independent' | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -53,6 +57,9 @@ type ArchivedNotification = {
   hasAlarm: boolean;
   calendarId?: string | null;
   originalEventId?: string | null;
+  createdTimeZoneId?: string | null;
+  createdTimeZoneAbbr?: string | null;
+  timeZoneMode?: 'dependent' | 'independent' | null;
   createdAt: string;
   updatedAt: string;
   handledAt: string | null;
@@ -75,6 +82,9 @@ type RepeatOccurrenceItem = {
   scheduleDateTimeLocal: string; // Added during merge for display
   parentRepeatOption?: string | null; // From parent notification
   parentScheduleDateTime?: string | null; // From parent notification
+  parentCreatedTimeZoneId?: string | null; // From parent notification
+  parentCreatedTimeZoneAbbr?: string | null; // From parent notification
+  parentTimeZoneMode?: string | null; // From parent notification
 };
 
 type PastItem = ArchivedNotification | RepeatOccurrenceItem;
@@ -182,6 +192,9 @@ export default function HomeScreen() {
           // Include parent metadata for displaying repeat info
           parentRepeatOption: item.parentRepeatOption,
           parentScheduleDateTime: item.parentScheduleDateTime,
+          parentCreatedTimeZoneId: item.parentCreatedTimeZoneId,
+          parentCreatedTimeZoneAbbr: item.parentCreatedTimeZoneAbbr,
+          parentTimeZoneMode: item.parentTimeZoneMode,
         })),
       ];
 
@@ -525,6 +538,28 @@ export default function HomeScreen() {
     });
   };
 
+  // Round up a Date to the next minute if it has seconds or milliseconds
+  // This ensures times like "3:24:59" display as "3:25" instead of "3:24"
+  const roundUpToNextMinute = (date: Date | string): Date => {
+    const dateObj = typeof date === 'string' ? new Date(date) : date;
+    if (isNaN(dateObj.getTime())) {
+      return dateObj; // Return invalid date as-is
+    }
+
+    const seconds = dateObj.getSeconds();
+    const milliseconds = dateObj.getMilliseconds();
+
+    // If there are any seconds or milliseconds, round up to the next minute
+    if (seconds > 0 || milliseconds > 0) {
+      const timestampMs = dateObj.getTime();
+      // Round up: ceil(timestampMs / 60000) * 60000
+      const roundedTimestampMs = Math.ceil(timestampMs / 60000) * 60000;
+      return new Date(roundedTimestampMs);
+    }
+
+    return dateObj;
+  };
+
   // Format date string to remove seconds
   const formatDateTimeWithoutSeconds = (dateTimeString: string): string => {
     try {
@@ -550,7 +585,34 @@ export default function HomeScreen() {
   };
 
   // Format repeat option text for display
-  const formatRepeatOption = (repeatOption: string | null, scheduleDateTime: string): string => {
+  // Extract time and optional timezone suffix from header display string
+  // Example inputs: "1/8/2026, 11:30 AM" or "Jan 8, 2026, 10:45 AM" or "1/8/2026, 11:30 AM (EST)"
+  const extractTimeAndTzFromHeader = (text: string): { time: string | null; tzSuffix: string | null } => {
+    try {
+      // Match time pattern that comes after a comma (date separator)
+      // Pattern: ", HH:MM AM/PM" or ", H:MM AM/PM" 
+      // This ensures we match the hours:minutes time, not minutes:seconds
+      // Also handle cases with seconds: ", 10:45:00 AM" should extract "10:45 AM"
+      const timePattern = /,\s*(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)/i;
+      const tzPattern = /\s*\(([^)]+)\)\s*$/;
+
+      const timeMatch = text.match(timePattern);
+      const tzMatch = text.match(tzPattern);
+
+      // Combine hours:minutes with AM/PM
+      const time = timeMatch ? `${timeMatch[1]}:${timeMatch[2]} ${timeMatch[3]}` : null;
+
+      return {
+        time: time,
+        tzSuffix: tzMatch ? tzMatch[1] : null,
+      };
+    } catch (error) {
+      logger.error(makeLogHeader(LOG_FILE, 'extractTimeAndTzFromHeader'), 'Error extracting time from header:', error);
+      return { time: null, tzSuffix: null };
+    }
+  };
+
+  const formatRepeatOption = (repeatOption: string | null, scheduleDateTime: string, timeZoneId?: string | null): string => {
     if (!repeatOption || repeatOption === 'none') {
       return '';
     }
@@ -561,20 +623,37 @@ export default function HomeScreen() {
         return '';
       }
 
+      // Format options with timezone if provided
+      const formatOptions: Intl.DateTimeFormatOptions = timeZoneId ? { timeZone: timeZoneId } : {};
+
       switch (repeatOption) {
         case 'daily': {
           const timeStr = date.toLocaleString('en-US', {
             hour: 'numeric',
             minute: '2-digit',
+            ...formatOptions,
           });
           return t('repeatDisplay.repeatsDailyAt', { time: timeStr });
         }
         case 'weekly': {
-          const dayOfWeek = date.toLocaleString('en-US', { weekday: 'long' });
+          const dayOfWeek = date.toLocaleString('en-US', {
+            weekday: 'long',
+            ...formatOptions,
+          });
           return t('repeatDisplay.repeatsWeeklyOn', { day: dayOfWeek });
         }
         case 'monthly': {
-          const day = date.getDate();
+          // For monthly, we need to get the day in the correct timezone
+          let day: number;
+          if (timeZoneId) {
+            const formatter = new Intl.DateTimeFormat('en-US', {
+              day: 'numeric',
+              timeZone: timeZoneId,
+            });
+            day = parseInt(formatter.format(date), 10);
+          } else {
+            day = date.getDate();
+          }
           const suffix = day === 1 ? 'st' : day === 2 ? 'nd' : day === 3 ? 'rd' : 'th';
           return t('repeatDisplay.repeatsMonthlyOn', { day: String(day), suffix });
         }
@@ -642,6 +721,44 @@ export default function HomeScreen() {
       }
     };
 
+    // Compute header display string (same as what's shown in dateTimeRow)
+    const headerDateTimeText = item.timeZoneMode === 'independent' && item.createdTimeZoneAbbr
+      ? formatDateTimeWithTimeZone(item.scheduleDateTime, item.createdTimeZoneId ?? null, item.createdTimeZoneAbbr ?? null)
+      : formatDateTimeWithoutSeconds(item.scheduleDateTimeLocal);
+
+    // Extract time and timezone suffix from header string
+    const { time: extractedTime, tzSuffix: extractedTzSuffix } = extractTimeAndTzFromHeader(headerDateTimeText);
+
+    // Calculate repeat drawer datetime using same logic as dateTimeRow
+    // For timezone-independent: use scheduleDateTime with creation timezone
+    // For timezone-dependent: parse scheduleDateTimeLocal to extract time (matches dateTimeRow)
+    let repeatDrawerDateTime: string;
+    let repeatDrawerTimeZoneId: string | null = null;
+
+    if (item.timeZoneMode === 'independent' && item.createdTimeZoneAbbr) {
+      // Timezone-independent: use ISO scheduleDateTime with creation timezone
+      repeatDrawerDateTime = item.scheduleDateTime;
+      repeatDrawerTimeZoneId = item.createdTimeZoneId ?? null;
+    } else {
+      // Timezone-dependent: parse scheduleDateTimeLocal to get the same time as dateTimeRow
+      // scheduleDateTimeLocal is a locale string like "1/8/2026, 11:30:00 AM"
+      // We need to parse it and convert back to ISO for formatRepeatOption
+      try {
+        const parsedDate = new Date(item.scheduleDateTimeLocal);
+        if (!isNaN(parsedDate.getTime())) {
+          // Use the parsed date - this preserves the time shown in scheduleDateTimeLocal
+          repeatDrawerDateTime = parsedDate.toISOString();
+        } else {
+          // Fallback to scheduleDateTime if parsing fails
+          repeatDrawerDateTime = item.scheduleDateTime;
+        }
+      } catch (error) {
+        // Fallback to scheduleDateTime if parsing fails
+        repeatDrawerDateTime = item.scheduleDateTime;
+      }
+      repeatDrawerTimeZoneId = null; // Device timezone
+    }
+
     // Render drawer content (reused for both measurement and visible drawer)
     const renderDrawerContent = () => (
       <>
@@ -651,7 +768,17 @@ export default function HomeScreen() {
               {t('detailLabels.repeat')}
             </ThemedText>
             <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
-              {formatRepeatOption(item.repeatOption, item.scheduleDateTime)}
+              {(() => {
+                // For daily repeats, use extracted time from header to guarantee match
+                if (item.repeatOption === 'daily' && extractedTime) {
+                  const timeDisplay = extractedTzSuffix
+                    ? `${extractedTime} (${extractedTzSuffix})`
+                    : extractedTime;
+                  return t('repeatDisplay.repeatsDailyAt', { time: timeDisplay });
+                }
+                // For other repeat types, use existing formatRepeatOption logic
+                return formatRepeatOption(item.repeatOption, repeatDrawerDateTime, repeatDrawerTimeZoneId);
+              })()}
             </ThemedText>
           </ThemedView>
         )}
@@ -751,7 +878,9 @@ export default function HomeScreen() {
             </ThemedText>
             <ThemedView style={styles.dateTimeRow}>
               <ThemedText maxFontSizeMultiplier={1.6} style={styles.message} numberOfLines={1}>
-                {formatDateTimeWithoutSeconds(item.scheduleDateTimeLocal)}
+                {item.timeZoneMode === 'independent' && item.createdTimeZoneAbbr
+                  ? formatDateTimeWithTimeZone(item.scheduleDateTime, item.createdTimeZoneId ?? null, item.createdTimeZoneAbbr ?? null)
+                  : formatDateTimeWithoutSeconds(item.scheduleDateTimeLocal)}
               </ThemedText>
               {item.hasAlarm && (
                 <IconSymbol
@@ -820,8 +949,52 @@ export default function HomeScreen() {
     const displayMessage = item.message;
     const displayNote = item.note;
     const displayLink = item.link;
+    // For repeat drawer, use the same datetime that's displayed in dateTimeRow
+    // For repeat occurrences, use fireDateTime; for archived, use scheduleDateTime
     const displayDateTime = isRepeat ? item.fireDateTime : item.scheduleDateTime;
-    const displayDateTimeLocal = isRepeat ? new Date(item.fireDateTime).toLocaleString() : item.scheduleDateTimeLocal;
+    // For repeat occurrences, check if parent is timezone-independent
+    const parentTimeZoneMode = isRepeat ? (item as any).parentTimeZoneMode : (item as ArchivedNotification).timeZoneMode;
+    const parentCreatedTimeZoneId = isRepeat ? (item as any).parentCreatedTimeZoneId : (item as ArchivedNotification).createdTimeZoneId;
+    const parentCreatedTimeZoneAbbr = isRepeat ? (item as any).parentCreatedTimeZoneAbbr : (item as ArchivedNotification).createdTimeZoneAbbr;
+
+    let displayDateTimeLocal: string;
+    // Compute header display string (same as what's shown in dateTimeRow)
+    if (isRepeat && parentTimeZoneMode === 'independent' && parentCreatedTimeZoneAbbr) {
+      // Format repeat occurrence in parent's creation timezone
+      // Round up to next minute to ensure seconds like ":59" display as next minute
+      const roundedFireDateTime = roundUpToNextMinute(item.fireDateTime);
+      displayDateTimeLocal = formatDateTimeWithTimeZone(roundedFireDateTime.toISOString(), parentCreatedTimeZoneId ?? null, parentCreatedTimeZoneAbbr ?? null);
+    } else if (!isRepeat && parentTimeZoneMode === 'independent' && parentCreatedTimeZoneAbbr) {
+      // Format archived notification with timezone using ISO timestamp
+      // Round up to next minute to ensure seconds like ":59" display as next minute
+      const roundedScheduleDateTime = roundUpToNextMinute(item.scheduleDateTime);
+      displayDateTimeLocal = formatDateTimeWithTimeZone(roundedScheduleDateTime.toISOString(), parentCreatedTimeZoneId ?? null, parentCreatedTimeZoneAbbr ?? null);
+    } else {
+      // Default: no timezone suffix
+      displayDateTimeLocal = isRepeat ? new Date(item.fireDateTime).toLocaleString() : item.scheduleDateTimeLocal;
+    }
+
+    // Extract time and timezone suffix from header string (for daily repeats)
+    const { time: extractedTime, tzSuffix: extractedTzSuffix } = extractTimeAndTzFromHeader(displayDateTimeLocal);
+
+    // For repeat drawer formatting, use the same datetime source as dateTimeRow
+    let repeatDrawerDateTime: string; // ISO string for formatRepeatOption
+    let repeatDrawerTimeZoneId: string | null = null; // Timezone ID for formatRepeatOption
+    if (isRepeat && parentTimeZoneMode === 'independent' && parentCreatedTimeZoneAbbr) {
+      // Round up to next minute for consistency with header display
+      const roundedFireDateTime = roundUpToNextMinute(item.fireDateTime);
+      repeatDrawerDateTime = roundedFireDateTime.toISOString(); // Use rounded fireDateTime ISO string
+      repeatDrawerTimeZoneId = parentCreatedTimeZoneId ?? null; // Use parent's creation timezone
+    } else if (!isRepeat && parentTimeZoneMode === 'independent' && parentCreatedTimeZoneAbbr) {
+      // Round up to next minute for consistency with header display
+      const roundedScheduleDateTime = roundUpToNextMinute(item.scheduleDateTime);
+      repeatDrawerDateTime = roundedScheduleDateTime.toISOString(); // Use rounded scheduleDateTime ISO string
+      repeatDrawerTimeZoneId = parentCreatedTimeZoneId ?? null; // Use creation timezone
+    } else {
+      // For formatRepeatOption, use ISO strings
+      repeatDrawerDateTime = isRepeat ? item.fireDateTime : item.scheduleDateTime;
+      repeatDrawerTimeZoneId = null; // Use device timezone
+    }
     const hasAlarm = isRepeat ? false : item.hasAlarm;
 
     // For repeat occurrences, get repeat metadata from item (will be populated by DB query)
@@ -878,7 +1051,17 @@ export default function HomeScreen() {
               {t('detailLabels.repeat')}
             </ThemedText>
             <ThemedText maxFontSizeMultiplier={1.6} style={styles.detailValue}>
-              {formatRepeatOption(repeatOption!, parentScheduleDateTime || displayDateTime)}
+              {(() => {
+                // For daily repeats, use extracted time from header to guarantee match
+                if (repeatOption === 'daily' && extractedTime) {
+                  const timeDisplay = extractedTzSuffix
+                    ? `${extractedTime} (${extractedTzSuffix})`
+                    : extractedTime;
+                  return t('repeatDisplay.repeatsDailyAt', { time: timeDisplay });
+                }
+                // For other repeat types, use existing formatRepeatOption logic
+                return formatRepeatOption(repeatOption!, repeatDrawerDateTime, repeatDrawerTimeZoneId);
+              })()}
             </ThemedText>
           </ThemedView>
         )}
@@ -926,13 +1109,10 @@ export default function HomeScreen() {
           </ThemedText>
           <ThemedView style={styles.dateTimeRow}>
             <ThemedText maxFontSizeMultiplier={1.6} style={styles.message} numberOfLines={1}>
-              {formatDateTimeWithoutSeconds(displayDateTimeLocal)}
+              {parentTimeZoneMode === 'independent' && parentCreatedTimeZoneAbbr
+                ? displayDateTimeLocal // Already formatted with timezone, don't re-parse
+                : formatDateTimeWithoutSeconds(displayDateTimeLocal)}
             </ThemedText>
-            {/* {(isRepeat || hasRepeatOption) && (
-              <ThemedText maxFontSizeMultiplier={1.4} style={[styles.message, { fontStyle: 'italic', marginLeft: 8 }]}>
-                (Repeat)
-              </ThemedText>
-            )} */}
             {hasAlarm && (
               <IconSymbol
                 name="bell.fill"

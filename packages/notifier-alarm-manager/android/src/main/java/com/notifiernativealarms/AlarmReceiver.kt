@@ -26,6 +26,7 @@ class AlarmReceiver : BroadcastReceiver() {
         const val ACTION_DISMISS = "com.notifiernativealarms.ACTION_DISMISS"
         const val ACTION_SNOOZE = "com.notifiernativealarms.ACTION_SNOOZE"
         const val ACTION_OPEN = "com.notifiernativealarms.ACTION_OPEN"
+        const val ACTION_CANCEL_SNOOZE = "com.notifiernativealarms.ACTION_CANCEL_SNOOZE"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -39,6 +40,13 @@ class AlarmReceiver : BroadcastReceiver() {
 
         // Create notification channel
         createNotificationChannel(context)
+
+        // If a snooze countdown notification is visible for this alarm, clear it now
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.cancel((alarmId + "_snooze_countdown").hashCode())
+        } catch (_: Exception) {
+        }
 
         // Show notification
         showAlarmNotification(context, alarmId, title, body, sound, url)
@@ -243,12 +251,17 @@ class AlarmActionReceiver : BroadcastReceiver() {
                     if (alarmData != null) {
                         val isInexact = alarmData.id.startsWith("fallback_")
 
-                        if (isInexact) {
+                        val snoozeUntilMs: Long? = if (isInexact) {
                             val fallback = NotificationFallback(context)
                             fallback.snoozeAlarm(alarmId, 10)
                         } else {
                             val exactManager = ExactAlarmManager(context)
                             exactManager.snoozeAlarm(alarmId, 10)
+                        }
+
+                        // Show a native countdown notification allowing the user to cancel snooze.
+                        if (snoozeUntilMs != null) {
+                            showSnoozeCountdownNotification(context, alarmId, alarmData, snoozeUntilMs)
                         }
                     }
                 } catch (e: Exception) {
@@ -289,7 +302,111 @@ class AlarmActionReceiver : BroadcastReceiver() {
                     context.startActivity(launchIntent)
                 }
             }
+
+            AlarmReceiver.ACTION_CANCEL_SNOOZE -> {
+                // Cancel the snoozed alarm instance and deep link into the app
+                try {
+                    val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    notificationManager.cancel((alarmId + "_snooze_countdown").hashCode())
+                } catch (_: Exception) {
+                }
+
+                // Cancel any pending snooze alarm (best-effort)
+                try {
+                    ExactAlarmManager(context).cancelAlarm(alarmId)
+                } catch (_: Exception) {
+                }
+                try {
+                    NotificationFallback(context).cancelAlarm(alarmId)
+                } catch (_: Exception) {
+                }
+
+                // Deep link to Notification Detail
+                val url = intent.getStringExtra("url")
+                val packageName = context.packageName
+                val mainLaunchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+                val mainComponent = mainLaunchIntent?.component
+
+                val launchIntent = if (url != null && mainComponent != null) {
+                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                        component = mainComponent
+                        addCategory(Intent.CATEGORY_DEFAULT)
+                        addCategory(Intent.CATEGORY_BROWSABLE)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        putExtra("alarmId", alarmId)
+                    }
+                } else {
+                    mainLaunchIntent?.apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        putExtra("alarmId", alarmId)
+                        if (url != null) putExtra("url", url)
+                    }
+                }
+                if (launchIntent != null) {
+                    context.startActivity(launchIntent)
+                }
+            }
         }
+    }
+}
+
+private fun showSnoozeCountdownNotification(context: Context, alarmId: String, alarmData: AlarmData, snoozeUntilMs: Long) {
+    try {
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        val dataMap = alarmData.config.getMap("data")
+        val title = dataMap?.getString("title") ?: alarmData.config.getString("title") ?: "Alarm"
+        val message = dataMap?.getString("message") ?: alarmData.config.getString("body") ?: ""
+        val note = dataMap?.getString("note") ?: ""
+        val link = dataMap?.getString("link") ?: ""
+
+        val url = try {
+            Uri.Builder()
+                .scheme("thenotifier")
+                .authority("notification-display")
+                .appendQueryParameter("title", title)
+                .appendQueryParameter("message", message)
+                .appendQueryParameter("note", note)
+                .appendQueryParameter("link", link)
+                .build()
+                .toString()
+        } catch (_: Exception) {
+            null
+        }
+
+        // Cancel action (X) -> cancel snooze + deep link
+        val cancelIntent = Intent(context, AlarmActionReceiver::class.java).apply {
+            action = AlarmReceiver.ACTION_CANCEL_SNOOZE
+            putExtra("alarmId", alarmId)
+            if (url != null) putExtra("url", url)
+        }
+        val cancelPendingIntent = PendingIntent.getBroadcast(
+            context,
+            (alarmId + "_cancel_snooze").hashCode(),
+            cancelIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(context, AlarmReceiver.CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("Snoozed: $title")
+            .setContentText("Alarm will go off soon")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setWhen(snoozeUntilMs)
+            .setShowWhen(true)
+            .setUsesChronometer(true)
+            .addAction(android.R.drawable.ic_delete, "Cancel Snooze", cancelPendingIntent)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            builder.setChronometerCountDown(true)
+        }
+
+        notificationManager.notify((alarmId + "_snooze_countdown").hashCode(), builder.build())
+    } catch (_: Exception) {
+        // best-effort
     }
 }
 

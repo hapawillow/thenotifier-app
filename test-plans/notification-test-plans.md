@@ -65,17 +65,19 @@ This document contains comprehensive test plans for scheduling, updating, and de
 1. Open schedule form
 2. Set date/time to 12 hours from now
 3. Set repeat option to "Repeat every day"
-4. Turn alarm switch ON
+4. Turn alarm switch OFF (Expo notification only)
 5. Enter message: "Test daily near-term"
 6. Tap "Schedule Notification"
 
 **Expected Results:**
 - Notification scheduled with Expo DAILY trigger
-- Daily alarm window scheduled (14 fixed alarms)
+- No alarms scheduled (alarm switch OFF)
 - `repeatMethod` in DB is `'expo'`
 - `repeatOption` in DB is `'daily'`
 - `notificationTrigger.type` is `'DAILY'`
+- `timeZoneMode` in DB is `'dependent'`
 - No alert shown (not rolling-window)
+- Date/time displayed without timezone suffix in Upcoming tab
 
 ---
 
@@ -86,18 +88,19 @@ This document contains comprehensive test plans for scheduling, updating, and de
 1. Open schedule form
 2. Set date/time to 2 days from now
 3. Set repeat option to "Repeat every day"
-4. Turn alarm switch ON
+4. Turn alarm switch OFF (Expo notification only)
 5. Enter message: "Test daily rolling window"
 6. Tap "Schedule Notification"
 
 **Expected Results:**
-- 14 DATE notification instances scheduled
-- Daily alarm window scheduled (14 fixed alarms)
+- DATE notification instances scheduled (iOS: 5, Android: 3)
+- No alarms scheduled (alarm switch OFF)
 - `repeatMethod` in DB is `'rollingWindow'`
 - `repeatOption` in DB is `'daily'`
 - `notificationTrigger.type` is `'DATE_WINDOW'`
-- Alert shown: "Daily Notification" with message about using app every two weeks
-- 14 rows in `repeatNotificationInstance` table
+- `timeZoneMode` in DB is `'dependent'`
+- Window size matches platform: iOS=5, Android=3
+- Date/time displayed without timezone suffix in Upcoming tab
 
 ---
 
@@ -129,18 +132,19 @@ This document contains comprehensive test plans for scheduling, updating, and de
 1. Open schedule form
 2. Set date/time to 10 days from now
 3. Set repeat option to "Repeat every week"
-4. Turn alarm switch ON
+4. Turn alarm switch OFF (Expo notification only)
 5. Enter message: "Test weekly rolling window"
 6. Tap "Schedule Notification"
 
 **Expected Results:**
-- 4 DATE notification instances scheduled (4 weeks)
-- Alarm scheduled with weekly recurrence
+- DATE notification instances scheduled (iOS: 3 weeks, Android: 2 weeks)
+- No alarms scheduled (alarm switch OFF)
 - `repeatMethod` in DB is `'rollingWindow'`
 - `repeatOption` in DB is `'weekly'`
 - `notificationTrigger.type` is `'DATE_WINDOW'`
-- Alert shown: "Weekly Notification" with message about using app once a month
-- 4 rows in `repeatNotificationInstance` table
+- `timeZoneMode` in DB is `'dependent'`
+- Window size matches platform: iOS=3, Android=2
+- Date/time displayed without timezone suffix in Upcoming tab
 
 ---
 
@@ -165,26 +169,25 @@ This document contains comprehensive test plans for scheduling, updating, and de
 
 ---
 
-### Test Case 1.8: Monthly repeat - far-term start (uses rolling window)
-**Objective:** Verify monthly repeat with start date >= 1 month uses rolling window
+### Test Case 1.8: Monthly repeat - far-term start (uses DATE, migrates to MONTHLY)
+**Objective:** Verify monthly repeat with start date >= 1 month uses DATE trigger (will migrate to MONTHLY when it fires)
 
 **Steps:**
 1. Open schedule form
 2. Set date/time to 6 weeks from now
 3. Set repeat option to "Repeat every month"
-4. Turn alarm switch ON
-5. Enter message: "Test monthly rolling window"
+4. Turn alarm switch OFF (Expo notification only)
+5. Enter message: "Test monthly DATE migration"
 6. Tap "Schedule Notification"
 
 **Expected Results:**
-- 4 DATE notification instances scheduled (4 months)
-- Alarm scheduled with monthly recurrence
-- `repeatMethod` in DB is `'rollingWindow'`
+- Single DATE notification scheduled (NOT rolling window)
+- `repeatMethod` in DB is `null` (one-time DATE)
 - `repeatOption` in DB is `'monthly'`
-- `notificationTrigger.type` is `'DATE_WINDOW'`
-- Alert shown: "Monthly Notification" with message about using app once a month
-- 4 rows in `repeatNotificationInstance` table
-- Day-of-month clamping works correctly (e.g., Jan 31 -> Feb 28/29)
+- `notificationTrigger.type` is `'DATE'`
+- `timeZoneMode` in DB is `'dependent'`
+- When notification fires or passes, it should automatically migrate to Expo MONTHLY trigger
+- Date/time displayed without timezone suffix in Upcoming tab
 
 ---
 
@@ -209,49 +212,138 @@ This document contains comprehensive test plans for scheduling, updating, and de
 
 ---
 
-### Test Case 1.10: Yearly repeat - far-term start (uses rolling window)
-**Objective:** Verify yearly repeat with start date >= 1 year uses rolling window
+### Test Case 1.10: Yearly repeat - far-term start (uses DATE, migrates to YEARLY)
+**Objective:** Verify yearly repeat with start date >= 1 year uses DATE trigger (will migrate to YEARLY when it fires)
 
 **Steps:**
 1. Open schedule form
 2. Set date/time to 18 months from now
 3. Set repeat option to "Repeat every year"
-4. Turn alarm switch ON
-5. Enter message: "Test yearly rolling window"
+4. Turn alarm switch OFF (Expo notification only)
+5. Enter message: "Test yearly DATE migration"
 6. Tap "Schedule Notification"
 
 **Expected Results:**
-- 2 DATE notification instances scheduled (2 years)
-- Alarm scheduled with yearly recurrence
-- `repeatMethod` in DB is `'rollingWindow'`
+- Single DATE notification scheduled (NOT rolling window)
+- `repeatMethod` in DB is `null` (one-time DATE)
 - `repeatOption` in DB is `'yearly'`
-- `notificationTrigger.type` is `'DATE_WINDOW'`
-- Alert shown: "Yearly Notification" with message about using app once a year
-- 2 rows in `repeatNotificationInstance` table
-- Day-of-month clamping works correctly (e.g., Feb 29 -> Feb 28 in non-leap years)
+- `notificationTrigger.type` is `'DATE'`
+- `timeZoneMode` in DB is `'dependent'`
+- When notification fires or passes, it should automatically migrate to Expo YEARLY trigger
+- Date/time displayed without timezone suffix in Upcoming tab
 
 ---
 
-### Test Case 1.11: Daily repeat without alarm
-**Objective:** Verify daily repeat scheduling without alarm
+### Test Case 1.11: Calendar event - one-time notification (TIME_INTERVAL)
+**Objective:** Verify calendar event notification uses TIME_INTERVAL trigger
+
+**Steps:**
+1. Navigate to Calendar tab
+2. Select a calendar event
+3. Tap "Schedule Notification"
+4. Set date/time to 2 hours from now (event start time)
+5. Set repeat option to "Do not repeat"
+6. Turn alarm switch OFF
+7. Enter message (pre-filled from event)
+8. Tap "Schedule Notification"
+
+**Expected Results:**
+- Notification scheduled with TIME_INTERVAL trigger
+- `notificationTrigger.type` is `'TIME_INTERVAL'`
+- `timeZoneMode` in DB is `'independent'`
+- `createdTimeZoneId` and `createdTimeZoneAbbr` stored in DB
+- Date/time displayed WITH timezone suffix in Upcoming tab (e.g., "1/8/2026, 11:15 AM (EST)")
+- Notification fires at correct absolute time even if device timezone changes
+
+---
+
+### Test Case 1.12: Calendar event - daily repeat (TIME_INTERVAL rolling window)
+**Objective:** Verify calendar event with daily repeat uses TIME_INTERVAL rolling window
+
+**Steps:**
+1. Navigate to Calendar tab
+2. Select a recurring daily calendar event
+3. Tap "Schedule Notification"
+4. Set date/time to event start time (2 days from now)
+5. Set repeat option to "Repeat every day" (pre-filled)
+6. Turn alarm switch OFF
+7. Tap "Schedule Notification"
+
+**Expected Results:**
+- TIME_INTERVAL rolling window scheduled (iOS: 5 days, Android: 3 days)
+- `notificationTrigger.type` is `'TIME_INTERVAL_WINDOW'`
+- `timeZoneMode` in DB is `'independent'`
+- `createdTimeZoneId` and `createdTimeZoneAbbr` stored in DB
+- Date/time displayed WITH timezone suffix in Upcoming tab
+- Rolling window replenished automatically when instances fire
+
+---
+
+### Test Case 1.13: Calendar event - monthly repeat (TIME_INTERVAL single, reschedules)
+**Objective:** Verify calendar event with monthly repeat uses single TIME_INTERVAL that reschedules
+
+**Steps:**
+1. Navigate to Calendar tab
+2. Select a recurring monthly calendar event
+3. Tap "Schedule Notification"
+4. Set date/time to event start time (6 weeks from now)
+5. Set repeat option to "Repeat every month" (pre-filled)
+6. Turn alarm switch OFF
+7. Tap "Schedule Notification"
+
+**Expected Results:**
+- Single TIME_INTERVAL notification scheduled
+- `notificationTrigger.type` is `'TIME_INTERVAL'`
+- `timeZoneMode` in DB is `'independent'`
+- When notification fires, automatically schedules next month's TIME_INTERVAL
+- Date/time displayed WITH timezone suffix in Upcoming tab
+
+---
+
+### Test Case 1.14: Alarm toggle exclusivity - ON = alarm only
+**Objective:** Verify alarm switch ON schedules only alarms, no Expo notifications
 
 **Steps:**
 1. Open schedule form
-2. Set date/time to 2 days from now
+2. Set date/time to 2 hours from now
 3. Set repeat option to "Repeat every day"
-4. Leave alarm switch OFF
-5. Enter message: "Test daily no alarm"
+4. Turn alarm switch ON
+5. Enter message: "Test alarm-only"
 6. Tap "Schedule Notification"
 
 **Expected Results:**
-- 14 DATE notification instances scheduled
-- No alarms scheduled
-- `hasAlarm` in DB is `0` or `false`
-- Alert shown: "Daily Notification"
+- Alarm scheduled (NativeAlarmManager)
+- NO Expo notification scheduled
+- `repeatMethod` in DB is `'alarm'`
+- `deliveryMethod` in DB is `'alarm'`
+- `notificationId` in DB is a UUID (no `thenotifier-` prefix)
+- `notificationTrigger` in DB is `null`
+- `hasAlarm` in DB is `1` or `true`
+- Notification appears in Upcoming tab with alarm icon
 
 ---
 
-### Test Case 1.12: Monthly repeat with day 31 (clamping test)
+### Test Case 1.15: Alarm toggle exclusivity - OFF = Expo only
+**Objective:** Verify alarm switch OFF schedules only Expo notifications, no alarms
+
+**Steps:**
+1. Open schedule form
+2. Set date/time to 2 hours from now
+3. Set repeat option to "Repeat every day"
+4. Turn alarm switch OFF
+5. Enter message: "Test expo-only"
+6. Tap "Schedule Notification"
+
+**Expected Results:**
+- Expo notification scheduled
+- NO alarms scheduled
+- `hasAlarm` in DB is `0` or `false`
+- `deliveryMethod` in DB is `'expo'` (or `NULL` if not yet persisted)
+- Notification appears in Upcoming tab WITHOUT alarm icon
+
+---
+
+### Test Case 1.16: Monthly repeat with day 31 (clamping test)
 **Objective:** Verify monthly repeat handles day 31 correctly when target month doesn't have 31 days
 
 **Steps:**
@@ -262,11 +354,55 @@ This document contains comprehensive test plans for scheduling, updating, and de
 5. Tap "Schedule Notification"
 
 **Expected Results:**
-- Rolling window instances scheduled correctly
-- February instance uses Feb 28/29 (last valid day)
-- March instance uses March 31
-- April instance uses April 30 (last valid day)
+- If start < 1mo: Expo MONTHLY trigger scheduled, handles day clamping correctly
+- If start >= 1mo: DATE trigger scheduled, will migrate to MONTHLY with correct day clamping
 - No errors in console
+
+---
+
+### Test Case 1.16a: iOS version gating for alarms (< iOS 26)
+**Objective:** Verify alarm switch is disabled on iOS < 26 and tapping shows i18n alert
+
+**Steps:**
+1. Install/run on iOS < 26 (simulator/device)
+2. Open schedule form
+3. Locate Alarm switch
+4. Tap the disabled switch area
+
+**Expected Results:**
+- Switch is disabled
+- Alert shows: “You need iOS 26 or higher to set an alarm.” (via i18n key)
+- No alarms are scheduled
+
+---
+
+### Test Case 1.16b: Alarm deep link + data contract (native alarm UI)
+**Objective:** Verify native alarm uses strict data payload and deep links to Notification Detail on dismiss/stop
+
+**Steps:**
+1. Schedule an alarm-only notification (Alarm switch ON) for a few minutes from now
+2. When the alarm fires, tap the close (X) / stop/dismiss control in the native alarm UI
+
+**Expected Results:**
+- The app opens to the Notification Display screen
+- Displayed title/message/note/link match what was scheduled
+- Alarm `config.data` contains ONLY `{ notificationId, title, message, note, link }` (no extra keys)
+
+---
+
+### Test Case 1.16c: Android snooze countdown notification + cancel snooze deep link
+**Objective:** Verify Android snooze shows a countdown notification with a cancel action that deep links to Notification Detail
+
+**Steps:**
+1. On Android, schedule an alarm-only notification for a few minutes from now
+2. When the alarm fires, tap **Snooze**
+3. Verify a “Snoozed” countdown notification appears
+4. Tap “Cancel Snooze” on that countdown notification
+
+**Expected Results:**
+- Countdown notification shows time remaining (chronometer countdown)
+- Tapping “Cancel Snooze” cancels the pending snoozed alarm instance
+- The app opens to the Notification Display screen for that notification
 
 ---
 

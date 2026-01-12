@@ -13,6 +13,7 @@ import type {
   AlarmCapabilityCheck,
   AlarmFiredEvent,
   PermissionChangedEvent,
+  DeepLinkEvent,
   EventUnsubscribe,
 } from './types';
 import { AlarmValidation, AlarmError, AlarmErrorCode, AlarmCapability } from './types';
@@ -76,6 +77,13 @@ class AlarmManager implements INativeAlarmManager {
       console.error('[AlarmManager] Failed to request permission:', error);
       return false;
     }
+  }
+
+  /**
+   * iOS-only: consume a pending deep link saved by AlarmKit intents.
+   */
+  async getPendingDeepLink(): Promise<string | null> {
+    return await NativeAlarmModule.getPendingDeepLink();
   }
 
   /**
@@ -321,6 +329,10 @@ class AlarmManager implements INativeAlarmManager {
     });
 
     return unsubscribe;
+  }
+
+  onDeepLink(callback: (event: DeepLinkEvent) => void): EventUnsubscribe {
+    return NativeAlarmModule.onDeepLink(callback);
   }
 }
 

@@ -1,6 +1,7 @@
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import * as Notifications from 'expo-notifications';
+import type { DayOfWeek } from 'notifier-alarm-manager';
 import { NativeAlarmManager } from 'notifier-alarm-manager';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Dimensions, Keyboard, PixelRatio, Platform, StyleSheet, Switch, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
@@ -10,17 +11,17 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { cancelAlarmKitForParent, cancelExpoForParent } from '@/utils/cancel-scheduling';
-import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, getWindowSize, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
+import { archiveScheduledNotifications, deleteScheduledNotification, getAlarmPermissionDenied, getAllActiveDailyAlarmInstances, markAllDailyAlarmInstancesCancelled, markAllRepeatNotificationInstancesCancelled, saveAlarmPermissionDenied, saveScheduledNotificationData, scheduleDailyAlarmWindow, scheduleRollingWindowNotifications } from '@/utils/database';
 import { useT } from '@/utils/i18n';
 import { logger, makeLogHeader } from '@/utils/logger';
 import { ANDROID_NOTIFICATION_CHANNEL_ID, ensureAndroidNotificationChannel } from '@/utils/notification-channel';
 import { getPermissionInstructions } from '@/utils/permissions';
 import {
-  isNextDailyOccurrence,
-  isNextWeeklyOccurrence,
   mapJsMonthToExpoMonth,
-  mapJsWeekdayToExpoWeekday,
+  mapJsWeekdayToExpoWeekday
 } from '@/utils/repeat-start-date';
+import { getRollingWindowSize } from '@/utils/rolling-window-config';
+import { getCurrentTimeZoneAbbr, getCurrentTimeZoneId } from '@/utils/timezone';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,6 +32,29 @@ const LOG_FILE = 'components/scheduleForm.tsx';
 // Maximum number of scheduled notifications allowed on the device
 const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 64 : 25);
 logger.info(makeLogHeader(LOG_FILE), 'Maximum scheduled notification count for', Platform.OS, ':', MAX_SCHEDULED_NOTIFICATION_COUNT);
+
+// Minimum iOS version required for alarms
+const MIN_IOS_ALARM_VERSION = 26;
+
+/**
+ * Parse iOS version from Platform.Version
+ * Platform.Version can be a string like "17.2" or a number
+ * Returns the major version number as a number
+ */
+const parseIosVersion = (): number | null => {
+  if (Platform.OS !== 'ios') {
+    return null;
+  }
+  const version = Platform.Version;
+  if (typeof version === 'number') {
+    return version;
+  }
+  if (typeof version === 'string') {
+    const majorVersion = parseFloat(version.split('.')[0]);
+    return isNaN(majorVersion) ? null : majorVersion;
+  }
+  return null;
+};
 
 // Configure notification handler
 Notifications.setNotificationHandler({
@@ -68,9 +92,9 @@ const ALARM_ACTIONS = [
   },
   {
     id: 'snooze',
-    title: 'Snooze 10m',
+    title: 'Snooze 5m',
     behavior: 'snooze' as const,
-    snoozeDuration: 10, // 10 minutes to match the label
+    snoozeDuration: 5, // 5 minutes to match the label
     icon: Platform.select({
       // Use a known-good SF Symbol name to avoid AlarmKit rejecting the configuration.
       ios: 'clock.arrow.circlepath',
@@ -154,10 +178,29 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   // Memoize minimum date to prevent creating new Date object on each render
   const minimumDate = useMemo(() => new Date(), []);
 
+  // Check if iOS version allows alarms
+  const iosVersionNumber = useMemo(() => parseIosVersion(), []);
+  const isIosAlarmAllowed = useMemo(() => {
+    if (Platform.OS !== 'ios') {
+      return true; // Not iOS, so no restriction
+    }
+    if (iosVersionNumber === null) {
+      return false; // Can't parse version, err on the side of caution
+    }
+    return iosVersionNumber >= MIN_IOS_ALARM_VERSION;
+  }, [iosVersionNumber]);
+
   // Check stored alarm permission denial state on mount and set initial scheduleAlarm state
   useEffect(() => {
     (async () => {
       try {
+        // If iOS version doesn't allow alarms, don't proceed with alarm setup
+        if (!isIosAlarmAllowed) {
+          setScheduleAlarm(false);
+          setAlarmPermissionDenied(false);
+          return;
+        }
+
         const denied = await getAlarmPermissionDenied();
         let currentDenied = denied;
 
@@ -197,17 +240,20 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
         // For new notifications (not edit mode), set default based on source and current denial state
         if (!isEditMode) {
-          // Only set to true if permissions are NOT denied
-          if ((source === 'tab' || source === 'calendar' || source === 'schedule') && !currentDenied) {
+          // Only set to true if permissions are NOT denied AND iOS version allows alarms
+          if ((source === 'tab' || source === 'calendar' || source === 'schedule') && !currentDenied && isIosAlarmAllowed) {
             setScheduleAlarm(true);
           } else {
             setScheduleAlarm(false);
           }
         } else {
-          // For edit mode, use initialParams.hasAlarm if provided
-          if (initialParams?.hasAlarm === 'true') {
+          // For edit mode, use initialParams.hasAlarm if provided, but only if iOS version allows
+          if (initialParams?.hasAlarm === 'true' && isIosAlarmAllowed) {
             setScheduleAlarm(true);
           } else if (initialParams?.hasAlarm === 'false') {
+            setScheduleAlarm(false);
+          } else if (initialParams?.hasAlarm === 'true' && !isIosAlarmAllowed) {
+            // iOS version doesn't support alarms, disable it
             setScheduleAlarm(false);
           }
         }
@@ -219,7 +265,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         }
       }
     })();
-  }, [isEditMode, source]);
+  }, [isEditMode, source, isIosAlarmAllowed]);
 
   // Update state when initialParams change
   useEffect(() => {
@@ -356,6 +402,14 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         // Don't show alert here - will be handled when user tries to schedule
       }
 
+      // Check if iOS version allows alarms before checking capability
+      if (!isIosAlarmAllowed) {
+        setAlarmSupported(false);
+        setScheduleAlarm(false);
+        logger.info(makeLogHeader(LOG_FILE), 'Alarms not supported on iOS version:', iosVersionNumber);
+        return;
+      }
+
       // Check if alarm module is available
       try {
         const capability = await NativeAlarmManager.checkCapability();
@@ -395,8 +449,8 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                   // Clear denial state if permission was granted
                   await saveAlarmPermissionDenied(false);
                   setAlarmPermissionDenied(false);
-                  // If creating new notification, set scheduleAlarm to true
-                  if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+                  // If creating new notification, set scheduleAlarm to true (only if iOS version allows)
+                  if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && isIosAlarmAllowed) {
                     setScheduleAlarm(true);
                   }
                 } else {
@@ -425,7 +479,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
             // No permission required, clear denial state
             await saveAlarmPermissionDenied(false);
             setAlarmPermissionDenied(false);
-            if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule')) {
+            if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && isIosAlarmAllowed) {
               setScheduleAlarm(true);
             }
           }
@@ -438,7 +492,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         setAlarmSupported(false);
       }
     })();
-  }, [isEditMode, source]);
+  }, [isEditMode, source, isIosAlarmAllowed, iosVersionNumber]);
 
   // Memoize form onLayout handler
   const handleFormLayout = useCallback((event: any) => {
@@ -729,6 +783,17 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
   // Handle alarm switch toggle with permission check
   const handleAlarmSwitchChange = useCallback(async (value: boolean) => {
+    // Check iOS version first
+    if (!isIosAlarmAllowed) {
+      // iOS version doesn't support alarms, show alert
+      Alert.alert(
+        t('alertTitles.warning'),
+        t('alertMessages.iosVersionRequiredForAlarm', { minVersion: MIN_IOS_ALARM_VERSION }),
+        [{ text: t('buttonText.ok') }]
+      );
+      return;
+    }
+
     if (value) {
       // User is trying to enable alarm - check permissions
       try {
@@ -803,7 +868,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       // User is disabling alarm, just update the state
       setScheduleAlarm(false);
     }
-  }, []);
+  }, [isIosAlarmAllowed, t]);
 
   useEffect(() => {
     const keyboardWillShowListener = Keyboard.addListener(
@@ -848,8 +913,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
     // Check current alarm permission status before setting scheduleAlarm
     // Only check if alarms are supported to avoid errors when native module isn't available
+    // Also check if iOS version allows alarms
     let shouldEnableAlarm = false;
-    if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && alarmSupported) {
+    if (!isEditMode && (source === 'tab' || source === 'calendar' || source === 'schedule') && alarmSupported && isIosAlarmAllowed) {
       try {
         // Check stored denial state
         const denied = await getAlarmPermissionDenied();
@@ -1002,27 +1068,28 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       }
     }
 
-    const notificationId = "thenotifier-" + Crypto.randomUUID();
     const notificationTitle = title || 'Personal';
+
+    // Alarm toggle is exclusive: ON = native alarm only, OFF = Expo notification only
+    const useAlarmOnly = scheduleAlarm && alarmSupported;
+
+    // ID rules:
+    // - Expo notifications: "thenotifier-" + UUID
+    // - Alarms: UUID (no prefix)
+    const notificationId = useAlarmOnly
+      ? Crypto.randomUUID()
+      : ("thenotifier-" + Crypto.randomUUID());
 
     try {
       // Ensure Android notification channel is set up (idempotent)
       await ensureAndroidNotificationChannel();
 
-      const deepLinkUrl = (link)
-        ? `thenotifier://notification-display?title=${encodeURIComponent(notificationTitle)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=${encodeURIComponent(link)}`
-        : `thenotifier://notification-display?title=${encodeURIComponent(notificationTitle)}&message=${encodeURIComponent(message)}&note=${encodeURIComponent(note)}&link=`;
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'deepLinkUrl:', deepLinkUrl);
-
       let notificationContent: Notifications.NotificationContentInput = {
         title: notificationTitle,
         body: message,
         data: {
-          title: notificationTitle,
-          message: message,
-          note: note,
-          link: link ? link : '',
-          url: deepLinkUrl
+          note: note || '',
+          link: link || '',
         },
         sound: 'thenotifier.wav'
       };
@@ -1034,9 +1101,8 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       }
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'notificationContent:', notificationContent);
 
-      // Android: if an alarm is enabled, use alarm-only mode (do not schedule Expo notifications)
-      // iOS: keep existing behavior (notifications + optional alarms)
-      const useAndroidAlarmOnly = Platform.OS === 'android' && scheduleAlarm && alarmSupported;
+      // Detect if this is a calendar event
+      const isCalendarEvent = !!(initialParams?.calendarId && initialParams?.originalEventId);
 
       let notificationTrigger: Notifications.NotificationTriggerInput;
       let useRollingWindow = false;
@@ -1057,14 +1123,23 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       const diffHours = diffMs / (60 * 60 * 1000);
       const diffDays = diffMs / (24 * 60 * 60 * 1000);
 
-      // Calendar-based thresholds for monthly/yearly
+      // Thresholds for manual scheduling
+      const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
       const oneMonthFromNow = new Date(now);
       oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
       const oneYearFromNow = new Date(now);
       oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
 
+      // Get timezone metadata for calendar events
+      const createdTimeZoneId = isCalendarEvent ? getCurrentTimeZoneId() : null;
+      const createdTimeZoneAbbr = isCalendarEvent ? getCurrentTimeZoneAbbr() : null;
+      const timeZoneMode = isCalendarEvent ? 'independent' : 'dependent';
+
       // Log decision inputs
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Decision inputs:', {
+        isCalendarEvent,
+        useAlarmOnly,
         nowISO: now.toISOString(),
         selectedISO: dateWithoutSeconds.toISOString(),
         selectedLocal: dateWithoutSeconds.toLocaleString(),
@@ -1078,154 +1153,200 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         expoWeekday: expoWeekday,
         jsMonth: month,
         expoMonth: expoMonth,
-        oneMonthFromNowISO: oneMonthFromNow.toISOString(),
-        oneYearFromNowISO: oneYearFromNow.toISOString(),
+        timeZoneMode,
+        createdTimeZoneId,
+        createdTimeZoneAbbr,
       });
 
-      switch (repeatOption) {
-        case 'none':
-          notificationTrigger = {
-            type: Notifications.SchedulableTriggerInputTypes.DATE,
-            date: dateWithoutSeconds,
-          };
-          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] One-time notification, using DATE trigger');
-          break;
-        case 'daily':
-          // Check if selected begin date matches the next daily occurrence
-          // Only use Expo DAILY trigger if the first fire will be exactly on the selected date
-          const isNextDaily = isNextDailyOccurrence(dateWithoutSeconds, hour, minute);
-
-          if (isNextDaily) {
-            // Use Expo DAILY trigger - it will fire at the selected time
+      // Calendar events use TIME_INTERVAL (timezone-independent)
+      // Manual notifications use DATE/DAILY/WEEKLY/MONTHLY/YEARLY (timezone-dependent)
+      if (isCalendarEvent) {
+        // Calendar event scheduling: always use TIME_INTERVAL
+        switch (repeatOption) {
+          case 'none':
+            // One-time TIME_INTERVAL notification
+            const timeUntilFire = dateWithoutSeconds.getTime() - now.getTime();
+            if (timeUntilFire <= 0) {
+              Alert.alert(t('alertTitles.error'), t('alertMessages.pastDateError'));
+              return;
+            }
             notificationTrigger = {
-              type: Notifications.SchedulableTriggerInputTypes.DAILY,
-              hour: hour,
-              minute: minute,
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: Math.floor(timeUntilFire / 1000),
             };
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Daily repeat: using Expo DAILY trigger (selected date matches next occurrence)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              hour: hour,
-              minute: minute,
-            });
-          } else {
-            // Use rolling window to ensure first fire is exactly on selected date
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] One-time TIME_INTERVAL notification');
+            break;
+          case 'daily':
+            // Daily rolling window of TIME_INTERVAL notifications
             useRollingWindow = true;
             notificationTrigger = {
-              type: 'DATE_WINDOW' as any,
-              window: 'daily7',
+              type: 'TIME_INTERVAL_WINDOW' as any,
+              window: 'daily',
             } as any;
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Daily repeat: using rollingWindow (selected date does not match next occurrence)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              hour: hour,
-              minute: minute,
-              diffMs: diffMs,
-              windowSize: 7,
-            });
-          }
-          break;
-        case 'weekly':
-          // Check if selected begin date matches the next weekly occurrence
-          // Only use Expo WEEKLY trigger if the first fire will be exactly on the selected date
-          const isNextWeekly = isNextWeeklyOccurrence(dateWithoutSeconds, expoWeekday, hour, minute);
-
-          if (isNextWeekly) {
-            // Use Expo WEEKLY trigger - it will fire at the selected time
-            notificationTrigger = {
-              type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
-              weekday: expoWeekday,
-              hour: hour,
-              minute: minute,
-            };
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Weekly repeat: using Expo WEEKLY trigger (selected date matches next occurrence)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              jsWeekday: dayOfWeek,
-              expoWeekday: expoWeekday,
-              hour: hour,
-              minute: minute,
-            });
-          } else {
-            // Use rolling window to ensure first fire is exactly on selected date
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Daily TIME_INTERVAL rolling window');
+            break;
+          case 'weekly':
+            // Weekly rolling window of TIME_INTERVAL notifications
             useRollingWindow = true;
             notificationTrigger = {
-              type: 'DATE_WINDOW' as any,
-              window: 'weekly4',
+              type: 'TIME_INTERVAL_WINDOW' as any,
+              window: 'weekly',
             } as any;
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Weekly repeat: using rollingWindow (selected date does not match next occurrence)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              jsWeekday: dayOfWeek,
-              expoWeekday: expoWeekday,
-              hour: hour,
-              minute: minute,
-              diffMs: diffMs,
-              windowSize: 4,
-            });
-          }
-          break;
-        case 'monthly':
-          // Keep calendar-based comparison for monthly but log it
-          const monthlyComparison = dateWithoutSeconds >= oneMonthFromNow;
-          if (monthlyComparison) {
-            // Use rolling window
-            useRollingWindow = true;
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Weekly TIME_INTERVAL rolling window');
+            break;
+          case 'monthly':
+            // Single TIME_INTERVAL for next month, will reschedule when it fires
+            const timeUntilMonthly = dateWithoutSeconds.getTime() - now.getTime();
+            if (timeUntilMonthly <= 0) {
+              Alert.alert(t('alertTitles.error'), t('alertMessages.pastDateError'));
+              return;
+            }
             notificationTrigger = {
-              type: 'DATE_WINDOW' as any,
-              window: 'monthly4',
-            } as any;
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Monthly repeat: using rollingWindow (selected >= oneMonthFromNow)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              oneMonthFromNowISO: oneMonthFromNow.toISOString(),
-              windowSize: 4,
-            });
-          } else {
-            // Use existing MONTHLY trigger
-            notificationTrigger = {
-              type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
-              day: day,
-              hour: hour,
-              minute: minute,
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: Math.floor(timeUntilMonthly / 1000),
             };
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Monthly repeat: using Expo MONTHLY trigger (selected < oneMonthFromNow)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              oneMonthFromNowISO: oneMonthFromNow.toISOString(),
-            });
-          }
-          break;
-        case 'yearly':
-          // Keep calendar-based comparison for yearly but log it
-          const yearlyComparison = dateWithoutSeconds >= oneYearFromNow;
-          if (yearlyComparison) {
-            // Use rolling window
-            useRollingWindow = true;
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Monthly TIME_INTERVAL (will reschedule on fire)');
+            break;
+          case 'yearly':
+            // Single TIME_INTERVAL for next year, will reschedule when it fires
+            const timeUntilYearly = dateWithoutSeconds.getTime() - now.getTime();
+            if (timeUntilYearly <= 0) {
+              Alert.alert(t('alertTitles.error'), t('alertMessages.pastDateError'));
+              return;
+            }
             notificationTrigger = {
-              type: 'DATE_WINDOW' as any,
-              window: 'yearly2',
-            } as any;
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Yearly repeat: using rollingWindow (selected >= oneYearFromNow)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              oneYearFromNowISO: oneYearFromNow.toISOString(),
-              windowSize: 2,
-            });
-          } else {
-            // Use existing YEARLY trigger with corrected month mapping
-            notificationTrigger = {
-              type: Notifications.SchedulableTriggerInputTypes.YEARLY,
-              month: expoMonth,
-              day: day,
-              hour: hour,
-              minute: minute,
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: Math.floor(timeUntilYearly / 1000),
             };
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Yearly repeat: using Expo YEARLY trigger (selected < oneYearFromNow)', {
-              selectedISO: dateWithoutSeconds.toISOString(),
-              oneYearFromNowISO: oneYearFromNow.toISOString(),
-              jsMonth: month,
-              expoMonth: expoMonth,
-            });
-          }
-          break;
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Yearly TIME_INTERVAL (will reschedule on fire)');
+            break;
+        }
+      } else {
+        // Manual scheduling: timezone-dependent triggers
+        // iOS uses CALENDAR triggers, Android uses DATE triggers
+        switch (repeatOption) {
+          case 'none':
+            if (Platform.OS === 'ios') {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+                // year: dateWithoutSeconds.getFullYear(),
+                // month: dateWithoutSeconds.getMonth() + 1, // CALENDAR uses 1-based months
+                // day: dateWithoutSeconds.getDate(),
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual iOS] One-time notification, using CALENDAR trigger');
+            } else {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.DATE,
+                date: dateWithoutSeconds,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual Android] One-time notification, using DATE trigger');
+            }
+            break;
+          case 'daily':
+            // Use DAILY if start < 24h, else rolling window
+            if (diffHours < 24) {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.DAILY,
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual] Daily repeat: using Expo DAILY trigger (start < 24h)');
+            } else {
+              useRollingWindow = true;
+              notificationTrigger = {
+                type: Platform.OS === 'ios' ? 'CALENDAR_WINDOW' as any : 'DATE_WINDOW' as any,
+                window: 'daily',
+              } as any;
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), `[Manual] Daily repeat: using ${Platform.OS === 'ios' ? 'CALENDAR' : 'DATE'} rolling window (start >= 24h)`);
+            }
+            break;
+          case 'weekly':
+            // Use WEEKLY if start < 7d, else rolling window
+            if (diffDays < 7) {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+                weekday: expoWeekday,
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual] Weekly repeat: using Expo WEEKLY trigger (start < 7d)');
+            } else {
+              useRollingWindow = true;
+              notificationTrigger = {
+                type: Platform.OS === 'ios' ? 'CALENDAR_WINDOW' as any : 'DATE_WINDOW' as any,
+                window: 'weekly',
+              } as any;
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), `[Manual] Weekly repeat: using ${Platform.OS === 'ios' ? 'CALENDAR' : 'DATE'} rolling window (start >= 7d)`);
+            }
+            break;
+          case 'monthly':
+            // Use MONTHLY if start < 1mo, else CALENDAR (iOS) or DATE (Android)
+            if (dateWithoutSeconds < oneMonthFromNow) {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.MONTHLY,
+                day: day,
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual] Monthly repeat: using Expo MONTHLY trigger (start < 1mo)');
+            } else {
+              if (Platform.OS === 'ios') {
+                notificationTrigger = {
+                  type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+                  year: dateWithoutSeconds.getFullYear(),
+                  month: dateWithoutSeconds.getMonth() + 1,
+                  day: day,
+                  hour: hour,
+                  minute: minute,
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual iOS] Monthly repeat: using CALENDAR trigger (start >= 1mo, will migrate to MONTHLY)');
+              } else {
+                notificationTrigger = {
+                  type: Notifications.SchedulableTriggerInputTypes.DATE,
+                  date: dateWithoutSeconds,
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual Android] Monthly repeat: using DATE trigger (start >= 1mo, will migrate to MONTHLY)');
+              }
+            }
+            break;
+          case 'yearly':
+            // Use YEARLY if start < 1y, else CALENDAR (iOS) or DATE (Android)
+            if (dateWithoutSeconds < oneYearFromNow) {
+              notificationTrigger = {
+                type: Notifications.SchedulableTriggerInputTypes.YEARLY,
+                month: expoMonth,
+                day: day,
+                hour: hour,
+                minute: minute,
+              };
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual] Yearly repeat: using Expo YEARLY trigger (start < 1y)');
+            } else {
+              if (Platform.OS === 'ios') {
+                notificationTrigger = {
+                  type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+                  year: dateWithoutSeconds.getFullYear(),
+                  month: dateWithoutSeconds.getMonth() + 1,
+                  day: day,
+                  hour: hour,
+                  minute: minute,
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual iOS] Yearly repeat: using CALENDAR trigger (start >= 1y, will migrate to YEARLY)');
+              } else {
+                notificationTrigger = {
+                  type: Notifications.SchedulableTriggerInputTypes.DATE,
+                  date: dateWithoutSeconds,
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[Manual Android] Yearly repeat: using DATE trigger (start >= 1y, will migrate to YEARLY)');
+              }
+            }
+            break;
+        }
       }
 
-      // Alarm-only mode on Android: never schedule rolling-window notifications
-      if (useAndroidAlarmOnly) {
+      // Alarm-only mode: never schedule Expo notifications
+      if (useAlarmOnly) {
         useRollingWindow = false;
       }
 
@@ -1248,10 +1369,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         }),
       });
 
-      if (useAndroidAlarmOnly) {
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Android alarm-only mode: skipping notification scheduling');
+      if (useAlarmOnly) {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Alarm-only mode: skipping Expo notification scheduling');
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Saving notification with repeatMethod:', 'alarm');
-        // Android alarm-only: Store notificationTrigger as null to prevent window replenishment code
+        // Alarm-only: Store notificationTrigger as null to prevent window replenishment code
         // from interpreting it as needing Expo window notifications
         await saveScheduledNotificationData(
           notificationId,
@@ -1262,7 +1383,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           dateWithoutSeconds.toISOString(),
           dateWithoutSeconds.toLocaleString(),
           repeatOption,
-          null, // Store null instead of DATE_WINDOW trigger to prevent window replenishment
+          null, // Store null instead of trigger to prevent window replenishment
           scheduleAlarm && alarmSupported,
           initialParams?.calendarId,
           initialParams?.originalEventId,
@@ -1272,7 +1393,13 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           initialParams?.originalEventEndDate,
           initialParams?.originalEventLocation,
           initialParams?.originalEventRecurring,
-          'alarm'
+          'alarm',
+          createdTimeZoneId,
+          createdTimeZoneAbbr,
+          timeZoneMode as 'dependent' | 'independent',
+          'alarm',
+          null,
+          null
         );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm-only notification data saved successfully');
       } else if (useRollingWindow) {
@@ -1280,7 +1407,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
         // Check OS notification limit before scheduling rolling window
         const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
-        const windowSize = getWindowSize(repeatOption as 'daily' | 'weekly' | 'monthly' | 'yearly');
+        const windowSize = getRollingWindowSize(repeatOption as 'daily' | 'weekly');
         const remainingCapacity = MAX_SCHEDULED_NOTIFICATION_COUNT - scheduledNotifications.length;
 
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Notification capacity check:', {
@@ -1303,24 +1430,77 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           return;
         }
 
-        // Schedule rolling window DATE notifications
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Scheduling rolling-window notification instances...');
-        const result = await scheduleRollingWindowNotifications(
-          notificationId,
-          dateWithoutSeconds,
-          repeatOption as 'daily' | 'weekly' | 'monthly' | 'yearly',
-          notificationContent
-        );
+        if (isCalendarEvent && (repeatOption === 'daily' || repeatOption === 'weekly')) {
+          // Calendar event: schedule TIME_INTERVAL rolling window
+          // TODO: Implement TIME_INTERVAL rolling window scheduling in database.ts
+          // For now, schedule first occurrence as TIME_INTERVAL
+          const timeUntilFire = dateWithoutSeconds.getTime() - now.getTime();
+          if (timeUntilFire > 0) {
+            const firstTrigger: Notifications.NotificationTriggerInput = {
+              type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+              seconds: Math.floor(timeUntilFire / 1000),
+            };
 
-        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Rolling-window notification instances scheduled:', {
-          scheduled: result.scheduled,
-          skipped: result.skipped,
-          repeatOption: repeatOption,
-          windowSize: windowSize,
-        });
+            if (Platform.OS === 'android') {
+              (firstTrigger as any).channelId = ANDROID_NOTIFICATION_CHANNEL_ID;
+            }
+
+            await Notifications.scheduleNotificationAsync({
+              identifier: notificationId,
+              content: notificationContent,
+              trigger: firstTrigger,
+            });
+
+            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[CalendarEvent] Scheduled first TIME_INTERVAL notification (rolling window TODO)');
+          }
+        } else {
+          // Manual notification: schedule rolling window (CALENDAR on iOS, DATE on Android)
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), `[RepeatDecision] Scheduling rolling-window ${Platform.OS === 'ios' ? 'CALENDAR' : 'DATE'} notification instances...`);
+          const result = await scheduleRollingWindowNotifications(
+            notificationId,
+            dateWithoutSeconds,
+            repeatOption as 'daily' | 'weekly',
+            notificationContent,
+            undefined, // count (will use default from getWindowSize)
+            Platform.OS === 'ios' // useCalendarTrigger: true for iOS manual notifications
+          );
+
+          logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Rolling-window notification instances scheduled:', {
+            scheduled: result.scheduled,
+            skipped: result.skipped,
+            repeatOption: repeatOption,
+            windowSize: windowSize,
+          });
+        }
 
         // Save parent notification record
-        await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location, initialParams?.originalEventTitle, initialParams?.originalEventStartDate, initialParams?.originalEventEndDate, initialParams?.originalEventLocation, initialParams?.originalEventRecurring, 'rollingWindow');
+        await saveScheduledNotificationData(
+          notificationId,
+          notificationTitle,
+          message,
+          note,
+          link ? link : '',
+          dateWithoutSeconds.toISOString(),
+          dateWithoutSeconds.toLocaleString(),
+          repeatOption,
+          notificationTrigger,
+          scheduleAlarm && alarmSupported,
+          initialParams?.calendarId,
+          initialParams?.originalEventId,
+          initialParams?.location,
+          initialParams?.originalEventTitle,
+          initialParams?.originalEventStartDate,
+          initialParams?.originalEventEndDate,
+          initialParams?.originalEventLocation,
+          initialParams?.originalEventRecurring,
+          'rollingWindow',
+          createdTimeZoneId,
+          createdTimeZoneAbbr,
+          timeZoneMode as 'dependent' | 'independent',
+          'expo',
+          null,
+          null
+        );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Rolling-window notification data saved successfully');
       } else {
         // Use existing repeating trigger approach (Expo triggers)
@@ -1341,7 +1521,33 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         // Determine repeatMethod: 'expo' for Expo repeating triggers, null for one-time
         const repeatMethodValue = (repeatOption && repeatOption !== 'none' && !useRollingWindow) ? 'expo' : null;
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Saving notification with repeatMethod:', repeatMethodValue);
-        await saveScheduledNotificationData(notificationId, notificationTitle, message, note, link ? link : '', dateWithoutSeconds.toISOString(), dateWithoutSeconds.toLocaleString(), repeatOption, notificationTrigger, scheduleAlarm && alarmSupported, initialParams?.calendarId, initialParams?.originalEventId, initialParams?.location, initialParams?.originalEventTitle, initialParams?.originalEventStartDate, initialParams?.originalEventEndDate, initialParams?.originalEventLocation, initialParams?.originalEventRecurring, repeatMethodValue);
+        await saveScheduledNotificationData(
+          notificationId,
+          notificationTitle,
+          message,
+          note,
+          link ? link : '',
+          dateWithoutSeconds.toISOString(),
+          dateWithoutSeconds.toLocaleString(),
+          repeatOption,
+          notificationTrigger,
+          scheduleAlarm && alarmSupported,
+          initialParams?.calendarId,
+          initialParams?.originalEventId,
+          initialParams?.location,
+          initialParams?.originalEventTitle,
+          initialParams?.originalEventStartDate,
+          initialParams?.originalEventEndDate,
+          initialParams?.originalEventLocation,
+          initialParams?.originalEventRecurring,
+          repeatMethodValue,
+          createdTimeZoneId,
+          createdTimeZoneAbbr,
+          timeZoneMode as 'dependent' | 'independent',
+          'expo',
+          null,
+          null
+        );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification data saved successfully');
       }
 
@@ -1495,53 +1701,140 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
           // Remove the "thenotifier-" prefix from the notificationId to get the alarmId
           // because AlarmKit expects the alarm ID to be a UUID
-          const alarmId = notificationId.substring("thenotifier-".length);
+          const alarmId = notificationId.startsWith("thenotifier-")
+            ? notificationId.substring("thenotifier-".length)
+            : notificationId;
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Scheduling alarm with ID:', alarmId);
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm date:', dateWithoutSeconds.toISOString());
 
-          // Handle daily alarms differently - schedule 7 fixed alarms
+          // Handle daily alarms differently - schedule 7 fixed alarms OR use relative schedule
           if (repeatOption === 'daily') {
-            // Schedule 7-day rolling window for daily alarms (AlarmKit alarms, not notifications)
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling 7-day AlarmKit alarm window for daily repeat');
-            await scheduleDailyAlarmWindow(
-              notificationId,
-              dateWithoutSeconds,
-              { hour, minute: minutes },
-              {
-                title: notificationTitle,
-                body: message,
-                sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
-                color: '#8ddaff',
-                data: {
-                  notificationId: notificationId,
+            const diffMs = dateWithoutSeconds.getTime() - now.getTime();
+            const isWithin24h = diffMs < 24 * 60 * 60 * 1000;
+
+            // Prompt: Daily < 24h on iOS uses relative schedule with weekly repeats (all 7 days)
+            // Daily < 24h on Android uses rolling window (current behavior)
+            if (Platform.OS === 'ios' && isWithin24h) {
+              // Use relative schedule with weekly repeats for all 7 days
+              const alarmSchedule = {
+                id: alarmId,
+                type: 'relative' as const,
+                repeats: 'weekly' as const,
+                time: { hour, minute: minutes },
+                daysOfWeek: [0, 1, 2, 3, 4, 5, 6] as DayOfWeek[], // All 7 days: Sunday through Saturday
+              };
+
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Daily alarm < 24h on iOS - using relative schedule with weekly repeats (all 7 days)');
+
+              await NativeAlarmManager.scheduleAlarm(
+                alarmSchedule,
+                {
                   title: notificationTitle,
-                  message: message,
-                  note: note,
-                  link: link ? link : '',
-                  url: deepLinkUrl,
+                  body: message,
+                  sound: undefined, // iOS uses native sound
+                  color: '#8ddaff',
+                  data: {
+                    notificationId,
+                    title: notificationTitle,
+                    message,
+                    note: note || '',
+                    link: link || '',
+                  },
+                  actions: ALARM_ACTIONS
                 },
-                actions: ALARM_ACTIONS
-              },
-              7
-            );
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled 7 AlarmKit alarm instances for:', notificationId);
+              );
+
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Daily relative alarm scheduled successfully');
+            } else {
+              // Schedule rolling window for daily alarms (Android < 24h or iOS >= 24h)
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling rolling window for daily repeat');
+              await scheduleDailyAlarmWindow(
+                notificationId,
+                dateWithoutSeconds,
+                { hour, minute: minutes },
+                {
+                  title: notificationTitle,
+                  body: message,
+                  sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
+                  color: '#8ddaff',
+                  data: {
+                    notificationId,
+                    title: notificationTitle,
+                    message,
+                    note: note || '',
+                    link: link || '',
+                  },
+                  actions: ALARM_ACTIONS
+                },
+                7
+              );
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled rolling window alarm instances for:', notificationId);
+            }
           } else {
             // Build alarm schedule for one-time or weekly alarms
             let alarmSchedule: any;
 
             if (repeatOption === 'none') {
               // One-time alarm
-              alarmSchedule = {
-                id: alarmId,
-                type: 'fixed',
-                date: dateWithoutSeconds.getTime(), // Pass milliseconds timestamp
-                time: {
-                  hour: hour,
-                  minute: minutes,
-                },
-              };
+              const diffMs = dateWithoutSeconds.getTime() - now.getTime();
+              const isWithin24h = diffMs < 24 * 60 * 60 * 1000;
+
+              // Prompt: for manually scheduled alarms < 24h on iOS, use Alarm.Schedule.relative with repeats = .never.
+              // We represent that as schedule.type = 'relative' and repeats = 'never'.
+              if (Platform.OS === 'ios' && isWithin24h) {
+                alarmSchedule = {
+                  id: alarmId,
+                  type: 'relative',
+                  repeats: 'never',
+                  time: { hour, minute: minutes },
+                };
+              } else {
+                alarmSchedule = {
+                  id: alarmId,
+                  type: 'fixed',
+                  date: dateWithoutSeconds.getTime(), // Pass milliseconds timestamp
+                  time: {
+                    hour: hour,
+                    minute: minutes,
+                  },
+                };
+              }
+            } else if (repeatOption === 'weekly') {
+              // Weekly alarm
+              const diffMs = dateWithoutSeconds.getTime() - now.getTime();
+              const isWithin7Days = diffMs < 7 * 24 * 60 * 60 * 1000;
+
+              // Prompt: Weekly < 7 days on iOS uses relative schedule with weekly repeats
+              // Weekly < 7 days on Android uses rolling window (would need implementation)
+              if (Platform.OS === 'ios' && isWithin7Days) {
+                // Use relative schedule with weekly repeats for the specified day
+                alarmSchedule = {
+                  id: alarmId,
+                  type: 'relative' as const,
+                  repeats: 'weekly' as const,
+                  time: { hour, minute: minutes },
+                  daysOfWeek: [dayOfWeek], // JS weekday format (0-6, Sunday=0)
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Weekly alarm < 7 days on iOS - using relative schedule with weekly repeats, JS weekday:', dayOfWeek);
+              } else {
+                // Use recurring type (iOS converts weekly recurring to relative, but being explicit is better)
+                // For Android >= 7 days or iOS >= 7 days, we'd use rolling window or fixed schedule
+                // Currently using recurring which iOS will convert appropriately
+                alarmSchedule = {
+                  id: alarmId,
+                  type: 'recurring',
+                  repeatInterval: 'weekly',
+                  startDate: dateWithoutSeconds.getTime(), // Pass milliseconds timestamp
+                  time: {
+                    hour: hour,
+                    minute: minutes,
+                  },
+                  daysOfWeek: [dayOfWeek],
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Weekly alarm >= 7 days - using recurring schedule, JS weekday:', dayOfWeek);
+              }
             } else {
-              // Recurring alarm (weekly, monthly, yearly)
+              // Recurring alarm (monthly, yearly)
               alarmSchedule = {
                 id: alarmId,
                 type: 'recurring',
@@ -1554,12 +1847,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               };
 
               // Add repeat-specific fields
-              if (repeatOption === 'weekly') {
-                // AlarmKit uses JS weekday format (0-6, Sunday=0) based on code patterns
-                // Keep using dayOfWeek (JS format) for AlarmKit
-                alarmSchedule.daysOfWeek = [dayOfWeek];
-                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Weekly alarm - JS weekday:', dayOfWeek, 'AlarmKit daysOfWeek:', [dayOfWeek]);
-              } else if (repeatOption === 'monthly') {
+              if (repeatOption === 'monthly') {
                 alarmSchedule.dayOfMonth = dayOfMonth;
               } else if (repeatOption === 'yearly') {
                 alarmSchedule.monthOfYear = monthOfYear;
@@ -1576,12 +1864,11 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 color: '#8ddaff',
                 ...(Platform.OS === 'android' ? { category: notificationId } : {}),
                 data: {
-                  notificationId: notificationId,
+                  notificationId,
                   title: notificationTitle,
-                  message: message,
-                  note: note,
-                  link: link ? link : '',
-                  url: deepLinkUrl,
+                  message,
+                  note: note || '',
+                  link: link || '',
                 },
                 actions: ALARM_ACTIONS
               },
@@ -1621,17 +1908,32 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               [{ text: 'OK' }]
             );
           } else {
+            // Alarm-only mode: rollback DB row and show correct message (no Expo notification was scheduled).
+            if (useAlarmOnly) {
+              try {
+                await deleteScheduledNotification(notificationId);
+              } catch {
+                // ignore rollback failures
+              }
+              Alert.alert(t('alertTitles.warning'), t('alertMessages.alarmSchedulingFailed', { error: errorMessage }));
+              return;
+            }
+
             Alert.alert(t('alertTitles.warning'), t('alertMessages.alarmSchedulingWarning', { error: errorMessage }));
           }
         }
       }
 
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification scheduled with ID:', notificationId);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification selected date:', dateWithoutSeconds);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification title:', notificationTitle);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification message:', message);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification note:', note);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification link:', link);
+      if (useAlarmOnly) {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm scheduled with ID:', notificationId);
+      } else {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification scheduled with ID:', notificationId);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification selected date:', dateWithoutSeconds);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification title:', notificationTitle);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification message:', message);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification note:', note);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification link:', link);
+      }
 
       // Show warning alerts for rolling-window notifications (only when using rolling-window strategy)
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Checking alert display:', {
@@ -1931,16 +2233,39 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               />
             </ThemedView >
 
-            {alarmSupported && (
+            {(alarmSupported || (Platform.OS === 'ios' && !isIosAlarmAllowed)) && (
               <ThemedView style={styles.inputGroup}>
                 <ThemedView style={styles.switchContainer}>
                   <ThemedText type="subtitle" maxFontSizeMultiplier={1.6}>{t('inputLabels.alarm')}</ThemedText>
-                  <Switch
-                    value={scheduleAlarm}
-                    onValueChange={handleAlarmSwitchChange}
-                    trackColor={{ false: '#888', true: '#68CFAF' }}
-                    thumbColor='#f0f0f0'
-                  />
+                  <ThemedView style={{ position: 'relative' }}>
+                    <Switch
+                      value={scheduleAlarm}
+                      onValueChange={handleAlarmSwitchChange}
+                      trackColor={{ false: '#888', true: '#68CFAF' }}
+                      thumbColor='#f0f0f0'
+                      disabled={!isIosAlarmAllowed}
+                    />
+                    {!isIosAlarmAllowed && (
+                      <TouchableOpacity
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          backgroundColor: 'transparent',
+                        }}
+                        onPress={() => {
+                          Alert.alert(
+                            t('alertTitles.warning'),
+                            t('alertMessages.iosVersionRequiredForAlarm', { minVersion: MIN_IOS_ALARM_VERSION }),
+                            [{ text: t('buttonText.ok') }]
+                          );
+                        }}
+                        activeOpacity={1}
+                      />
+                    )}
+                  </ThemedView>
                 </ThemedView>
               </ThemedView >
             )}

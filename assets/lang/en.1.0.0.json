@@ -102,8 +102,10 @@
     "monthlyNotificationMessage": "To prevent your phone from stopping this monthly notification, you should open this app within a month after the start date.",
     "yearlyNotificationMessage": "To prevent your phone from stopping this yearly notification, you should open this app within a year after the start date.",
     "alarmSchedulingWarning": "The notification was scheduled, but there was a problem scheduling the alarm: {{error}}",
+    "alarmSchedulingFailed": "The alarm could not be scheduled: {{error}}",
     "notificationPermissionRemovedCleanup": "The Notifier has detected that it no longer has permission to schedule notifications and alarms. As a result, upcoming notifications have been removed.",
-    "alarmPermissionRemovedCleanup": "The Notifier has detected that it no longer has permission to schedule alarms. As a result, alarms have been removed from your upcoming notifications."
+    "alarmPermissionRemovedCleanup": "The Notifier has detected that it no longer has permission to schedule alarms. As a result, alarms have been removed from your upcoming notifications.",
+    "iosVersionRequiredForAlarm": "You need iOS {{minVersion}} or higher to set an alarm."
   },
   "popupTitles": {
     "appearance": "Appearance",

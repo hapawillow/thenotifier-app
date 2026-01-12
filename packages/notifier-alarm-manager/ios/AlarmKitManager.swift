@@ -1,7 +1,12 @@
 import Foundation
 import AlarmKit
+import ActivityKit
 import SwiftUI
 import AppIntents
+import OSLog
+
+private let PENDING_ALARM_DEEPLINK_KEY = "thenotifier_pending_alarm_deeplink_url"
+private let logger = Logger(subsystem: "com.thenotifier.alarmkit", category: "AlarmKitManager")
 
 /// Live Activity intent used by AlarmKit to trigger the secondary (Snooze) action.
 /// Defined in this file to ensure it is compiled into the existing CocoaPods target.
@@ -27,15 +32,60 @@ struct AlarmKitCountdownIntent: LiveActivityIntent {
 @available(macCatalyst, unavailable)
 struct AlarmKitStopIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Stop"
+    static var openAppWhenRun: Bool = true
 
     @Parameter(title: "Alarm ID")
     var alarmID: String
 
+    @Parameter(title: "Deep Link URL")
+    var url: String?
+
     func perform() async throws -> some IntentResult {
         guard let uuid = UUID(uuidString: alarmID) else {
+            logger.error("[AlarmKitStopIntent] Invalid alarm ID: \(alarmID)")
             return .result()
         }
-        try AlarmManager.shared.stop(id: uuid)
+        
+        logger.info("[AlarmKitStopIntent] perform() called for alarm: \(alarmID), url parameter: \(url ?? "nil")")
+        
+        // Get URL from parameter, or fallback to UserDefaults (stored when alarm was scheduled)
+        var urlString = url
+        
+        // If URL parameter is nil/empty, try to get it from UserDefaults (stored when scheduling)
+        if urlString == nil || urlString!.isEmpty {
+            let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(alarmID)"
+            urlString = UserDefaults.standard.string(forKey: storageKey)
+            if urlString == nil || urlString!.isEmpty {
+                // Also check main key
+                urlString = UserDefaults.standard.string(forKey: PENDING_ALARM_DEEPLINK_KEY)
+            }
+            logger.info("[AlarmKitStopIntent] Retrieved URL from UserDefaults: \(urlString ?? "nil")")
+        }
+        
+        // Persist the deep link so JS can consume it on next app resume/launch.
+        // Store in UserDefaults as fallback for when perform() isn't called (app launches from closed state).
+        if let finalUrlString = urlString, !finalUrlString.isEmpty {
+            logger.info("[AlarmKitStopIntent] Storing deep link URL in UserDefaults: \(finalUrlString)")
+            UserDefaults.standard.set(finalUrlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
+            UserDefaults.standard.synchronize() // Force immediate write
+            
+            // Verify it was stored correctly
+            let verifyUrl = UserDefaults.standard.string(forKey: PENDING_ALARM_DEEPLINK_KEY)
+            if verifyUrl == finalUrlString {
+                logger.info("[AlarmKitStopIntent] Deep link URL stored and verified successfully")
+            } else {
+                logger.error("[AlarmKitStopIntent] ERROR: URL storage verification failed! Stored: \(finalUrlString), Retrieved: \(verifyUrl ?? "nil")")
+            }
+            
+            // Note: The monitorAlarms() function will detect the dismissal and call the delegate
+            // to emit the deep link event to JS. We just store the URL here.
+        } else {
+            logger.warning("[AlarmKitStopIntent] WARNING: No URL available to store (parameter: \(url ?? "nil"), UserDefaults: \(UserDefaults.standard.string(forKey: PENDING_ALARM_DEEPLINK_KEY) ?? "nil"))")
+        }
+
+        // Best-effort stop (the system may already be dismissing UI).
+        try? AlarmManager.shared.stop(id: uuid)
+        logger.info("[AlarmKitStopIntent] perform() completed")
         return .result()
     }
 }
@@ -51,6 +101,7 @@ class AlarmKitManager {
     weak var delegate: AlarmDelegate?
     private let manager = AlarmManager.shared
     private var alarmMetadataStore: [String: [String: Any]] = [:]
+    private var lastPresentationModeByAlarmId: [String: String] = [:]
 
     init() {
         // Start monitoring alarms
@@ -85,19 +136,41 @@ class AlarmKitManager {
         let alarmId = schedule["id"] as? String ?? UUID().uuidString
         let scheduleType = schedule["type"] as? String ?? "fixed"
 
-        // Store metadata
-        alarmMetadataStore[alarmId] = [
+        let attributes = buildAlarmAttributes(config: config)
+        let uuid = UUID(uuidString: alarmId) ?? UUID()
+        let canonicalAlarmId = uuid.uuidString
+
+        // Store metadata using canonical UUID string (AlarmKit reports ids using uuidString which may differ in casing).
+        alarmMetadataStore[canonicalAlarmId] = [
             "schedule": schedule,
             "config": config
         ]
-
-        let attributes = buildAlarmAttributes(config: config)
-        let uuid = UUID(uuidString: alarmId) ?? UUID()
 
         // AlarmKit supports true alarm scheduling via AlarmConfiguration.alarm(schedule:...)
         // Use alarm schedules for fixed/recurring to avoid timer limitations and ensure calendar dates are honored.
         let now = Date()
         let alarmSchedule = buildAlarmKitSchedule(schedule: schedule, now: now)
+
+        // Build deep link to Notification Detail (scheme URL) using the strict data contract.
+        let deepLinkUrlString: String? = buildDeepLinkUrlString(config: config)
+        logger.info("[AlarmKitManager] Built deep link URL: \(deepLinkUrlString ?? "nil")")
+        
+        // Store the deep link URL in UserDefaults NOW (when scheduling), so it's available even if
+        // perform() isn't called when the app launches from a closed state.
+        // We'll use the alarm ID as part of the key to support multiple alarms.
+        if let urlString = deepLinkUrlString, !urlString.isEmpty {
+            let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(canonicalAlarmId)"
+            logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (key: \(storageKey)): \(urlString)")
+            UserDefaults.standard.set(urlString, forKey: storageKey)
+            UserDefaults.standard.synchronize()
+            // Also store under the main key (for backward compatibility and easy lookup)
+            logger.info("[AlarmKitManager] Also storing under main key: \(PENDING_ALARM_DEEPLINK_KEY)")
+            UserDefaults.standard.set(urlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
+            UserDefaults.standard.synchronize()
+            logger.info("[AlarmKitManager] Deep link URL stored successfully for alarm: \(canonicalAlarmId)")
+        } else {
+            logger.warning("[AlarmKitManager] WARNING: Could not build deep link URL when scheduling alarm: \(canonicalAlarmId)")
+        }
 
         // Build intents + countdownDuration for Snooze, if configured.
         // Important: `preAlert` affects behavior *before* the scheduled alert.
@@ -111,6 +184,8 @@ class AlarmKitManager {
 
         var stopIntentValue = AlarmKitStopIntent()
         stopIntentValue.alarmID = uuid.uuidString
+        stopIntentValue.url = deepLinkUrlString
+        logger.info("[AlarmKitManager] Set stopIntent.url to: \(stopIntentValue.url ?? "nil")")
         let stopIntent: (any LiveActivityIntent)? = stopIntentValue
 
         let secondaryIntent: (any LiveActivityIntent)? = {
@@ -119,6 +194,10 @@ class AlarmKitManager {
             intent.alarmID = uuid.uuidString
             return intent
         }()
+
+        // Prompt requirement: alarms should use thenotifier.wav.
+        // Use ActivityKit's AlertConfiguration.AlertSound.
+        let sound = AlertConfiguration.AlertSound.named("thenotifier.wav")
 
         let alarm: Alarm
         if scheduleType == "interval" {
@@ -140,7 +219,8 @@ class AlarmKitManager {
                 schedule: alarmSchedule,
                 attributes: attributes,
                 stopIntent: stopIntent,
-                secondaryIntent: secondaryIntent
+                secondaryIntent: secondaryIntent,
+                sound: sound
             )
             alarm = try await manager.schedule(
                 id: uuid,
@@ -154,13 +234,13 @@ class AlarmKitManager {
         let serializedSchedule = serializeSchedule(schedule)
 
         return [
-            "id": alarmId,
+            "id": canonicalAlarmId,
             "schedule": serializedSchedule,
             "config": config,
             "nextFireDate": ISO8601DateFormatter().string(from: nextFireDate),
             "capability": "native_alarms",
             "isActive": true,
-            "platformAlarmId": uuid.uuidString
+            "platformAlarmId": canonicalAlarmId
         ]
     }
 
@@ -216,7 +296,8 @@ class AlarmKitManager {
     // MARK: - Query
 
     func getAlarm(id: String) async throws -> [String: Any]? {
-        guard let metadata = alarmMetadataStore[id] else {
+        let canonicalId = UUID(uuidString: id)?.uuidString ?? id
+        guard let metadata = alarmMetadataStore[canonicalId] else {
             return nil
         }
 
@@ -232,13 +313,13 @@ class AlarmKitManager {
         let serializedSchedule = serializeSchedule(schedule)
 
         return [
-            "id": id,
+            "id": canonicalId,
             "schedule": serializedSchedule,
             "config": config,
             "nextFireDate": ISO8601DateFormatter().string(from: nextFireDate),
             "capability": "native_alarms",
             "isActive": true,
-            "platformAlarmId": id
+            "platformAlarmId": canonicalId
         ]
     }
 
@@ -276,7 +357,8 @@ class AlarmKitManager {
 
     func snoozeAlarm(id: String, minutes: Int) async throws {
         // For snooze, cancel existing and reschedule
-        guard let metadata = alarmMetadataStore[id],
+        let canonicalId = UUID(uuidString: id)?.uuidString ?? id
+        guard let metadata = alarmMetadataStore[canonicalId],
               let schedule = metadata["schedule"] as? NSDictionary,
               let config = metadata["config"] as? NSDictionary else {
             throw NSError(
@@ -286,7 +368,7 @@ class AlarmKitManager {
             )
         }
 
-        try await cancelAlarm(id: id)
+        try await cancelAlarm(id: canonicalId)
 
         // Determine snooze duration: prefer from action config, fallback to parameter, then default
         var snoozeMinutes = minutes
@@ -310,7 +392,7 @@ class AlarmKitManager {
         let snoozeDuration = TimeInterval(snoozeMinutes * 60)
         let attributes = buildAlarmAttributes(config: config)
 
-        let uuid = UUID(uuidString: id) ?? UUID()
+        let uuid = UUID(uuidString: canonicalId) ?? UUID()
         var stopIntentForSnooze = AlarmKitStopIntent()
         stopIntentForSnooze.alarmID = uuid.uuidString
         _ = try await manager.schedule(
@@ -328,7 +410,7 @@ class AlarmKitManager {
         )
 
         // Restore metadata
-        alarmMetadataStore[id] = metadata
+        alarmMetadataStore[canonicalId] = metadata
     }
 
     // MARK: - Helper Methods
@@ -353,6 +435,31 @@ class AlarmKitManager {
     /// - For other recurring: schedule the next occurrence as a fixed date; monitorAlarms will reschedule after fire.
     private func buildAlarmKitSchedule(schedule: NSDictionary, now: Date) -> Alarm.Schedule? {
         let scheduleType = schedule["type"] as? String ?? "fixed"
+
+        if scheduleType == "relative" {
+            let timeDict = schedule["time"] as? NSDictionary
+            let hour = timeDict?["hour"] as? Int ?? 8
+            let minute = timeDict?["minute"] as? Int ?? 0
+
+            let repeats = schedule["repeats"] as? String ?? "never"
+            if repeats == "weekly",
+               let days = schedule["daysOfWeek"] as? [Int],
+               !days.isEmpty {
+                let weekdays: [Foundation.Locale.Weekday] = days.compactMap { mapToLocaleWeekday($0) }
+                let rel = Alarm.Schedule.Relative(
+                    time: Alarm.Schedule.Relative.Time(hour: hour, minute: minute),
+                    repeats: .weekly(weekdays)
+                )
+                return .relative(rel)
+            }
+
+            // Default: never
+            let rel = Alarm.Schedule.Relative(
+                time: Alarm.Schedule.Relative.Time(hour: hour, minute: minute),
+                repeats: .never
+            )
+            return .relative(rel)
+        }
 
         if scheduleType == "fixed" {
             if let fixedDate = extractDate(from: schedule["date"]) {
@@ -468,6 +575,37 @@ class AlarmKitManager {
                 return computeNextDateFromTime(schedule: ["time": ["hour": hour, "minute": minute]] as NSDictionary, from: now)
             }
         }
+    }
+
+    /// Build a `thenotifier://notification-display?...` deep link using our strict JS data contract.
+    /// Data contract: { notificationId, title, message, note, link }.
+    private func buildDeepLinkUrlString(config: NSDictionary) -> String? {
+        print("[AlarmKitManager] buildDeepLinkUrlString called with config keys: \(config.allKeys)")
+        guard let data = config["data"] as? NSDictionary else {
+            print("[AlarmKitManager] buildDeepLinkUrlString: No 'data' key in config")
+            return nil
+        }
+        print("[AlarmKitManager] buildDeepLinkUrlString: data keys: \(data.allKeys)")
+        guard let title = data["title"] as? String,
+              let message = data["message"] as? String else {
+            print("[AlarmKitManager] buildDeepLinkUrlString: Missing title or message in data")
+            return nil
+        }
+        let note = (data["note"] as? String) ?? ""
+        let link = (data["link"] as? String) ?? ""
+
+        var components = URLComponents()
+        components.scheme = "thenotifier"
+        components.host = "notification-display"
+        components.queryItems = [
+            URLQueryItem(name: "title", value: title),
+            URLQueryItem(name: "message", value: message),
+            URLQueryItem(name: "note", value: note),
+            URLQueryItem(name: "link", value: link),
+        ]
+        let urlString = components.url?.absoluteString
+        print("[AlarmKitManager] buildDeepLinkUrlString: Built URL: \(urlString ?? "nil")")
+        return urlString
     }
 
     /// Extract Date from various possible types in NSDictionary (Double, NSNumber, Date, ISO string)
@@ -830,10 +968,47 @@ class AlarmKitManager {
 
     private func monitorAlarms() async {
         for await alarms in manager.alarmUpdates {
-            for alarm in alarms {
-                if alarm.state == .alerting {
-                    let alarmId = alarm.id.uuidString
+            let currentIds = Set(alarms.map { $0.id.uuidString })
 
+            for alarm in alarms {
+                let alarmId = alarm.id.uuidString
+
+                // Normalize presentation mode
+                let currentMode: String = {
+                    switch alarm.state {
+                    case .alerting: return "alerting"
+                    case .countdown: return "countdown"
+                    case .paused: return "paused"
+                    default: return "other"
+                    }
+                }()
+
+                let previousMode = lastPresentationModeByAlarmId[alarmId]
+                lastPresentationModeByAlarmId[alarmId] = currentMode
+
+                // Detect transitions out of alerting/countdown (user dismissed via system X).
+                if let prev = previousMode {
+                    let dismissedFromAlerting = (prev == "alerting" && currentMode != "alerting" && currentMode != "countdown")
+                    let dismissedFromCountdown = (prev == "countdown" && currentMode != "countdown")
+                    if dismissedFromAlerting || dismissedFromCountdown {
+                        logger.info("[AlarmKitManager] Alarm dismissed: \(alarmId), prev=\(prev), current=\(currentMode)")
+                        if let metadata = alarmMetadataStore[alarmId],
+                           let config = metadata["config"] as? NSDictionary,
+                           let url = buildDeepLinkUrlString(config: config),
+                           !url.isEmpty {
+                            logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults: \(url)")
+                            UserDefaults.standard.set(url, forKey: PENDING_ALARM_DEEPLINK_KEY)
+                            UserDefaults.standard.synchronize() // Force immediate write
+                            logger.info("[AlarmKitManager] Deep link URL stored, calling delegate")
+                            delegate?.alarmDidRequestDeepLink(url: url)
+                        } else {
+                            logger.warning("[AlarmKitManager] WARNING: Could not build deep link URL for dismissed alarm \(alarmId)")
+                        }
+                    }
+                }
+
+                // Fire event when entering alerting
+                if currentMode == "alerting" && previousMode != "alerting" {
                     if let metadata = alarmMetadataStore[alarmId],
                        let schedule = metadata["schedule"] as? NSDictionary,
                        let config = metadata["config"] as? NSDictionary {
@@ -847,7 +1022,8 @@ class AlarmKitManager {
                             "config": config,
                             "nextFireDate": ISO8601DateFormatter().string(from: Date()),
                             "capability": "native_alarms",
-                            "isActive": true
+                            "isActive": true,
+                            "platformAlarmId": alarmId
                         ]
 
                         delegate?.alarmDidFire(alarm: alarmData)
@@ -855,7 +1031,7 @@ class AlarmKitManager {
                         // For recurring alarms, reschedule the next occurrence (except weekly, which AlarmKit can handle natively)
                         let scheduleType = schedule["type"] as? String ?? "fixed"
                         let repeatInterval = schedule["repeatInterval"] as? String
-                        
+
                         if scheduleType == "recurring" && repeatInterval != nil && repeatInterval != "weekly" {
                             let now = Date()
                             if let nextOccurrence = calculateNextOccurrenceDate(schedule: schedule, fromDate: now) {
@@ -878,6 +1054,42 @@ class AlarmKitManager {
                     }
                 }
             }
+
+        // Detect alarms that disappeared from updates (treat as dismissal)
+        let knownIds = Set(lastPresentationModeByAlarmId.keys)
+        let missing = knownIds.subtracting(currentIds)
+        for id in missing {
+            if let prev = lastPresentationModeByAlarmId[id], (prev == "alerting" || prev == "countdown") {
+                logger.info("[AlarmKitManager] Alarm disappeared (dismissed): \(id), prev=\(prev)")
+                // Try to get URL from UserDefaults first (stored when alarm was scheduled)
+                let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(id)"
+                var url = UserDefaults.standard.string(forKey: storageKey)
+                
+                // Fallback: build URL from metadata if not in UserDefaults
+                if url == nil || url!.isEmpty {
+                    if let metadata = alarmMetadataStore[id],
+                       let config = metadata["config"] as? NSDictionary,
+                       let builtUrl = buildDeepLinkUrlString(config: config),
+                       !builtUrl.isEmpty {
+                        url = builtUrl
+                        // Store it for future reference
+                        UserDefaults.standard.set(url, forKey: storageKey)
+                        UserDefaults.standard.synchronize()
+                    }
+                }
+                
+                if let finalUrl = url, !finalUrl.isEmpty {
+                    logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (disappeared): \(finalUrl)")
+                    UserDefaults.standard.set(finalUrl, forKey: PENDING_ALARM_DEEPLINK_KEY)
+                    UserDefaults.standard.synchronize() // Force immediate write
+                    logger.info("[AlarmKitManager] Deep link URL stored (disappeared), calling delegate")
+                    delegate?.alarmDidRequestDeepLink(url: finalUrl)
+                } else {
+                    logger.warning("[AlarmKitManager] WARNING: Could not find or build deep link URL for disappeared alarm \(id)")
+                }
+            }
+            lastPresentationModeByAlarmId.removeValue(forKey: id)
+        }
         }
     }
 }
