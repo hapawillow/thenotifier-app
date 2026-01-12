@@ -3,11 +3,6 @@
 # dependencies
 /node_modules/*
 
-# Keep mods made to rn-native-alarmkit
-!/node_modules/rn-native-alarmkit/
-!/node_modules/rn-native-alarmkit/ios/
-!/node_modules/rn-native-alarmkit/ios/NotificationFallback.swift
-
 # Expo
 .expo/
 dist/
@@ -36,8 +31,9 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+#
+# NOTE local env ARE ALLOWED for expo client's public envars
+#
 
 # typescript
 *.tsbuildinfo
