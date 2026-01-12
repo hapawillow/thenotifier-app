@@ -167,9 +167,9 @@ class NotificationFallback(private val context: Context) {
     /**
      * Snooze alarm
      */
-    fun snoozeAlarm(alarmId: String, minutes: Int) {
+    fun snoozeAlarm(alarmId: String, minutes: Int): Long? {
         val prefixedId = storagePrefix + alarmId
-        val alarmData = AlarmStorage.getAlarm(context, prefixedId) ?: return
+        val alarmData = AlarmStorage.getAlarm(context, prefixedId) ?: return null
 
         // Cancel current alarm
         cancelAlarm(alarmId)
@@ -191,6 +191,7 @@ class NotificationFallback(private val context: Context) {
             alarmData.config,
             snoozeTime
         )
+        return snoozeTime
     }
 
     // Private helper methods

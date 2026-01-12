@@ -91,9 +91,9 @@ const ALARM_ACTIONS = [
   },
   {
     id: 'snooze',
-    title: 'Snooze 10m',
+    title: 'Snooze 5m',
     behavior: 'snooze' as const,
-    snoozeDuration: 10, // 10 minutes to match the label
+    snoozeDuration: 5, // 5 minutes to match the label
     icon: Platform.select({
       // Use a known-good SF Symbol name to avoid AlarmKit rejecting the configuration.
       ios: 'clock.arrow.circlepath',
@@ -1067,8 +1067,17 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       }
     }
 
-    const notificationId = "thenotifier-" + Crypto.randomUUID();
     const notificationTitle = title || 'Personal';
+
+    // Alarm toggle is exclusive: ON = native alarm only, OFF = Expo notification only
+    const useAlarmOnly = scheduleAlarm && alarmSupported;
+
+    // ID rules:
+    // - Expo notifications: "thenotifier-" + UUID
+    // - Alarms: UUID (no prefix)
+    const notificationId = useAlarmOnly
+      ? Crypto.randomUUID()
+      : ("thenotifier-" + Crypto.randomUUID());
 
     try {
       // Ensure Android notification channel is set up (idempotent)
@@ -1090,9 +1099,6 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
         notificationContent.interruptionLevel = 'timeSensitive';
       }
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'notificationContent:', notificationContent);
-
-      // Alarm toggle is now exclusive: ON = alarm only, OFF = expo only (both platforms)
-      const useAlarmOnly = scheduleAlarm && alarmSupported;
 
       // Detect if this is a calendar event
       const isCalendarEvent = !!(initialParams?.calendarId && initialParams?.originalEventId);
@@ -1389,7 +1395,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           'alarm',
           createdTimeZoneId,
           createdTimeZoneAbbr,
-          timeZoneMode as 'dependent' | 'independent'
+          timeZoneMode as 'dependent' | 'independent',
+          'alarm',
+          null,
+          null
         );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm-only notification data saved successfully');
       } else if (useRollingWindow) {
@@ -1486,7 +1495,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           'rollingWindow',
           createdTimeZoneId,
           createdTimeZoneAbbr,
-          timeZoneMode as 'dependent' | 'independent'
+          timeZoneMode as 'dependent' | 'independent',
+          'expo',
+          null,
+          null
         );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Rolling-window notification data saved successfully');
       } else {
@@ -1530,7 +1542,10 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           repeatMethodValue,
           createdTimeZoneId,
           createdTimeZoneAbbr,
-          timeZoneMode as 'dependent' | 'independent'
+          timeZoneMode as 'dependent' | 'independent',
+          'expo',
+          null,
+          null
         );
         logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification data saved successfully');
       }
@@ -1685,7 +1700,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
           // Remove the "thenotifier-" prefix from the notificationId to get the alarmId
           // because AlarmKit expects the alarm ID to be a UUID
-          const alarmId = notificationId.substring("thenotifier-".length);
+          const alarmId = notificationId.startsWith("thenotifier-")
+            ? notificationId.substring("thenotifier-".length)
+            : notificationId;
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Scheduling alarm with ID:', alarmId);
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm date:', dateWithoutSeconds.toISOString());
 
@@ -1703,7 +1720,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
                 color: '#8ddaff',
                 data: {
-                  notificationId: notificationId,
+                  notificationId,
+                  title: notificationTitle,
+                  message,
                   note: note || '',
                   link: link || '',
                 },
@@ -1718,15 +1737,29 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
 
             if (repeatOption === 'none') {
               // One-time alarm
-              alarmSchedule = {
-                id: alarmId,
-                type: 'fixed',
-                date: dateWithoutSeconds.getTime(), // Pass milliseconds timestamp
-                time: {
-                  hour: hour,
-                  minute: minutes,
-                },
-              };
+              const diffMs = dateWithoutSeconds.getTime() - now.getTime();
+              const isWithin24h = diffMs < 24 * 60 * 60 * 1000;
+
+              // Prompt: for manually scheduled alarms < 24h on iOS, use Alarm.Schedule.relative with repeats = .never.
+              // We represent that as schedule.type = 'relative' and repeats = 'never'.
+              if (Platform.OS === 'ios' && isWithin24h) {
+                alarmSchedule = {
+                  id: alarmId,
+                  type: 'relative',
+                  repeats: 'never',
+                  time: { hour, minute: minutes },
+                };
+              } else {
+                alarmSchedule = {
+                  id: alarmId,
+                  type: 'fixed',
+                  date: dateWithoutSeconds.getTime(), // Pass milliseconds timestamp
+                  time: {
+                    hour: hour,
+                    minute: minutes,
+                  },
+                };
+              }
             } else {
               // Recurring alarm (weekly, monthly, yearly)
               alarmSchedule = {
@@ -1763,7 +1796,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                 color: '#8ddaff',
                 ...(Platform.OS === 'android' ? { category: notificationId } : {}),
                 data: {
-                  notificationId: notificationId,
+                  notificationId,
+                  title: notificationTitle,
+                  message,
                   note: note || '',
                   link: link || '',
                 },
@@ -1805,17 +1840,32 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               [{ text: 'OK' }]
             );
           } else {
+            // Alarm-only mode: rollback DB row and show correct message (no Expo notification was scheduled).
+            if (useAlarmOnly) {
+              try {
+                await deleteScheduledNotification(notificationId);
+              } catch {
+                // ignore rollback failures
+              }
+              Alert.alert(t('alertTitles.warning'), t('alertMessages.alarmSchedulingFailed', { error: errorMessage }));
+              return;
+            }
+
             Alert.alert(t('alertTitles.warning'), t('alertMessages.alarmSchedulingWarning', { error: errorMessage }));
           }
         }
       }
 
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification scheduled with ID:', notificationId);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification selected date:', dateWithoutSeconds);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification title:', notificationTitle);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification message:', message);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification note:', note);
-      logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification link:', link);
+      if (useAlarmOnly) {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm scheduled with ID:', notificationId);
+      } else {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification scheduled with ID:', notificationId);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification selected date:', dateWithoutSeconds);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification title:', notificationTitle);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification message:', message);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification note:', note);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Notification link:', link);
+      }
 
       // Show warning alerts for rolling-window notifications (only when using rolling-window strategy)
       logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[RepeatDecision] Checking alert display:', {

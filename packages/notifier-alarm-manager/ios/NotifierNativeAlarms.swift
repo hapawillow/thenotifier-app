@@ -36,6 +36,7 @@ class NotifierNativeAlarms: RCTEventEmitter {
     override func supportedEvents() -> [String]! {
         return [
             "NotifierNativeAlarms_AlarmFired",
+            "NotifierNativeAlarms_DeepLink",
             "NotifierNativeAlarms_PermissionChanged"
         ]
     }
@@ -51,12 +52,28 @@ class NotifierNativeAlarms: RCTEventEmitter {
     override func constantsToExport() -> [AnyHashable : Any]! {
         return [
             "ALARM_FIRED_EVENT": "NotifierNativeAlarms_AlarmFired",
+            "DEEP_LINK_EVENT": "NotifierNativeAlarms_DeepLink",
             "PERMISSION_CHANGED_EVENT": "NotifierNativeAlarms_PermissionChanged"
         ]
     }
 
     override static func requiresMainQueueSetup() -> Bool {
         return true
+    }
+
+    // MARK: - Deep link handoff (iOS AlarmKit -> JS)
+    //
+    // AlarmKit dismissal/stop actions can open the app without reliably delivering a URL to React Native.
+    // We persist the deep link in UserDefaults from the LiveActivityIntent, and JS can consume it on launch.
+    @objc(getPendingDeepLink:rejecter:)
+    func getPendingDeepLink(_ resolve: @escaping RCTPromiseResolveBlock,
+                            rejecter reject: @escaping RCTPromiseRejectBlock) {
+        let key = "thenotifier_pending_alarm_deeplink_url"
+        let url = UserDefaults.standard.string(forKey: key)
+        if url != nil {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        resolve(url)
     }
 
     // MARK: - Capability & Permissions
@@ -388,10 +405,23 @@ extension NotifierNativeAlarms: AlarmDelegate {
             )
         }
     }
+
+    func alarmDidRequestDeepLink(url: String) {
+        if hasListeners {
+            sendEvent(
+                withName: "NotifierNativeAlarms_DeepLink",
+                body: [
+                    "url": url,
+                    "at": ISO8601DateFormatter().string(from: Date())
+                ]
+            )
+        }
+    }
 }
 
 // MARK: - Alarm Delegate Protocol
 
 protocol AlarmDelegate: AnyObject {
     func alarmDidFire(alarm: [String: Any])
+    func alarmDidRequestDeepLink(url: String)
 }

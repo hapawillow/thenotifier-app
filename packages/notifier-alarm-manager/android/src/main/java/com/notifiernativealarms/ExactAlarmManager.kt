@@ -168,8 +168,8 @@ class ExactAlarmManager(private val context: Context) {
     /**
      * Snooze alarm
      */
-    fun snoozeAlarm(alarmId: String, minutes: Int) {
-        val alarmData = AlarmStorage.getAlarm(context, alarmId) ?: return
+    fun snoozeAlarm(alarmId: String, minutes: Int): Long? {
+        val alarmData = AlarmStorage.getAlarm(context, alarmId) ?: return null
 
         // Cancel current alarm
         cancelAlarm(alarmId)
@@ -181,7 +181,7 @@ class ExactAlarmManager(private val context: Context) {
         val intent = createAlarmIntent(alarmId, alarmData.schedule, alarmData.config)
         val pendingIntent = createPendingIntent(alarmId, intent)
 
-        scheduleExactAlarm(snoozeTime, pendingIntent)
+        scheduleExactAlarm(snoozeTime, pendingIntent, useAlarmClock = true)
 
         // Update storage with new time
         AlarmStorage.saveAlarm(
@@ -191,6 +191,7 @@ class ExactAlarmManager(private val context: Context) {
             alarmData.config,
             snoozeTime
         )
+        return snoozeTime
     }
 
     // Private helper methods
@@ -204,7 +205,7 @@ class ExactAlarmManager(private val context: Context) {
         val intent = createAlarmIntent(alarmId, schedule, config)
         val pendingIntent = createPendingIntent(alarmId, intent)
 
-        scheduleExactAlarm(triggerTime, pendingIntent)
+        scheduleExactAlarm(triggerTime, pendingIntent, useAlarmClock = true)
     }
 
     private fun scheduleRecurringAlarm(
@@ -230,7 +231,7 @@ class ExactAlarmManager(private val context: Context) {
                 val intent = createAlarmIntent(alarmId, schedule, config)
                 val pendingIntent = createPendingIntent(dayAlarmId, intent)
 
-                scheduleExactAlarm(dayTriggerTime, pendingIntent)
+                scheduleExactAlarm(dayTriggerTime, pendingIntent, useAlarmClock = true)
             }
         }
     }
@@ -257,21 +258,32 @@ class ExactAlarmManager(private val context: Context) {
         }
     }
 
-    private fun scheduleExactAlarm(triggerTime: Long, pendingIntent: PendingIntent) {
+    private fun scheduleExactAlarm(triggerTime: Long, pendingIntent: PendingIntent, useAlarmClock: Boolean) {
+        if (useAlarmClock) {
+            // Prompt requirement: use AlarmClock for reliable one-time delivery in Doze.
+            val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            val showIntent = if (launchIntent != null) {
+                PendingIntent.getActivity(
+                    context,
+                    (pendingIntent.hashCode().toString() + "_show").hashCode(),
+                    launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            } else {
+                pendingIntent
+            }
+            alarmManager.setAlarmClock(
+                AlarmManager.AlarmClockInfo(triggerTime, showIntent),
+                pendingIntent
+            )
+            return
+        }
+
+        // Fallback: exact RTC alarm
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Android 12+ - Use setExactAndAllowWhileIdle to bypass Doze
-            alarmManager.setExactAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerTime,
-                pendingIntent
-            )
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
         } else {
-            // Android < 12 - Use setExact
-            alarmManager.setExact(
-                AlarmManager.RTC_WAKEUP,
-                triggerTime,
-                pendingIntent
-            )
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
         }
     }
 
@@ -288,11 +300,34 @@ class ExactAlarmManager(private val context: Context) {
             putExtra("sound", config.getString("sound"))
             putExtra("category", config.getString("category"))
 
-            // Optional deep link URL (passed via config.data.url from JS)
+            // Optional deep link URL.
+            // App-level contract: config.data contains ONLY:
+            // { notificationId, title, message, note, link }
             val dataMap = config.getMap("data")
-            val url = dataMap?.getString("url")
-            if (url != null) {
-                putExtra("url", url)
+            val deepLinkUrl = try {
+                val t = dataMap?.getString("title") ?: config.getString("title")
+                val m = dataMap?.getString("message") ?: config.getString("body")
+                val note = dataMap?.getString("note") ?: ""
+                val link = dataMap?.getString("link") ?: ""
+
+                if (t != null && m != null) {
+                    Uri.Builder()
+                        .scheme("thenotifier")
+                        .authority("notification-display")
+                        .appendQueryParameter("title", t)
+                        .appendQueryParameter("message", m)
+                        .appendQueryParameter("note", note)
+                        .appendQueryParameter("link", link)
+                        .build()
+                        .toString()
+                } else {
+                    null
+                }
+            } catch (_: Exception) {
+                null
+            }
+            if (deepLinkUrl != null) {
+                putExtra("url", deepLinkUrl)
             }
 
             // Store schedule type for rescheduling

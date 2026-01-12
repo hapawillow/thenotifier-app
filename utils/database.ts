@@ -9,6 +9,11 @@ const LOG_FILE = 'utils/database.ts';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
+// Since this app is not released yet, we can treat schema changes as breaking.
+// On schema version mismatch we will drop local DB tables and best-effort cancel
+// any OS-scheduled notifications/alarms to avoid confusing test states.
+const DB_SCHEMA_VERSION = '2026-01-11-alarm-refactor-v1';
+
 // Open the database (shared connection)
 async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
   try {
@@ -45,32 +50,71 @@ export const initDatabase = async () => {
     try {
       const db = await openDatabase();
 
-      // Drop all tables
-      // TODO: Remove this after initial release and use migrations after initial release
-      // await db.execAsync(`
-      //   DROP TABLE IF EXISTS scheduledNotification;
-      // `);
-      // await db.execAsync(`
-      //   DROP TABLE IF EXISTS archivedNotification;
-      // `);
-      // await db.execAsync(`
-      //   DROP TABLE IF EXISTS calendarSelection;
-      // `);
-      // await db.execAsync(`
-      //   DROP TABLE IF EXISTS appPreferences;
-      // `);
-      // await db.execAsync(`
-      //   DROP TABLE IF EXISTS repeatNotificationInstance;
-      //   `);
-      // await db.execAsync(`
-      //   DROP TABLE IF EXISTS repeatNotificationOccurrence;
-      // `);
-      // await db.execAsync(`
-      //   DROP TABLE IF EXISTS dailyAlarmInstance;
-      // `);
-      // await db.execAsync(`
-      //   DROP TABLE IF EXISTS pushToken;
-      // `);
+      // Ensure appPreferences exists early so we can read schemaVersion
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS appPreferences (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          key TEXT NOT NULL UNIQUE,
+          value TEXT NOT NULL,
+          updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      await db.execAsync(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_appPreferences_key ON appPreferences (key);
+      `);
+
+      const currentSchema = await db.getFirstAsync<{ value: string }>(
+        `SELECT value FROM appPreferences WHERE key = 'schemaVersion';`
+      );
+
+      if (currentSchema?.value !== DB_SCHEMA_VERSION) {
+        logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), `Schema version mismatch (have=${currentSchema?.value ?? 'null'}, want=${DB_SCHEMA_VERSION}). Resetting local DB + OS schedules...`);
+
+        // Best-effort: clear OS scheduled items so device state matches new schema.
+        try {
+          await Notifications.cancelAllScheduledNotificationsAsync();
+        } catch {
+          // ignore
+        }
+        try {
+          const { NativeAlarmManager } = await import('notifier-alarm-manager');
+          await NativeAlarmManager.cancelAllAlarms();
+        } catch {
+          // ignore
+        }
+
+        // Drop tables (breaking change, ok for unreleased app)
+        await db.execAsync(`
+          DROP TABLE IF EXISTS scheduledNotification;
+          DROP TABLE IF EXISTS archivedNotification;
+          DROP TABLE IF EXISTS calendarSelection;
+          DROP TABLE IF EXISTS ignoredCalendarEvents;
+          DROP TABLE IF EXISTS repeatNotificationInstance;
+          DROP TABLE IF EXISTS repeatNotificationOccurrence;
+          DROP TABLE IF EXISTS dailyAlarmInstance;
+          DROP TABLE IF EXISTS pushToken;
+          DROP TABLE IF EXISTS rollingWindowSemaphore;
+          DROP TABLE IF EXISTS appPreferences;
+        `);
+
+        // Recreate appPreferences and stamp schema version
+        await db.execAsync(`
+          CREATE TABLE IF NOT EXISTS appPreferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL UNIQUE,
+            value TEXT NOT NULL,
+            updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+        await db.execAsync(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_appPreferences_key ON appPreferences (key);
+        `);
+        await db.execAsync(`
+          INSERT OR REPLACE INTO appPreferences (key, value, updatedAt)
+          VALUES ('schemaVersion', '${DB_SCHEMA_VERSION}', CURRENT_TIMESTAMP);
+        `);
+      }
+
 
       // Create all tables
       // Create scheduledNotification table if it doesn't exist
@@ -87,6 +131,9 @@ export const initDatabase = async () => {
           scheduleDateTimeLocal TEXT NOT NULL,
           repeatOption TEXT DEFAULT NULL,
           repeatMethod TEXT DEFAULT NULL,
+          deliveryMethod TEXT DEFAULT NULL,
+          alarmScheduleMode TEXT DEFAULT NULL,
+          alarmRescheduleErrorShownAt TEXT DEFAULT NULL,
           notificationTrigger TEXT DEFAULT NULL,
           hasAlarm INTEGER DEFAULT 0,
           calendarId TEXT DEFAULT NULL,
@@ -131,6 +178,8 @@ export const initDatabase = async () => {
           hasAlarm INTEGER DEFAULT 0,
           calendarId TEXT DEFAULT NULL,
           originalEventId TEXT DEFAULT NULL,
+          deliveryMethod TEXT DEFAULT NULL,
+          alarmScheduleMode TEXT DEFAULT NULL,
           createdAt TEXT NOT NULL,
           updatedAt TEXT NOT NULL,
           handledAt TEXT DEFAULT NULL,
@@ -391,7 +440,10 @@ export const saveScheduledNotificationData = async (
   repeatMethod?: 'expo' | 'rollingWindow' | 'alarm' | null,
   createdTimeZoneId?: string | null,
   createdTimeZoneAbbr?: string | null,
-  timeZoneMode?: 'dependent' | 'independent' | null
+  timeZoneMode?: 'dependent' | 'independent' | null,
+  deliveryMethod?: 'expo' | 'alarm' | null,
+  alarmScheduleMode?: 'relative' | 'fixed' | null,
+  alarmRescheduleErrorShownAt?: string | null
 ) => {
   logger.info(makeLogHeader(LOG_FILE, 'saveScheduledNotificationData'), 'Saving scheduled notification data:', { notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger });
   try {
@@ -406,6 +458,9 @@ export const saveScheduledNotificationData = async (
     const repeatOptionValue = repeatOption || null;
     const hasAlarmValue = hasAlarm ? 1 : 0;
     const repeatMethodValue = repeatMethod || null;
+    const deliveryMethodValue = deliveryMethod || null;
+    const alarmScheduleModeValue = alarmScheduleMode || null;
+    const alarmRescheduleErrorShownAtValue = alarmRescheduleErrorShownAt || null;
 
     // Use INSERT OR REPLACE to either insert new or update existing notification
     await db.runAsync(
@@ -418,6 +473,10 @@ export const saveScheduledNotificationData = async (
         scheduleDateTime,
         scheduleDateTimeLocal,
         repeatOption,
+        repeatMethod,
+        deliveryMethod,
+        alarmScheduleMode,
+        alarmRescheduleErrorShownAt,
         notificationTrigger,
         hasAlarm,
         calendarId,
@@ -428,12 +487,10 @@ export const saveScheduledNotificationData = async (
         originalEventEndDate,
         originalEventLocation,
         originalEventRecurring,
-        repeatMethod,
         createdTimeZoneId,
         createdTimeZoneAbbr,
-        timeZoneMode,
-        updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);`,
+        timeZoneMode
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         notificationId,
         title,
@@ -443,6 +500,10 @@ export const saveScheduledNotificationData = async (
         scheduleDateTime,
         scheduleDateTimeLocal,
         repeatOptionValue,
+        repeatMethodValue,
+        deliveryMethodValue,
+        alarmScheduleModeValue,
+        alarmRescheduleErrorShownAtValue,
         notificationTriggerJson,
         hasAlarmValue,
         calendarId ?? null,
@@ -453,7 +514,6 @@ export const saveScheduledNotificationData = async (
         originalEventEndDate ?? null,
         originalEventLocation ?? null,
         originalEventRecurring ?? null,
-        repeatMethodValue,
         createdTimeZoneId ?? null,
         createdTimeZoneAbbr ?? null,
         timeZoneMode ?? null,
@@ -473,8 +533,30 @@ export const getScheduledNotificationData = async (notificationId: string) => {
     const db = await openDatabase();
     // First ensure table exists
     await initDatabase();
-    const result = await db.getFirstAsync<{ notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; calendarId: string | null; originalEventId: string | null; repeatMethod: string | null; createdTimeZoneId: string | null; createdTimeZoneAbbr: string | null; timeZoneMode: string | null; createdAt: string; updatedAt: string }>(
-      `SELECT notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, repeatMethod, createdTimeZoneId, createdTimeZoneAbbr, timeZoneMode, createdAt, updatedAt FROM scheduledNotification WHERE notificationId = '${notificationId.replace(/'/g, "''")}';`
+    const result = await db.getFirstAsync<{
+      notificationId: string;
+      title: string;
+      message: string;
+      note: string;
+      link: string;
+      scheduleDateTime: string;
+      scheduleDateTimeLocal: string;
+      repeatOption: string | null;
+      notificationTrigger: string | null;
+      hasAlarm: number;
+      calendarId: string | null;
+      originalEventId: string | null;
+      repeatMethod: string | null;
+      deliveryMethod: string | null;
+      alarmScheduleMode: string | null;
+      alarmRescheduleErrorShownAt: string | null;
+      createdTimeZoneId: string | null;
+      createdTimeZoneAbbr: string | null;
+      timeZoneMode: string | null;
+      createdAt: string;
+      updatedAt: string;
+    }>(
+      `SELECT notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, repeatMethod, deliveryMethod, alarmScheduleMode, alarmRescheduleErrorShownAt, createdTimeZoneId, createdTimeZoneAbbr, timeZoneMode, createdAt, updatedAt FROM scheduledNotification WHERE notificationId = '${notificationId.replace(/'/g, "''")}';`
     );
     if (!result) return null;
 
@@ -491,9 +573,13 @@ export const getScheduledNotificationData = async (notificationId: string) => {
     return {
       ...result,
       notificationTrigger: parsedTrigger,
+      hasAlarm: result.hasAlarm === 1,
       createdTimeZoneId: result.createdTimeZoneId,
       createdTimeZoneAbbr: result.createdTimeZoneAbbr,
       timeZoneMode: result.timeZoneMode as 'dependent' | 'independent' | null,
+      deliveryMethod: result.deliveryMethod as 'expo' | 'alarm' | null,
+      alarmScheduleMode: result.alarmScheduleMode as 'relative' | 'fixed' | null,
+      alarmRescheduleErrorShownAt: result.alarmRescheduleErrorShownAt,
     };
   } catch (error: any) {
     logger.error(makeLogHeader(LOG_FILE, 'getScheduledNotificationData'), 'Failed to get scheduled notification data:', error);
@@ -507,8 +593,31 @@ export const getAllScheduledNotificationData = async () => {
     const db = await openDatabase();
     // First ensure table exists
     await initDatabase();
-    const result = await db.getAllAsync<{ id: number; notificationId: string; title: string; message: string; note: string; link: string; scheduleDateTime: string; scheduleDateTimeLocal: string; repeatOption: string | null; notificationTrigger: string | null; hasAlarm: number; calendarId: string | null; originalEventId: string | null; repeatMethod: string | null; createdTimeZoneId: string | null; createdTimeZoneAbbr: string | null; timeZoneMode: string | null; createdAt: string; updatedAt: string }>(
-      `SELECT id, notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, repeatMethod, createdTimeZoneId, createdTimeZoneAbbr, timeZoneMode, createdAt, updatedAt FROM scheduledNotification ORDER BY scheduleDateTime ASC;`
+    const result = await db.getAllAsync<{
+      id: number;
+      notificationId: string;
+      title: string;
+      message: string;
+      note: string;
+      link: string;
+      scheduleDateTime: string;
+      scheduleDateTimeLocal: string;
+      repeatOption: string | null;
+      notificationTrigger: string | null;
+      hasAlarm: number;
+      calendarId: string | null;
+      originalEventId: string | null;
+      repeatMethod: string | null;
+      deliveryMethod: string | null;
+      alarmScheduleMode: string | null;
+      alarmRescheduleErrorShownAt: string | null;
+      createdTimeZoneId: string | null;
+      createdTimeZoneAbbr: string | null;
+      timeZoneMode: string | null;
+      createdAt: string;
+      updatedAt: string;
+    }>(
+      `SELECT id, notificationId, title, message, note, link, scheduleDateTime, scheduleDateTimeLocal, repeatOption, notificationTrigger, hasAlarm, calendarId, originalEventId, repeatMethod, deliveryMethod, alarmScheduleMode, alarmRescheduleErrorShownAt, createdTimeZoneId, createdTimeZoneAbbr, timeZoneMode, createdAt, updatedAt FROM scheduledNotification ORDER BY scheduleDateTime ASC;`
     );
     if (!result) return [];
 
@@ -529,6 +638,9 @@ export const getAllScheduledNotificationData = async () => {
         createdTimeZoneId: item.createdTimeZoneId,
         createdTimeZoneAbbr: item.createdTimeZoneAbbr,
         timeZoneMode: item.timeZoneMode as 'dependent' | 'independent' | null,
+        deliveryMethod: item.deliveryMethod as 'expo' | 'alarm' | null,
+        alarmScheduleMode: item.alarmScheduleMode as 'relative' | 'fixed' | null,
+        alarmRescheduleErrorShownAt: item.alarmRescheduleErrorShownAt,
       };
     });
   } catch (error: any) {
@@ -1768,6 +1880,8 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                     color: '#8ddaff',
                     data: {
                       notificationId: notification.notificationId,
+                      title: notification.title,
+                      message: notification.message,
                       note: notification.note || '',
                       link: notification.link || '',
                     },
@@ -1815,6 +1929,8 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
                     ...(Platform.OS === 'android' ? { category: notification.notificationId } : {}),
                     data: {
                       notificationId: notification.notificationId,
+                      title: notification.title,
+                      message: notification.message,
                       note: notification.note || '',
                       link: notification.link || '',
                     },
@@ -1864,10 +1980,15 @@ export const migrateRollingWindowRepeatsToExpo = async (): Promise<void> => {
               await NativeAlarmManager.scheduleAlarm(
                 alarmSchedule,
                 {
-                  title: notification.message,
+                  title: notification.title,
+                  body: notification.message,
                   color: '#8ddaff',
                   data: {
                     notificationId: notification.notificationId,
+                    title: notification.title,
+                    message: notification.message,
+                    note: notification.note || '',
+                    link: notification.link || '',
                   },
                 }
               );
@@ -2022,7 +2143,9 @@ export const migrateAndroidDailyAlarmToNative = async (notificationId: string): 
         color: '#8ddaff',
         category: notificationId,
         data: {
-          notificationId: notificationId,
+          notificationId,
+          title: notification.title,
+          message: notification.message,
           note: notification.note || '',
           link: notification.link || '',
         },
@@ -2153,7 +2276,9 @@ export const migrateDailyRollingWindowToNative = async (notificationId: string):
           sound: 'thenotifier',
           color: '#8ddaff',
           data: {
-            notificationId: notificationId,
+            notificationId,
+            title: notification.title,
+            message: notification.message,
             note: notification.note || '',
             link: notification.link || '',
           },
@@ -2372,8 +2497,11 @@ export const scheduleDailyAlarmWindow = async (
           color: alarmConfig.color || '#8ddaff',
           ...(Platform.OS === 'android' ? { category: notificationId } : {}),
           data: {
-            notificationId: notificationId,
-            ...alarmConfig.data,
+            notificationId,
+            title: alarmConfig.title,
+            message: alarmConfig.body || '',
+            note: (alarmConfig.data?.note as string) || '',
+            link: (alarmConfig.data?.link as string) || '',
           },
           actions: alarmConfig.actions,
         }

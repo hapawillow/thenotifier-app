@@ -13,6 +13,7 @@ import { ensurePushTokensUpToDate } from '@/utils/push-tokens';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { EventSubscription } from 'expo-modules-core';
+import * as Linking from 'expo-linking';
 import * as Notifications from 'expo-notifications';
 import { Stack, useRouter } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -46,6 +47,8 @@ export default function RootLayout() {
   const lastProcessedResponseKeyRef = useRef<string | null>(null);
   const awaitingInitialResponseRef = useRef<boolean>(false);
   const retryTimeoutRef = useRef<NodeJS.Timeout | number | null>(null);
+  const pendingDeepLinkUrlRef = useRef<string | null>(null);
+  const lastHandledDeepLinkRef = useRef<{ url: string; at: number } | null>(null);
   const [changedEvents, setChangedEvents] = useState<ChangedCalendarEvent[]>([]);
   const [showCalendarChangeModal, setShowCalendarChangeModal] = useState(false);
   const lastCheckTimeRef = useRef<number>(0);
@@ -64,6 +67,113 @@ export default function RootLayout() {
     FiraSansBlack: require('../assets/fonts/FiraSans-Black.ttf'),
     FiraSansBlackItalic: require('../assets/fonts/FiraSans-BlackItalic.ttf'),
   });
+
+  const handleDeepLinkNavigation = useCallback(async (url: string, isColdStart: boolean = false) => {
+    try {
+      if (!url) return;
+
+      const parsed = Linking.parse(url);
+      // For custom schemes like thenotifier://notification-display?... the route can appear as hostname.
+      const routeKey = String(parsed.path || parsed.hostname || '');
+
+      logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Deep link received:', {
+        url,
+        parsed,
+        routeKey,
+        isColdStart,
+        loaded,
+        i18nLoaded,
+        hasI18nPack: !!i18nPack,
+      });
+
+      if (routeKey !== 'notification-display') {
+        return;
+      }
+
+      // Dedupe to avoid reopen loops
+      const now = Date.now();
+      const last = lastHandledDeepLinkRef.current;
+      if (last && last.url === url && (now - last.at) < 5000) {
+        logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Deep link cooldown active, skipping');
+        return;
+      }
+
+      if (!loaded || !i18nLoaded || !i18nPack) {
+        pendingDeepLinkUrlRef.current = url;
+        logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'App not ready; deferring deep link handling');
+        return;
+      }
+
+      lastHandledDeepLinkRef.current = { url, at: now };
+
+      const params = (parsed.queryParams || {}) as Record<string, any>;
+      const normalize = (v: any) => (Array.isArray(v) ? String(v[0] ?? '') : String(v ?? ''));
+
+      // Cold start: use replace to override the default route stack
+      const nav = {
+        pathname: '/notification-display' as const,
+        params: {
+          title: normalize(params.title),
+          message: normalize(params.message),
+          note: normalize(params.note),
+          link: normalize(params.link),
+        },
+      };
+
+      if (isColdStart) {
+        router.replace(nav);
+      } else {
+        router.push(nav);
+      }
+    } catch (error) {
+      logger.error(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Failed to handle deep link:', error);
+    }
+  }, [router, loaded, i18nLoaded, i18nPack]);
+
+  // Deep link handling (cold start + runtime)
+  useEffect(() => {
+    let isMounted = true;
+
+    Linking.getInitialURL()
+      .then((url) => {
+        if (!isMounted || !url) return;
+        logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Initial URL:', url);
+        handleDeepLinkNavigation(url, true);
+      })
+      .catch((error) => {
+        logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to get initial URL:', error);
+      });
+
+    const sub = Linking.addEventListener('url', (event) => {
+      if (!event?.url) return;
+      logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'URL event:', event.url);
+      handleDeepLinkNavigation(event.url, false);
+    });
+
+    return () => {
+      isMounted = false;
+      sub.remove();
+    };
+  }, [handleDeepLinkNavigation]);
+
+  // Listen for deep link requests coming from native alarm UI (iOS AlarmKit / Android alarms).
+  useEffect(() => {
+    const unsubscribe = NativeAlarmManager.onDeepLink?.((event: any) => {
+      const url = event?.url;
+      if (typeof url === 'string' && url.length > 0) {
+        logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Received deep link event from native alarms:', url);
+        handleDeepLinkNavigation(url, false);
+      }
+    });
+
+    return () => {
+      try {
+        unsubscribe?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, [handleDeepLinkNavigation]);
 
   // Helper function to handle notification navigation
   const handleNotificationNavigation = useCallback(async (notification: Notifications.Notification, actionIdentifier: string, isColdStart: boolean = false) => {
@@ -555,6 +665,18 @@ export default function RootLayout() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
       if (nextAppState === 'active') {
+        // iOS AlarmKit: if an alarm stop/dismiss intent stored a pending deep link while the app
+        // was backgrounded/covered by the alarm UI, consume it now on resume.
+        try {
+          const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
+          if (pendingFromAlarmKit) {
+            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Consumed pending deep link from AlarmKit on AppState active:', pendingFromAlarmKit);
+            await handleDeepLinkNavigation(pendingFromAlarmKit, false);
+          }
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to consume pending deep link from AlarmKit on AppState active:', error);
+        }
+
         // First, reconcile permissions (detect transitions and cleanup if needed)
         if (i18nPack) {
           const t = (key: string) => translate(i18nPack, key);
@@ -681,10 +803,32 @@ export default function RootLayout() {
 
 
   useEffect(() => {
-    if (loaded && i18nLoaded) {
+    // Only handle pending deep links once the app is *fully* initialized.
+    // Otherwise we can defer inside handleDeepLinkNavigation() and never re-run this effect.
+    if (loaded && i18nLoaded && i18nPack) {
       SplashScreen.hideAsync();
+
+      // If we received a deep link before app initialization completed, handle it now.
+      const pending = pendingDeepLinkUrlRef.current;
+      if (pending) {
+        pendingDeepLinkUrlRef.current = null;
+        handleDeepLinkNavigation(pending, true);
+      }
+
+      // iOS AlarmKit: consume a pending deep link saved by the stop/dismiss LiveActivityIntent.
+      (async () => {
+        try {
+          const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
+          if (pendingFromAlarmKit) {
+            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Consumed pending deep link from AlarmKit:', pendingFromAlarmKit);
+            handleDeepLinkNavigation(pendingFromAlarmKit, true);
+          }
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to consume pending deep link from AlarmKit:', error);
+        }
+      })();
     }
-  }, [loaded, i18nLoaded]);
+  }, [loaded, i18nLoaded, i18nPack, handleDeepLinkNavigation]);
 
   if (!loaded || !i18nLoaded || !i18nPack) {
     return null;

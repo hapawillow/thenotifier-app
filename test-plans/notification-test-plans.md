@@ -315,6 +315,8 @@ This document contains comprehensive test plans for scheduling, updating, and de
 - Alarm scheduled (NativeAlarmManager)
 - NO Expo notification scheduled
 - `repeatMethod` in DB is `'alarm'`
+- `deliveryMethod` in DB is `'alarm'`
+- `notificationId` in DB is a UUID (no `thenotifier-` prefix)
 - `notificationTrigger` in DB is `null`
 - `hasAlarm` in DB is `1` or `true`
 - Notification appears in Upcoming tab with alarm icon
@@ -336,6 +338,7 @@ This document contains comprehensive test plans for scheduling, updating, and de
 - Expo notification scheduled
 - NO alarms scheduled
 - `hasAlarm` in DB is `0` or `false`
+- `deliveryMethod` in DB is `'expo'` (or `NULL` if not yet persisted)
 - Notification appears in Upcoming tab WITHOUT alarm icon
 
 ---
@@ -354,6 +357,52 @@ This document contains comprehensive test plans for scheduling, updating, and de
 - If start < 1mo: Expo MONTHLY trigger scheduled, handles day clamping correctly
 - If start >= 1mo: DATE trigger scheduled, will migrate to MONTHLY with correct day clamping
 - No errors in console
+
+---
+
+### Test Case 1.16a: iOS version gating for alarms (< iOS 26)
+**Objective:** Verify alarm switch is disabled on iOS < 26 and tapping shows i18n alert
+
+**Steps:**
+1. Install/run on iOS < 26 (simulator/device)
+2. Open schedule form
+3. Locate Alarm switch
+4. Tap the disabled switch area
+
+**Expected Results:**
+- Switch is disabled
+- Alert shows: “You need iOS 26 or higher to set an alarm.” (via i18n key)
+- No alarms are scheduled
+
+---
+
+### Test Case 1.16b: Alarm deep link + data contract (native alarm UI)
+**Objective:** Verify native alarm uses strict data payload and deep links to Notification Detail on dismiss/stop
+
+**Steps:**
+1. Schedule an alarm-only notification (Alarm switch ON) for a few minutes from now
+2. When the alarm fires, tap the close (X) / stop/dismiss control in the native alarm UI
+
+**Expected Results:**
+- The app opens to the Notification Display screen
+- Displayed title/message/note/link match what was scheduled
+- Alarm `config.data` contains ONLY `{ notificationId, title, message, note, link }` (no extra keys)
+
+---
+
+### Test Case 1.16c: Android snooze countdown notification + cancel snooze deep link
+**Objective:** Verify Android snooze shows a countdown notification with a cancel action that deep links to Notification Detail
+
+**Steps:**
+1. On Android, schedule an alarm-only notification for a few minutes from now
+2. When the alarm fires, tap **Snooze**
+3. Verify a “Snoozed” countdown notification appears
+4. Tap “Cancel Snooze” on that countdown notification
+
+**Expected Results:**
+- Countdown notification shows time remaining (chronometer countdown)
+- Tapping “Cancel Snooze” cancels the pending snoozed alarm instance
+- The app opens to the Notification Display screen for that notification
 
 ---
 
