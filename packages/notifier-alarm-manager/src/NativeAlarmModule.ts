@@ -330,12 +330,22 @@ export const NativeAlarmModule = {
    * iOS-only: consume a pending deep link saved by AlarmKit intents.
    */
   async getPendingDeepLink(): Promise<string | null> {
-    if (Platform.OS !== 'ios') return null;
+    if (Platform.OS !== 'ios') {
+      console.log('[NativeAlarmModule] getPendingDeepLink: Not iOS, returning null');
+      return null;
+    }
     try {
       // Not all builds will have this method; treat missing as no-op.
-      if (typeof (NativeAlarmsModule as any).getPendingDeepLink !== 'function') return null;
-      return await (NativeAlarmsModule as any).getPendingDeepLink();
-    } catch {
+      if (typeof (NativeAlarmsModule as any).getPendingDeepLink !== 'function') {
+        console.log('[NativeAlarmModule] getPendingDeepLink: Method not available');
+        return null;
+      }
+      console.log('[NativeAlarmModule] getPendingDeepLink: Calling native method');
+      const result = await (NativeAlarmsModule as any).getPendingDeepLink();
+      console.log('[NativeAlarmModule] getPendingDeepLink: Native method returned:', result);
+      return result;
+    } catch (error) {
+      console.error('[NativeAlarmModule] getPendingDeepLink: Error calling native method:', error);
       return null;
     }
   },

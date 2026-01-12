@@ -5,6 +5,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo } from 'react';
 import { StyleSheet, TouchableOpacity } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { useT } from '@/utils/i18n';
 import { openNotifierLink } from '@/utils/open-link';
 import { logger, makeLogHeader } from '@/utils/logger';
@@ -18,6 +19,7 @@ export default function NotificationDisplayScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const t = useT();
+  const navigation = useNavigation();
   const closeButtonStyle = useMemo(() => [
     styles.closeButton,
     { backgroundColor: colors.tint }
@@ -73,7 +75,15 @@ export default function NotificationDisplayScreen() {
             )
           }
         </ThemedView >
-        <TouchableOpacity style={closeButtonStyle} onPress={() => router.back()}>
+        <TouchableOpacity style={closeButtonStyle} onPress={() => {
+          // If we can go back, do so. Otherwise navigate to home screen.
+          // This handles the case where the screen was opened via deep link (no history).
+          if (navigation.canGoBack()) {
+            router.back();
+          } else {
+            router.replace('/(tabs)');
+          }
+        }}>
           <ThemedText type="link" maxFontSizeMultiplier={1.6} style={closeButtonTextStyle}>
             {t('buttonText.close')}
           </ThemedText>

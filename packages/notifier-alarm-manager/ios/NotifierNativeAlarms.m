@@ -52,6 +52,10 @@ RCT_EXTERN_METHOD(snoozeAlarm:(NSString *)alarmId
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+// Deep link handoff (iOS only)
+RCT_EXTERN_METHOD(getPendingDeepLink:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 + (BOOL)requiresMainQueueSetup
 {
     return YES;

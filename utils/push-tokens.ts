@@ -39,7 +39,17 @@ export const ensurePushTokensUpToDate = async (): Promise<void> => {
       expoPushToken = expoTokenData.data;
       logger.info(makeLogHeader(LOG_FILE, 'ensurePushTokensUpToDate'), `Expo push token obtained: ${expoPushToken ? expoPushToken.substring(0, 20) + '...' : 'null'}`);
     } catch (error) {
-      logger.error(makeLogHeader(LOG_FILE, 'ensurePushTokensUpToDate'), 'Failed to get Expo push token:', error);
+      // Handle keychain access errors gracefully (e.g., when app launches from background)
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isKeychainError = errorMessage.includes('Keychain access failed') || 
+                               errorMessage.includes('User interaction is not allowed') ||
+                               errorMessage.includes('getRegistrationInfoAsync');
+      
+      if (isKeychainError) {
+        logger.warn(makeLogHeader(LOG_FILE, 'ensurePushTokensUpToDate'), 'Keychain access not available (app may have launched from background), skipping Expo push token update');
+      } else {
+        logger.error(makeLogHeader(LOG_FILE, 'ensurePushTokensUpToDate'), 'Failed to get Expo push token:', error);
+      }
       // Continue - we'll still try to get device push token
     }
 
@@ -50,7 +60,17 @@ export const ensurePushTokensUpToDate = async (): Promise<void> => {
       devicePushTokenType = deviceTokenData.type;
       logger.info(makeLogHeader(LOG_FILE, 'ensurePushTokensUpToDate'), `Device push token obtained: type=${devicePushTokenType}, token=${devicePushToken ? devicePushToken.substring(0, 20) + '...' : 'null'}`);
     } catch (error) {
-      logger.error(makeLogHeader(LOG_FILE, 'ensurePushTokensUpToDate'), 'Failed to get device push token:', error);
+      // Handle keychain access errors gracefully (e.g., when app launches from background)
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isKeychainError = errorMessage.includes('Keychain access failed') || 
+                               errorMessage.includes('User interaction is not allowed') ||
+                               errorMessage.includes('getRegistrationInfoAsync');
+      
+      if (isKeychainError) {
+        logger.warn(makeLogHeader(LOG_FILE, 'ensurePushTokensUpToDate'), 'Keychain access not available (app may have launched from background), skipping device push token update');
+      } else {
+        logger.error(makeLogHeader(LOG_FILE, 'ensurePushTokensUpToDate'), 'Failed to get device push token:', error);
+      }
       // Continue - we'll still save Expo token if we got it
     }
 

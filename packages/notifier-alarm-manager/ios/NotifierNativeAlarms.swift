@@ -1,5 +1,8 @@
 import Foundation
 import React
+import OSLog
+
+private let logger = Logger(subsystem: "com.thenotifier.alarmkit", category: "NotifierNativeAlarms")
 
 @objc(NotifierNativeAlarms)
 class NotifierNativeAlarms: RCTEventEmitter {
@@ -68,12 +71,63 @@ class NotifierNativeAlarms: RCTEventEmitter {
     @objc(getPendingDeepLink:rejecter:)
     func getPendingDeepLink(_ resolve: @escaping RCTPromiseResolveBlock,
                             rejecter reject: @escaping RCTPromiseRejectBlock) {
+        NSLog("[NotifierNativeAlarms] getPendingDeepLink CALLED")
+        logger.info("[NotifierNativeAlarms] getPendingDeepLink called")
+        
         let key = "thenotifier_pending_alarm_deeplink_url"
-        let url = UserDefaults.standard.string(forKey: key)
-        if url != nil {
-            UserDefaults.standard.removeObject(forKey: key)
+        
+        // Force synchronize to ensure we have the latest data
+        // This is critical when the app launches from closed state and perform() just stored the URL
+        UserDefaults.standard.synchronize()
+        
+        // Read the entire UserDefaults dictionary to ensure we have the latest data
+        let defaults = UserDefaults.standard
+        defaults.synchronize()
+        
+        var url = defaults.string(forKey: key)
+        NSLog("[NotifierNativeAlarms] getPendingDeepLink - URL in main key: %@", url ?? "nil")
+        logger.info("[NotifierNativeAlarms] getPendingDeepLink called, found URL in main key: \(url ?? "nil")")
+        
+        if url != nil && !url!.isEmpty {
+            NSLog("[NotifierNativeAlarms] Found URL in main key, returning: %@", url!)
+            defaults.removeObject(forKey: key)
+            defaults.synchronize()
+            logger.info("[NotifierNativeAlarms] Removed URL from UserDefaults main key")
+            resolve(url)
+            return
         }
-        resolve(url)
+        
+        // Debug: Check all UserDefaults keys to see what's stored
+        let allDict = defaults.dictionaryRepresentation()
+        let allKeys = allDict.keys.filter { $0.contains("thenotifier") || $0.contains("alarm") || $0.contains("deeplink") }
+        NSLog("[NotifierNativeAlarms] No URL in main key. Related keys: %@", Array(allKeys))
+        logger.warning("[NotifierNativeAlarms] No URL found in main key. Related UserDefaults keys: \(Array(allKeys))")
+        
+        // Also check alarm-specific keys (stored when alarm is scheduled)
+        // This is critical for when app launches from closed state and perform() isn't called
+        let alarmKeys = allDict.keys.filter { $0.hasPrefix("thenotifier_pending_alarm_deeplink_url_") }
+        NSLog("[NotifierNativeAlarms] Found alarm-specific keys: %@", Array(alarmKeys))
+        logger.info("[NotifierNativeAlarms] Found alarm-specific keys: \(Array(alarmKeys))")
+        
+        // Check all alarm-specific keys, not just the first one
+        for alarmKey in alarmKeys {
+            if let alarmUrl = defaults.string(forKey: alarmKey), !alarmUrl.isEmpty {
+                NSLog("[NotifierNativeAlarms] Found URL in alarm-specific key %@: %@", alarmKey, alarmUrl)
+                logger.info("[NotifierNativeAlarms] Found URL in alarm-specific key \(alarmKey): \(alarmUrl)")
+                // Move it to the main key and return it
+                defaults.set(alarmUrl, forKey: key)
+                defaults.removeObject(forKey: alarmKey)
+                defaults.synchronize()
+                NSLog("[NotifierNativeAlarms] Moved URL from alarm-specific key to main key")
+                logger.info("[NotifierNativeAlarms] Moved URL from alarm-specific key \(alarmKey) to main key")
+                resolve(alarmUrl)
+                return
+            }
+        }
+        
+        NSLog("[NotifierNativeAlarms] No URL found in any UserDefaults key")
+        logger.warning("[NotifierNativeAlarms] No URL found in any UserDefaults key")
+        resolve(nil)
     }
 
     // MARK: - Capability & Permissions

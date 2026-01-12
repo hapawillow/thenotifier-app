@@ -3,8 +3,10 @@ import AlarmKit
 import ActivityKit
 import SwiftUI
 import AppIntents
+import OSLog
 
 private let PENDING_ALARM_DEEPLINK_KEY = "thenotifier_pending_alarm_deeplink_url"
+private let logger = Logger(subsystem: "com.thenotifier.alarmkit", category: "AlarmKitManager")
 
 /// Live Activity intent used by AlarmKit to trigger the secondary (Snooze) action.
 /// Defined in this file to ensure it is compiled into the existing CocoaPods target.
@@ -40,17 +42,50 @@ struct AlarmKitStopIntent: LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         guard let uuid = UUID(uuidString: alarmID) else {
+            logger.error("[AlarmKitStopIntent] Invalid alarm ID: \(alarmID)")
             return .result()
         }
         
+        logger.info("[AlarmKitStopIntent] perform() called for alarm: \(alarmID), url parameter: \(url ?? "nil")")
+        
+        // Get URL from parameter, or fallback to UserDefaults (stored when alarm was scheduled)
+        var urlString = url
+        
+        // If URL parameter is nil/empty, try to get it from UserDefaults (stored when scheduling)
+        if urlString == nil || urlString!.isEmpty {
+            let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(alarmID)"
+            urlString = UserDefaults.standard.string(forKey: storageKey)
+            if urlString == nil || urlString!.isEmpty {
+                // Also check main key
+                urlString = UserDefaults.standard.string(forKey: PENDING_ALARM_DEEPLINK_KEY)
+            }
+            logger.info("[AlarmKitStopIntent] Retrieved URL from UserDefaults: \(urlString ?? "nil")")
+        }
+        
         // Persist the deep link so JS can consume it on next app resume/launch.
-        // Relying on OpenURLIntent has proven unreliable for delivering a URL to RN in some alarm-dismiss flows.
-        if let urlString = url, !urlString.isEmpty {
-            UserDefaults.standard.set(urlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
+        // Store in UserDefaults as fallback for when perform() isn't called (app launches from closed state).
+        if let finalUrlString = urlString, !finalUrlString.isEmpty {
+            logger.info("[AlarmKitStopIntent] Storing deep link URL in UserDefaults: \(finalUrlString)")
+            UserDefaults.standard.set(finalUrlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
+            UserDefaults.standard.synchronize() // Force immediate write
+            
+            // Verify it was stored correctly
+            let verifyUrl = UserDefaults.standard.string(forKey: PENDING_ALARM_DEEPLINK_KEY)
+            if verifyUrl == finalUrlString {
+                logger.info("[AlarmKitStopIntent] Deep link URL stored and verified successfully")
+            } else {
+                logger.error("[AlarmKitStopIntent] ERROR: URL storage verification failed! Stored: \(finalUrlString), Retrieved: \(verifyUrl ?? "nil")")
+            }
+            
+            // Note: The monitorAlarms() function will detect the dismissal and call the delegate
+            // to emit the deep link event to JS. We just store the URL here.
+        } else {
+            logger.warning("[AlarmKitStopIntent] WARNING: No URL available to store (parameter: \(url ?? "nil"), UserDefaults: \(UserDefaults.standard.string(forKey: PENDING_ALARM_DEEPLINK_KEY) ?? "nil"))")
         }
 
         // Best-effort stop (the system may already be dismissing UI).
         try? AlarmManager.shared.stop(id: uuid)
+        logger.info("[AlarmKitStopIntent] perform() completed")
         return .result()
     }
 }
@@ -118,6 +153,24 @@ class AlarmKitManager {
 
         // Build deep link to Notification Detail (scheme URL) using the strict data contract.
         let deepLinkUrlString: String? = buildDeepLinkUrlString(config: config)
+        logger.info("[AlarmKitManager] Built deep link URL: \(deepLinkUrlString ?? "nil")")
+        
+        // Store the deep link URL in UserDefaults NOW (when scheduling), so it's available even if
+        // perform() isn't called when the app launches from a closed state.
+        // We'll use the alarm ID as part of the key to support multiple alarms.
+        if let urlString = deepLinkUrlString, !urlString.isEmpty {
+            let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(canonicalAlarmId)"
+            logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (key: \(storageKey)): \(urlString)")
+            UserDefaults.standard.set(urlString, forKey: storageKey)
+            UserDefaults.standard.synchronize()
+            // Also store under the main key (for backward compatibility and easy lookup)
+            logger.info("[AlarmKitManager] Also storing under main key: \(PENDING_ALARM_DEEPLINK_KEY)")
+            UserDefaults.standard.set(urlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
+            UserDefaults.standard.synchronize()
+            logger.info("[AlarmKitManager] Deep link URL stored successfully for alarm: \(canonicalAlarmId)")
+        } else {
+            logger.warning("[AlarmKitManager] WARNING: Could not build deep link URL when scheduling alarm: \(canonicalAlarmId)")
+        }
 
         // Build intents + countdownDuration for Snooze, if configured.
         // Important: `preAlert` affects behavior *before* the scheduled alert.
@@ -132,6 +185,7 @@ class AlarmKitManager {
         var stopIntentValue = AlarmKitStopIntent()
         stopIntentValue.alarmID = uuid.uuidString
         stopIntentValue.url = deepLinkUrlString
+        logger.info("[AlarmKitManager] Set stopIntent.url to: \(stopIntentValue.url ?? "nil")")
         let stopIntent: (any LiveActivityIntent)? = stopIntentValue
 
         let secondaryIntent: (any LiveActivityIntent)? = {
@@ -526,9 +580,15 @@ class AlarmKitManager {
     /// Build a `thenotifier://notification-display?...` deep link using our strict JS data contract.
     /// Data contract: { notificationId, title, message, note, link }.
     private func buildDeepLinkUrlString(config: NSDictionary) -> String? {
-        guard let data = config["data"] as? NSDictionary else { return nil }
+        print("[AlarmKitManager] buildDeepLinkUrlString called with config keys: \(config.allKeys)")
+        guard let data = config["data"] as? NSDictionary else {
+            print("[AlarmKitManager] buildDeepLinkUrlString: No 'data' key in config")
+            return nil
+        }
+        print("[AlarmKitManager] buildDeepLinkUrlString: data keys: \(data.allKeys)")
         guard let title = data["title"] as? String,
               let message = data["message"] as? String else {
+            print("[AlarmKitManager] buildDeepLinkUrlString: Missing title or message in data")
             return nil
         }
         let note = (data["note"] as? String) ?? ""
@@ -543,7 +603,9 @@ class AlarmKitManager {
             URLQueryItem(name: "note", value: note),
             URLQueryItem(name: "link", value: link),
         ]
-        return components.url?.absoluteString
+        let urlString = components.url?.absoluteString
+        print("[AlarmKitManager] buildDeepLinkUrlString: Built URL: \(urlString ?? "nil")")
+        return urlString
     }
 
     /// Extract Date from various possible types in NSDictionary (Double, NSNumber, Date, ISO string)
@@ -929,12 +991,18 @@ class AlarmKitManager {
                     let dismissedFromAlerting = (prev == "alerting" && currentMode != "alerting" && currentMode != "countdown")
                     let dismissedFromCountdown = (prev == "countdown" && currentMode != "countdown")
                     if dismissedFromAlerting || dismissedFromCountdown {
+                        logger.info("[AlarmKitManager] Alarm dismissed: \(alarmId), prev=\(prev), current=\(currentMode)")
                         if let metadata = alarmMetadataStore[alarmId],
                            let config = metadata["config"] as? NSDictionary,
                            let url = buildDeepLinkUrlString(config: config),
                            !url.isEmpty {
+                            logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults: \(url)")
                             UserDefaults.standard.set(url, forKey: PENDING_ALARM_DEEPLINK_KEY)
+                            UserDefaults.standard.synchronize() // Force immediate write
+                            logger.info("[AlarmKitManager] Deep link URL stored, calling delegate")
                             delegate?.alarmDidRequestDeepLink(url: url)
+                        } else {
+                            logger.warning("[AlarmKitManager] WARNING: Could not build deep link URL for dismissed alarm \(alarmId)")
                         }
                     }
                 }
@@ -987,21 +1055,41 @@ class AlarmKitManager {
                 }
             }
 
-            // Detect alarms that disappeared from updates (treat as dismissal)
-            let knownIds = Set(lastPresentationModeByAlarmId.keys)
-            let missing = knownIds.subtracting(currentIds)
-            for id in missing {
-                if let prev = lastPresentationModeByAlarmId[id], (prev == "alerting" || prev == "countdown") {
+        // Detect alarms that disappeared from updates (treat as dismissal)
+        let knownIds = Set(lastPresentationModeByAlarmId.keys)
+        let missing = knownIds.subtracting(currentIds)
+        for id in missing {
+            if let prev = lastPresentationModeByAlarmId[id], (prev == "alerting" || prev == "countdown") {
+                logger.info("[AlarmKitManager] Alarm disappeared (dismissed): \(id), prev=\(prev)")
+                // Try to get URL from UserDefaults first (stored when alarm was scheduled)
+                let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(id)"
+                var url = UserDefaults.standard.string(forKey: storageKey)
+                
+                // Fallback: build URL from metadata if not in UserDefaults
+                if url == nil || url!.isEmpty {
                     if let metadata = alarmMetadataStore[id],
                        let config = metadata["config"] as? NSDictionary,
-                       let url = buildDeepLinkUrlString(config: config),
-                       !url.isEmpty {
-                        UserDefaults.standard.set(url, forKey: PENDING_ALARM_DEEPLINK_KEY)
-                        delegate?.alarmDidRequestDeepLink(url: url)
+                       let builtUrl = buildDeepLinkUrlString(config: config),
+                       !builtUrl.isEmpty {
+                        url = builtUrl
+                        // Store it for future reference
+                        UserDefaults.standard.set(url, forKey: storageKey)
+                        UserDefaults.standard.synchronize()
                     }
                 }
-                lastPresentationModeByAlarmId.removeValue(forKey: id)
+                
+                if let finalUrl = url, !finalUrl.isEmpty {
+                    logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (disappeared): \(finalUrl)")
+                    UserDefaults.standard.set(finalUrl, forKey: PENDING_ALARM_DEEPLINK_KEY)
+                    UserDefaults.standard.synchronize() // Force immediate write
+                    logger.info("[AlarmKitManager] Deep link URL stored (disappeared), calling delegate")
+                    delegate?.alarmDidRequestDeepLink(url: finalUrl)
+                } else {
+                    logger.warning("[AlarmKitManager] WARNING: Could not find or build deep link URL for disappeared alarm \(id)")
+                }
             }
+            lastPresentationModeByAlarmId.removeValue(forKey: id)
+        }
         }
     }
 }

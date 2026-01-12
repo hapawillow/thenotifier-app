@@ -1,6 +1,7 @@
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import * as Notifications from 'expo-notifications';
+import type { DayOfWeek } from 'notifier-alarm-manager';
 import { NativeAlarmManager } from 'notifier-alarm-manager';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Dimensions, Keyboard, PixelRatio, Platform, StyleSheet, Switch, TextInput, TouchableOpacity, TouchableWithoutFeedback } from 'react-native';
@@ -1706,31 +1707,69 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Scheduling alarm with ID:', alarmId);
           logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Alarm date:', dateWithoutSeconds.toISOString());
 
-          // Handle daily alarms differently - schedule 7 fixed alarms
+          // Handle daily alarms differently - schedule 7 fixed alarms OR use relative schedule
           if (repeatOption === 'daily') {
-            // Schedule 7-day rolling window for daily alarms (AlarmKit alarms, not notifications)
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling 7-day AlarmKit alarm window for daily repeat');
-            await scheduleDailyAlarmWindow(
-              notificationId,
-              dateWithoutSeconds,
-              { hour, minute: minutes },
-              {
-                title: notificationTitle,
-                body: message,
-                sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
-                color: '#8ddaff',
-                data: {
-                  notificationId,
+            const diffMs = dateWithoutSeconds.getTime() - now.getTime();
+            const isWithin24h = diffMs < 24 * 60 * 60 * 1000;
+
+            // Prompt: Daily < 24h on iOS uses relative schedule with weekly repeats (all 7 days)
+            // Daily < 24h on Android uses rolling window (current behavior)
+            if (Platform.OS === 'ios' && isWithin24h) {
+              // Use relative schedule with weekly repeats for all 7 days
+              const alarmSchedule = {
+                id: alarmId,
+                type: 'relative' as const,
+                repeats: 'weekly' as const,
+                time: { hour, minute: minutes },
+                daysOfWeek: [0, 1, 2, 3, 4, 5, 6] as DayOfWeek[], // All 7 days: Sunday through Saturday
+              };
+
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Daily alarm < 24h on iOS - using relative schedule with weekly repeats (all 7 days)');
+
+              await NativeAlarmManager.scheduleAlarm(
+                alarmSchedule,
+                {
                   title: notificationTitle,
-                  message,
-                  note: note || '',
-                  link: link || '',
+                  body: message,
+                  sound: undefined, // iOS uses native sound
+                  color: '#8ddaff',
+                  data: {
+                    notificationId,
+                    title: notificationTitle,
+                    message,
+                    note: note || '',
+                    link: link || '',
+                  },
+                  actions: ALARM_ACTIONS
                 },
-                actions: ALARM_ACTIONS
-              },
-              7
-            );
-            logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled 7 AlarmKit alarm instances for:', notificationId);
+              );
+
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Daily relative alarm scheduled successfully');
+            } else {
+              // Schedule rolling window for daily alarms (Android < 24h or iOS >= 24h)
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduling rolling window for daily repeat');
+              await scheduleDailyAlarmWindow(
+                notificationId,
+                dateWithoutSeconds,
+                { hour, minute: minutes },
+                {
+                  title: notificationTitle,
+                  body: message,
+                  sound: Platform.OS === 'android' ? 'thenotifier' : undefined,
+                  color: '#8ddaff',
+                  data: {
+                    notificationId,
+                    title: notificationTitle,
+                    message,
+                    note: note || '',
+                    link: link || '',
+                  },
+                  actions: ALARM_ACTIONS
+                },
+                7
+              );
+              logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled rolling window alarm instances for:', notificationId);
+            }
           } else {
             // Build alarm schedule for one-time or weekly alarms
             let alarmSchedule: any;
@@ -1760,8 +1799,42 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                   },
                 };
               }
+            } else if (repeatOption === 'weekly') {
+              // Weekly alarm
+              const diffMs = dateWithoutSeconds.getTime() - now.getTime();
+              const isWithin7Days = diffMs < 7 * 24 * 60 * 60 * 1000;
+
+              // Prompt: Weekly < 7 days on iOS uses relative schedule with weekly repeats
+              // Weekly < 7 days on Android uses rolling window (would need implementation)
+              if (Platform.OS === 'ios' && isWithin7Days) {
+                // Use relative schedule with weekly repeats for the specified day
+                alarmSchedule = {
+                  id: alarmId,
+                  type: 'relative' as const,
+                  repeats: 'weekly' as const,
+                  time: { hour, minute: minutes },
+                  daysOfWeek: [dayOfWeek], // JS weekday format (0-6, Sunday=0)
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Weekly alarm < 7 days on iOS - using relative schedule with weekly repeats, JS weekday:', dayOfWeek);
+              } else {
+                // Use recurring type (iOS converts weekly recurring to relative, but being explicit is better)
+                // For Android >= 7 days or iOS >= 7 days, we'd use rolling window or fixed schedule
+                // Currently using recurring which iOS will convert appropriately
+                alarmSchedule = {
+                  id: alarmId,
+                  type: 'recurring',
+                  repeatInterval: 'weekly',
+                  startDate: dateWithoutSeconds.getTime(), // Pass milliseconds timestamp
+                  time: {
+                    hour: hour,
+                    minute: minutes,
+                  },
+                  daysOfWeek: [dayOfWeek],
+                };
+                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Weekly alarm >= 7 days - using recurring schedule, JS weekday:', dayOfWeek);
+              }
             } else {
-              // Recurring alarm (weekly, monthly, yearly)
+              // Recurring alarm (monthly, yearly)
               alarmSchedule = {
                 id: alarmId,
                 type: 'recurring',
@@ -1774,12 +1847,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               };
 
               // Add repeat-specific fields
-              if (repeatOption === 'weekly') {
-                // AlarmKit uses JS weekday format (0-6, Sunday=0) based on code patterns
-                // Keep using dayOfWeek (JS format) for AlarmKit
-                alarmSchedule.daysOfWeek = [dayOfWeek];
-                logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmSchedule] Weekly alarm - JS weekday:', dayOfWeek, 'AlarmKit daysOfWeek:', [dayOfWeek]);
-              } else if (repeatOption === 'monthly') {
+              if (repeatOption === 'monthly') {
                 alarmSchedule.dayOfMonth = dayOfMonth;
               } else if (repeatOption === 'yearly') {
                 alarmSchedule.monthOfYear = monthOfYear;
