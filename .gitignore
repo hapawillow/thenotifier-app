@@ -46,7 +46,8 @@ app-example
 
 # generated native folders
 /ios/*
-/android/*
+packages/notifier-alarm-manager/android/build/
+
 # But allow gradlew files needed for EAS builds
 !/android/gradlew
 !/android/gradlew.bat

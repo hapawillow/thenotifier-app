@@ -346,13 +346,28 @@ export const NativeAlarmModule = {
         let nextFireDate: Date;
         
         if (alarm.nextFireDate) {
-          // Handle both string and number formats (Android returns string, but React Native might convert)
-          const dateValue = typeof alarm.nextFireDate === 'string' 
-            ? parseInt(alarm.nextFireDate, 10) 
-            : alarm.nextFireDate;
+          // Handle both string (ISO8601) and number (timestamp) formats
+          let date: Date;
+          if (typeof alarm.nextFireDate === 'string') {
+            // iOS returns ISO8601 strings like "2025-01-15T10:30:00Z"
+            // Parse as ISO8601 first (this is the correct format from iOS)
+            date = new Date(alarm.nextFireDate);
+            // If that fails (NaN), it might be a numeric string, try parsing as number
+            if (isNaN(date.getTime())) {
+              const numValue = parseFloat(alarm.nextFireDate);
+              if (!isNaN(numValue)) {
+                // If it's a small number (< year 2000 in seconds), assume seconds, otherwise milliseconds
+                date = numValue < 946684800000 ? new Date(numValue * 1000) : new Date(numValue);
+              }
+            }
+          } else {
+            // Number format (timestamp in milliseconds or seconds)
+            const numValue = typeof alarm.nextFireDate === 'number' ? alarm.nextFireDate : Number(alarm.nextFireDate);
+            // If it's a small number (< year 2000 in seconds), assume it's seconds, otherwise milliseconds
+            date = numValue < 946684800000 ? new Date(numValue * 1000) : new Date(numValue);
+          }
           
-          const date = new Date(dateValue);
-          if (!isNaN(date.getTime())) {
+          if (!isNaN(date.getTime()) && date.getTime() > 0) {
             nextFireDate = date;
           } else {
             console.warn('[NativeAlarmModule] Invalid nextFireDate for alarm:', alarm.id, alarm.nextFireDate, 'using fallback date');
