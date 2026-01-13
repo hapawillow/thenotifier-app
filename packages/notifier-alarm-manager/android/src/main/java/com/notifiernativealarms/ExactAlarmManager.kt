@@ -327,6 +327,7 @@ class ExactAlarmManager(private val context: Context) {
                         .appendQueryParameter("message", m)
                         .appendQueryParameter("note", note)
                         .appendQueryParameter("link", link)
+                        .appendQueryParameter("alarmId", alarmId) // Add alarmId for cleanup
                         .build()
                         .toString()
                 } else {

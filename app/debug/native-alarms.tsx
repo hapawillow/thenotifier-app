@@ -45,6 +45,24 @@ export default function NativeAlarmsScreen() {
           return false;
         }
         
+        // Filter out past-due one-time alarms (they should have been cleaned up)
+        const scheduleType = alarm.schedule?.type;
+        if (scheduleType === 'fixed' && alarm.nextFireDate) {
+          try {
+            const fireDate = new Date(alarm.nextFireDate);
+            if (!isNaN(fireDate.getTime())) {
+              const now = new Date();
+              // If fire date is in the past, filter it out (one-time alarms should be cleaned up after firing)
+              if (fireDate < now) {
+                console.log('[NativeAlarmsDebug] Filtering out past-due one-time alarm:', alarm.id, 'fired at:', fireDate.toISOString());
+                return false;
+              }
+            }
+          } catch (e) {
+            console.warn('[NativeAlarmsDebug] Error parsing nextFireDate for alarm:', alarm.id, e);
+          }
+        }
+        
         // Validate nextFireDate if present
         if (alarm.nextFireDate) {
           try {
@@ -63,8 +81,12 @@ export default function NativeAlarmsScreen() {
       
       // Sort by earliest next fire time (unknowns last) for easier debugging
       const sorted = [...validAlarms].sort((a, b) => {
-        const aTime = a.nextFireDate ? new Date(a.nextFireDate).getTime() : Number.POSITIVE_INFINITY;
-        const bTime = b.nextFireDate ? new Date(b.nextFireDate).getTime() : Number.POSITIVE_INFINITY;
+        const aTime = a.nextFireDate && !isNaN(a.nextFireDate.getTime()) 
+          ? a.nextFireDate.getTime() 
+          : Number.POSITIVE_INFINITY;
+        const bTime = b.nextFireDate && !isNaN(b.nextFireDate.getTime())
+          ? b.nextFireDate.getTime()
+          : Number.POSITIVE_INFINITY;
         if (aTime !== bTime) return aTime - bTime;
         return String(a.id).localeCompare(String(b.id));
       });
@@ -100,7 +122,7 @@ export default function NativeAlarmsScreen() {
 
   const renderAlarmItem = ({ item }: { item: ScheduledAlarm }) => {
     const isExpanded = expandedIds.has(item.id);
-    const nextFireStr = item.nextFireDate 
+    const nextFireStr = item.nextFireDate && !isNaN(item.nextFireDate.getTime())
       ? item.nextFireDate.toLocaleString()
       : 'Unknown';
 
@@ -112,7 +134,10 @@ export default function NativeAlarmsScreen() {
           activeOpacity={0.7}>
           <ThemedView style={styles.cardHeaderContent}>
             <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.6} style={styles.alarmId} selectable>
-              {item.id}
+              {item.config?.title || item.id}
+            </ThemedText>
+            <ThemedText maxFontSizeMultiplier={1.4} style={styles.alarmSubtitle} selectable>
+              ID: {item.id}
             </ThemedText>
             <ThemedText maxFontSizeMultiplier={1.6} style={styles.nextFire} selectable>
               Next Fire: {nextFireStr}
@@ -161,13 +186,23 @@ export default function NativeAlarmsScreen() {
               </ThemedView>
             )}
 
-            {item.nextFireDate && (
+            {item.nextFireDate && !isNaN(item.nextFireDate.getTime()) && (
               <ThemedView style={styles.section}>
                 <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.sectionTitle}>
                   Next Fire Date (ISO)
                 </ThemedText>
                 <ThemedText maxFontSizeMultiplier={1.4} style={styles.nextFire} selectable>
                   {item.nextFireDate.toISOString()}
+                </ThemedText>
+              </ThemedView>
+            )}
+            {item.nextFireDate && isNaN(item.nextFireDate.getTime()) && (
+              <ThemedView style={styles.section}>
+                <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.sectionTitle}>
+                  Next Fire Date (ISO)
+                </ThemedText>
+                <ThemedText maxFontSizeMultiplier={1.4} style={styles.nextFire} selectable>
+                  Invalid Date
                 </ThemedText>
               </ThemedView>
             )}
@@ -293,6 +328,11 @@ const styles = StyleSheet.create({
   },
   alarmId: {
     fontSize: 16,
+    marginBottom: 4,
+  },
+  alarmSubtitle: {
+    fontSize: 12,
+    opacity: 0.6,
     marginBottom: 4,
   },
   nextFire: {

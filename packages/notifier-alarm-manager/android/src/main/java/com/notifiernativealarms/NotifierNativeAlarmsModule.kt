@@ -1,6 +1,7 @@
 package com.notifiernativealarms
 
 import android.app.AlarmManager
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -225,6 +226,22 @@ class NotifierNativeAlarmsModule(private val reactContext: ReactApplicationConte
             } catch (e: Exception) {
                 promise.reject("SNOOZE_ALARM_ERROR", e.message, e)
             }
+        }
+    }
+
+    @ReactMethod
+    fun stopAlarmSoundAndDismiss(alarmId: String, promise: Promise) {
+        try {
+            // Stop alarm sound
+            AlarmSoundPlayer.stop(alarmId)
+
+            // Dismiss notification
+            val notificationManager = reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            notificationManager.cancel(alarmId.hashCode())
+
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("STOP_ALARM_ERROR", e.message, e)
         }
     }
 

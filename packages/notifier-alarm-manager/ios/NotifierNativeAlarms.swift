@@ -129,34 +129,13 @@ class NotifierNativeAlarms: RCTEventEmitter {
         NSLog("[NotifierNativeAlarms] No URL in main key. Related keys: %@", Array(allKeys))
         logger.warning("[NotifierNativeAlarms] No URL found in main key. Related UserDefaults keys: \(Array(allKeys))")
         
-        // Also check alarm-specific keys (stored when alarm is scheduled)
-        // This is critical for when app launches from closed state and perform() isn't called
-        let alarmKeys = allDict.keys.filter { $0.hasPrefix("thenotifier_pending_alarm_deeplink_url_") }
-        NSLog("[NotifierNativeAlarms] Found alarm-specific keys: %@", Array(alarmKeys))
-        logger.info("[NotifierNativeAlarms] Found alarm-specific keys: \(Array(alarmKeys))")
+        // Note: We do NOT check alarm-specific keys here. Those keys are pre-stored URLs
+        // for alarms that haven't fired yet. They should only be consumed when alarms
+        // are actually dismissed/fired (which sets the main key), not when app comes to foreground.
+        // This prevents premature navigation for scheduled alarms that haven't fired.
         
-        // Check all alarm-specific keys, not just the first one
-        // These are fallback URLs stored when alarms are scheduled (before they fire)
-        // We'll move them to the main key with a current timestamp when found
-        for alarmKey in alarmKeys {
-            if let alarmUrl = defaults.string(forKey: alarmKey), !alarmUrl.isEmpty {
-                NSLog("[NotifierNativeAlarms] Found URL in alarm-specific key %@: %@", alarmKey, alarmUrl)
-                logger.info("[NotifierNativeAlarms] Found URL in alarm-specific key \(alarmKey): \(alarmUrl)")
-                // Move it to the main key with current timestamp and return it
-                let now = Date().timeIntervalSince1970
-                defaults.set(alarmUrl, forKey: key)
-                defaults.set(now, forKey: "thenotifier_pending_alarm_deeplink_timestamp")
-                defaults.removeObject(forKey: alarmKey)
-                defaults.synchronize()
-                NSLog("[NotifierNativeAlarms] Moved URL from alarm-specific key to main key")
-                logger.info("[NotifierNativeAlarms] Moved URL from alarm-specific key \(alarmKey) to main key")
-                resolve(alarmUrl)
-                return
-            }
-        }
-        
-        NSLog("[NotifierNativeAlarms] No URL found in any UserDefaults key")
-        logger.warning("[NotifierNativeAlarms] No URL found in any UserDefaults key")
+        NSLog("[NotifierNativeAlarms] No URL found in main key")
+        logger.info("[NotifierNativeAlarms] No URL found in main key")
         resolve(nil)
     }
 

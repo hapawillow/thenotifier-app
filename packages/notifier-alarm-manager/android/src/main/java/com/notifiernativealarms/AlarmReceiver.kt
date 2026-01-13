@@ -61,6 +61,9 @@ class AlarmReceiver : BroadcastReceiver() {
         // Reschedule if recurring or interval
         if (scheduleType == "recurring" || scheduleType == "interval") {
             rescheduleAlarm(context, alarmId, isInexact)
+        } else if (scheduleType == "fixed") {
+            // One-time alarm: clean up after firing
+            cleanupOneTimeAlarm(context, alarmId, isInexact)
         }
     }
 
@@ -92,18 +95,45 @@ class AlarmReceiver : BroadcastReceiver() {
     ) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // Open action (tap) -> stop alarm sound, dismiss notification, and open deep link (if available)
-        val openIntent = Intent(context, AlarmActionReceiver::class.java).apply {
-            action = ACTION_OPEN
-            putExtra("alarmId", alarmId)
-            if (url != null) putExtra("url", url)
+        // Open action (tap) -> use Activity intent for reliable foregrounding.
+        // Cleanup (stop sound/dismiss) will be handled immediately in MainActivity on launch,
+        // and also via JS as a backup.
+        val packageName = context.packageName
+        val mainLaunchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+        val mainComponent = mainLaunchIntent?.component
+
+        val openPendingIntent = if (url != null && mainComponent != null) {
+            val openIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                component = mainComponent
+                addCategory(Intent.CATEGORY_DEFAULT)
+                addCategory(Intent.CATEGORY_BROWSABLE)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                putExtra("alarmId", alarmId)
+                putExtra("fromNotificationTap", true)
+            }
+            PendingIntent.getActivity(
+                context,
+                (alarmId + "_open").hashCode(),
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        } else {
+            // Fallback: use broadcast receiver if no URL or component available
+            val openIntent = Intent(context, AlarmActionReceiver::class.java).apply {
+                action = ACTION_OPEN
+                putExtra("alarmId", alarmId)
+                if (url != null) putExtra("url", url)
+            }
+            PendingIntent.getBroadcast(
+                context,
+                (alarmId + "_open").hashCode(),
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
         }
-        val openPendingIntent = PendingIntent.getBroadcast(
-            context,
-            (alarmId + "_open").hashCode(),
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
 
         // Dismiss action
         val dismissIntent = Intent(context, AlarmActionReceiver::class.java).apply {
@@ -213,6 +243,21 @@ class AlarmReceiver : BroadcastReceiver() {
         }
     }
 
+    private fun cleanupOneTimeAlarm(context: Context, alarmId: String, isInexact: Boolean) {
+        try {
+            // Cancel the alarm and remove from storage
+            if (isInexact) {
+                val fallback = NotificationFallback(context)
+                fallback.cancelAlarm(alarmId)
+            } else {
+                val exactManager = ExactAlarmManager(context)
+                exactManager.cancelAlarm(alarmId)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun getReactContext(context: Context): com.facebook.react.bridge.ReactApplicationContext? {
         return try {
             context.applicationContext as? com.facebook.react.bridge.ReactApplicationContext
@@ -271,46 +316,90 @@ class AlarmActionReceiver : BroadcastReceiver() {
             }
 
             AlarmReceiver.ACTION_OPEN -> {
+                // Always stop sound and dismiss notification FIRST
                 AlarmSoundPlayer.stop(alarmId)
                 val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.cancel(alarmId.hashCode())
 
-                val url = intent.getStringExtra("url")
-                val packageName = context.packageName
-                val mainLaunchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
-                val mainComponent = mainLaunchIntent?.component
-
-                // Use the app's main activity component to ensure it reliably comes to foreground from background.
-                // (Using setPackage on ACTION_VIEW can fail to resolve in some setups.)
-                val launchIntent = if (url != null && mainComponent != null) {
-                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                        component = mainComponent
-                        addCategory(Intent.CATEGORY_DEFAULT)
-                        addCategory(Intent.CATEGORY_BROWSABLE)
-                        // FLAG_ACTIVITY_NEW_TASK: Required for starting activity from non-activity context
-                        // FLAG_ACTIVITY_CLEAR_TOP: Clear activities on top of target
-                        // FLAG_ACTIVITY_SINGLE_TOP: Don't create new instance if already on top
-                        // FLAG_ACTIVITY_REORDER_TO_FRONT: Bring existing activity to front if it exists
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP or 
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                        putExtra("alarmId", alarmId)
-                    }
-                } else {
-                    mainLaunchIntent?.apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP or 
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                        putExtra("alarmId", alarmId)
-                        if (url != null) {
-                            putExtra("url", url)
+                // Check if this was triggered from MainActivity (app already in foreground)
+                // If so, skip launching Activity since it's already running
+                val skipActivityLaunch = intent.getBooleanExtra("skipActivityLaunch", false)
+                
+                if (!skipActivityLaunch) {
+                    // Launch Activity to bring app to foreground and handle deep link
+                    val url = intent.getStringExtra("url")
+                    val packageName = context.packageName
+                    val mainLaunchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+                    val mainComponent = mainLaunchIntent?.component
+                    
+                    // Use application context to ensure Activity launch works from BroadcastReceiver
+                    val appContext = context.applicationContext
+                    
+                    // Use explicit component to ensure reliable foregrounding from background
+                    // This is more reliable than setPackage() when app is in background
+                    val launchIntent = if (url != null && mainComponent != null) {
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                            component = mainComponent
+                            addCategory(Intent.CATEGORY_DEFAULT)
+                            addCategory(Intent.CATEGORY_BROWSABLE)
+                            // FLAG_ACTIVITY_NEW_TASK: Required for starting activity from non-activity context
+                            // FLAG_ACTIVITY_CLEAR_TOP: Clear activities on top of target and bring app to foreground
+                            // FLAG_ACTIVITY_SINGLE_TOP: Don't create new instance if already on top
+                            // FLAG_ACTIVITY_REORDER_TO_FRONT: Bring existing activity to front if it exists
+                            // These flags together ensure the app reliably comes to foreground
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            putExtra("alarmId", alarmId)
+                        }
+                    } else if (url != null) {
+                        // Fallback: try with setPackage if component is not available
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                            setPackage(packageName)
+                            addCategory(Intent.CATEGORY_DEFAULT)
+                            addCategory(Intent.CATEGORY_BROWSABLE)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            putExtra("alarmId", alarmId)
+                        }
+                    } else {
+                        // Fallback: launch app without deep link
+                        mainLaunchIntent?.apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            putExtra("alarmId", alarmId)
                         }
                     }
-                }
-                if (launchIntent != null) {
-                    context.startActivity(launchIntent)
+                    
+                    if (launchIntent != null) {
+                        try {
+                            // Use application context to ensure Activity launch works
+                            appContext.startActivity(launchIntent)
+                        } catch (e: Exception) {
+                            android.util.Log.e("AlarmReceiver", "Failed to start activity with deep link, trying fallback", e)
+                            // Fallback: try launching app directly
+                            try {
+                                val fallbackIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+                                fallbackIntent?.flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                        Intent.FLAG_ACTIVITY_CLEAR_TOP or 
+                                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                fallbackIntent?.putExtra("alarmId", alarmId)
+                                if (url != null) {
+                                    fallbackIntent?.putExtra("url", url)
+                                    fallbackIntent?.data = Uri.parse(url)
+                                }
+                                appContext.startActivity(fallbackIntent)
+                            } catch (e2: Exception) {
+                                android.util.Log.e("AlarmReceiver", "Failed to start fallback activity", e2)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -439,7 +528,7 @@ private fun showSnoozeCountdownNotification(context: Context, alarmId: String, a
  * - This uses RingtoneManager and attempts to loop on API 28+.
  * - Playback stops on open/dismiss/snooze actions.
  */
-private object AlarmSoundPlayer {
+object AlarmSoundPlayer {
     private val active = HashMap<String, android.media.Ringtone>()
 
     fun start(context: Context, alarmId: String, sound: String?) {

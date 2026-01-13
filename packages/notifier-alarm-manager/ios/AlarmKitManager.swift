@@ -166,12 +166,9 @@ class AlarmKitManager {
             logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (key: \(storageKey)): \(urlString)")
             UserDefaults.standard.set(urlString, forKey: storageKey)
             UserDefaults.standard.synchronize()
-            // Also store under the main key (for backward compatibility and easy lookup)
-            logger.info("[AlarmKitManager] Also storing under main key: \(PENDING_ALARM_DEEPLINK_KEY)")
-            UserDefaults.standard.set(urlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
-            // Store timestamp to validate freshness (prevent old deep links from triggering navigation)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY)
-            UserDefaults.standard.synchronize()
+            // Note: We do NOT store in the main key during scheduling. The main key should only
+            // be set when alarms are actually dismissed/fired, not when they're scheduled.
+            // This prevents premature navigation when app comes to foreground.
             logger.info("[AlarmKitManager] Deep link URL stored successfully for alarm: \(canonicalAlarmId)")
         } else {
             logger.warning("[AlarmKitManager] WARNING: Could not build deep link URL when scheduling alarm: \(canonicalAlarmId)")
@@ -276,6 +273,12 @@ class AlarmKitManager {
         }
         
         alarmMetadataStore.removeValue(forKey: id)
+        
+        // Clean up alarm-specific deep link key
+        let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(id)"
+        UserDefaults.standard.removeObject(forKey: storageKey)
+        UserDefaults.standard.synchronize()
+        logger.info("[AlarmKitManager] Cleaned up deep link key for cancelled alarm: \(id)")
     }
 
     func cancelAllAlarms() async throws {

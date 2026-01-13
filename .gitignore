@@ -31,6 +31,10 @@ yarn-error.*
 .DS_Store
 *.pem
 
+# builds
+*.ipa
+*.apk
+
 #
 # NOTE local env ARE ALLOWED for expo client's public envars
 #

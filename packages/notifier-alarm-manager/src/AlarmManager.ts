@@ -247,6 +247,14 @@ class AlarmManager implements INativeAlarmManager {
   }
 
   /**
+   * Stop alarm sound and dismiss notification (Android only)
+   * Used when app is brought to foreground from notification tap
+   */
+  async stopAlarmSoundAndDismiss(alarmId: string): Promise<void> {
+    await NativeAlarmModule.stopAlarmSoundAndDismiss?.(alarmId);
+  }
+
+  /**
    * Get alarm by ID
    */
   async getAlarm(id: string): Promise<ScheduledAlarm | null> {
