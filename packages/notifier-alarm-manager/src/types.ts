@@ -444,6 +444,14 @@ export interface NativeAlarmManager {
   cancelAlarmsByCategory(category: string): Promise<void>;
 
   /**
+   * Stop alarm sound and dismiss notification (Android only)
+   * Used when app is brought to foreground from notification tap
+   *
+   * @param alarmId - Alarm ID
+   */
+  stopAlarmSoundAndDismiss?(alarmId: string): Promise<void>;
+
+  /**
    * Get a specific scheduled alarm by ID
    *
    * @param id - Alarm ID

@@ -45,6 +45,9 @@ interface NativeAlarmsSpec {
   cancelAllAlarms(): Promise<void>;
   cancelAlarmsByCategory(category: string): Promise<void>;
 
+  // Actions
+  stopAlarmSoundAndDismiss?(alarmId: string): Promise<void>;
+
   // Query
   getAlarm(id: string): Promise<ScheduledAlarm | null>;
   getAllAlarms(): Promise<ScheduledAlarm[]>;
@@ -82,10 +85,32 @@ const NativeAlarmsModule = NativeModules.NotifierNativeAlarms
 
 /**
  * Event emitter for native events
+ * Only create if the module supports event listeners (has addListener method)
+ * This prevents warnings on Android where the module may not implement the required methods
  */
-const eventEmitter = new NativeEventEmitter(
-  NativeModules.NotifierNativeAlarms || undefined
-);
+const createEventEmitter = () => {
+  const module = NativeModules.NotifierNativeAlarms;
+  if (!module) {
+    return null;
+  }
+  
+    // Check if module supports event listeners (required for NativeEventEmitter)
+    // On Android, some modules may not implement addListener/removeListeners
+    // This is expected behavior - Android uses direct intent handling instead of events
+    if (Platform.OS === 'android' && typeof module.addListener !== 'function') {
+      // Don't log warning - this is expected on Android
+      return null;
+    }
+  
+  try {
+    return new NativeEventEmitter(module);
+  } catch (error) {
+    console.warn('[NativeAlarmModule] Failed to create NativeEventEmitter:', error);
+    return null;
+  }
+};
+
+const eventEmitter = createEventEmitter();
 
 /**
  * Event names from native module
@@ -244,6 +269,25 @@ export const NativeAlarmModule = {
   },
 
   /**
+   * Stop alarm sound and dismiss notification (Android only)
+   */
+  async stopAlarmSoundAndDismiss(alarmId: string): Promise<void> {
+    if (Platform.OS !== 'android') {
+      // iOS doesn't need this - AlarmKit handles it automatically
+      return;
+    }
+    try {
+      await NativeAlarmsModule.stopAlarmSoundAndDismiss?.(alarmId);
+    } catch (error) {
+      throw new AlarmError(
+        AlarmErrorCode.SYSTEM_ERROR,
+        'Failed to stop alarm sound and dismiss notification',
+        error
+      );
+    }
+  },
+
+  /**
    * Get alarm by ID
    */
   async getAlarm(id: string): Promise<ScheduledAlarm | null> {
@@ -252,9 +296,33 @@ export const NativeAlarmModule = {
 
       if (!alarm) return null;
 
+      // Safely convert nextFireDate, handling invalid dates
+      // For debugging purposes, use a fallback date instead of returning null
+      let nextFireDate: Date;
+      
+      if (alarm.nextFireDate) {
+        // Handle both string and number formats (Android returns string, but React Native might convert)
+        const dateValue = typeof alarm.nextFireDate === 'string' 
+          ? parseInt(alarm.nextFireDate, 10) 
+          : alarm.nextFireDate;
+        
+        const date = new Date(dateValue);
+        if (!isNaN(date.getTime())) {
+          nextFireDate = date;
+        } else {
+          console.warn('[NativeAlarmModule] Invalid nextFireDate for alarm:', id, alarm.nextFireDate, 'using fallback date');
+          // Use epoch as fallback so alarm still appears in debug screen
+          nextFireDate = new Date(0);
+        }
+      } else {
+        console.warn('[NativeAlarmModule] Missing nextFireDate for alarm:', id, 'using fallback date');
+        // Use epoch as fallback so alarm still appears in debug screen
+        nextFireDate = new Date(0);
+      }
+      
       return {
         ...alarm,
-        nextFireDate: new Date(alarm.nextFireDate),
+        nextFireDate,
       };
     } catch (error) {
       throw new AlarmError(
@@ -272,10 +340,51 @@ export const NativeAlarmModule = {
     try {
       const alarms = await NativeAlarmsModule.getAllAlarms();
 
-      return alarms.map(alarm => ({
-        ...alarm,
-        nextFireDate: new Date(alarm.nextFireDate),
-      }));
+      return alarms.map(alarm => {
+        // Safely convert nextFireDate, handling invalid dates
+        // For debugging purposes, use a fallback date instead of filtering out alarms
+        let nextFireDate: Date;
+        
+        if (alarm.nextFireDate) {
+          // Handle both string (ISO8601) and number (timestamp) formats
+          let date: Date;
+          if (typeof alarm.nextFireDate === 'string') {
+            // iOS returns ISO8601 strings like "2025-01-15T10:30:00Z"
+            // Parse as ISO8601 first (this is the correct format from iOS)
+            date = new Date(alarm.nextFireDate);
+            // If that fails (NaN), it might be a numeric string, try parsing as number
+            if (isNaN(date.getTime())) {
+              const numValue = parseFloat(alarm.nextFireDate);
+              if (!isNaN(numValue)) {
+                // If it's a small number (< year 2000 in seconds), assume seconds, otherwise milliseconds
+                date = numValue < 946684800000 ? new Date(numValue * 1000) : new Date(numValue);
+              }
+            }
+          } else {
+            // Number format (timestamp in milliseconds or seconds)
+            const numValue = typeof alarm.nextFireDate === 'number' ? alarm.nextFireDate : Number(alarm.nextFireDate);
+            // If it's a small number (< year 2000 in seconds), assume it's seconds, otherwise milliseconds
+            date = numValue < 946684800000 ? new Date(numValue * 1000) : new Date(numValue);
+          }
+          
+          if (!isNaN(date.getTime()) && date.getTime() > 0) {
+            nextFireDate = date;
+          } else {
+            console.warn('[NativeAlarmModule] Invalid nextFireDate for alarm:', alarm.id, alarm.nextFireDate, 'using fallback date');
+            // Use epoch as fallback so alarm still appears in debug screen
+            nextFireDate = new Date(0);
+          }
+        } else {
+          console.warn('[NativeAlarmModule] Missing nextFireDate for alarm:', alarm.id, 'using fallback date');
+          // Use epoch as fallback so alarm still appears in debug screen
+          nextFireDate = new Date(0);
+        }
+        
+        return {
+          ...alarm,
+          nextFireDate,
+        };
+      });
     } catch (error) {
       throw new AlarmError(
         AlarmErrorCode.SYSTEM_ERROR,
@@ -292,10 +401,36 @@ export const NativeAlarmModule = {
     try {
       const alarms = await NativeAlarmsModule.getAlarmsByCategory(category);
 
-      return alarms.map(alarm => ({
-        ...alarm,
-        nextFireDate: new Date(alarm.nextFireDate),
-      }));
+      return alarms.map(alarm => {
+        // Safely convert nextFireDate, handling invalid dates
+        // For debugging purposes, use a fallback date instead of filtering out alarms
+        let nextFireDate: Date;
+        
+        if (alarm.nextFireDate) {
+          // Handle both string and number formats (Android returns string, but React Native might convert)
+          const dateValue = typeof alarm.nextFireDate === 'string' 
+            ? parseInt(alarm.nextFireDate, 10) 
+            : alarm.nextFireDate;
+          
+          const date = new Date(dateValue);
+          if (!isNaN(date.getTime())) {
+            nextFireDate = date;
+          } else {
+            console.warn('[NativeAlarmModule] Invalid nextFireDate for alarm:', alarm.id, alarm.nextFireDate, 'using fallback date');
+            // Use epoch as fallback so alarm still appears in debug screen
+            nextFireDate = new Date(0);
+          }
+        } else {
+          console.warn('[NativeAlarmModule] Missing nextFireDate for alarm:', alarm.id, 'using fallback date');
+          // Use epoch as fallback so alarm still appears in debug screen
+          nextFireDate = new Date(0);
+        }
+        
+        return {
+          ...alarm,
+          nextFireDate,
+        };
+      });
     } catch (error) {
       throw new AlarmError(
         AlarmErrorCode.SYSTEM_ERROR,
@@ -354,6 +489,11 @@ export const NativeAlarmModule = {
    * Subscribe to alarm fired events
    */
   onAlarmFired(callback: (event: AlarmFiredEvent) => void): () => void {
+    if (!eventEmitter) {
+      console.warn('[NativeAlarmModule] Event emitter not available, cannot subscribe to alarm fired events');
+      return () => {}; // Return no-op unsubscribe function
+    }
+    
     const subscription = eventEmitter.addListener(
       EVENTS.ALARM_FIRED_EVENT,
       (event: any) => {
@@ -378,6 +518,11 @@ export const NativeAlarmModule = {
   onPermissionChanged(
     callback: (event: PermissionChangedEvent) => void
   ): () => void {
+    if (!eventEmitter) {
+      console.warn('[NativeAlarmModule] Event emitter not available, cannot subscribe to permission changed events');
+      return () => {}; // Return no-op unsubscribe function
+    }
+    
     const subscription = eventEmitter.addListener(
       EVENTS.PERMISSION_CHANGED_EVENT,
       callback
@@ -390,6 +535,12 @@ export const NativeAlarmModule = {
    * Listen for native deep link requests (e.g. alarm dismissed).
    */
   onDeepLink(callback: (event: DeepLinkEvent) => void): () => void {
+    if (!eventEmitter) {
+      // Don't log warning - this is expected on Android where events aren't used
+      // Android handles deep links via intent handling instead
+      return () => {}; // Return no-op unsubscribe function
+    }
+    
     const sub = eventEmitter.addListener(
       (EVENTS as any).DEEP_LINK_EVENT || 'NotifierNativeAlarms_DeepLink',
       (payload: any) => {

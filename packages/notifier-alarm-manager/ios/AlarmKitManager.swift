@@ -6,6 +6,7 @@ import AppIntents
 import OSLog
 
 private let PENDING_ALARM_DEEPLINK_KEY = "thenotifier_pending_alarm_deeplink_url"
+private let PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY = "thenotifier_pending_alarm_deeplink_timestamp"
 private let logger = Logger(subsystem: "com.thenotifier.alarmkit", category: "AlarmKitManager")
 
 /// Live Activity intent used by AlarmKit to trigger the secondary (Snooze) action.
@@ -42,11 +43,11 @@ struct AlarmKitStopIntent: LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         guard let uuid = UUID(uuidString: alarmID) else {
-            logger.error("[AlarmKitStopIntent] Invalid alarm ID: \(alarmID)")
+            logger.error("[AlarmKitStopIntent] Invalid alarm ID: \(alarmID, privacy: .public)")
             return .result()
         }
         
-        logger.info("[AlarmKitStopIntent] perform() called for alarm: \(alarmID), url parameter: \(url ?? "nil")")
+        logger.info("[AlarmKitStopIntent] perform() called for alarm: \(alarmID, privacy: .public), url parameter: \(url ?? "nil", privacy: .public)")
         
         // Get URL from parameter, or fallback to UserDefaults (stored when alarm was scheduled)
         var urlString = url
@@ -65,8 +66,10 @@ struct AlarmKitStopIntent: LiveActivityIntent {
         // Persist the deep link so JS can consume it on next app resume/launch.
         // Store in UserDefaults as fallback for when perform() isn't called (app launches from closed state).
         if let finalUrlString = urlString, !finalUrlString.isEmpty {
-            logger.info("[AlarmKitStopIntent] Storing deep link URL in UserDefaults: \(finalUrlString)")
+            logger.info("[AlarmKitStopIntent] Storing deep link URL in UserDefaults: \(finalUrlString, privacy: .public)")
             UserDefaults.standard.set(finalUrlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
+            // Store timestamp to validate freshness
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY)
             UserDefaults.standard.synchronize() // Force immediate write
             
             // Verify it was stored correctly
@@ -74,13 +77,13 @@ struct AlarmKitStopIntent: LiveActivityIntent {
             if verifyUrl == finalUrlString {
                 logger.info("[AlarmKitStopIntent] Deep link URL stored and verified successfully")
             } else {
-                logger.error("[AlarmKitStopIntent] ERROR: URL storage verification failed! Stored: \(finalUrlString), Retrieved: \(verifyUrl ?? "nil")")
+                logger.error("[AlarmKitStopIntent] ERROR: URL storage verification failed! Stored: \(finalUrlString, privacy: .public), Retrieved: \(verifyUrl ?? "nil", privacy: .public)")
             }
             
             // Note: The monitorAlarms() function will detect the dismissal and call the delegate
             // to emit the deep link event to JS. We just store the URL here.
         } else {
-            logger.warning("[AlarmKitStopIntent] WARNING: No URL available to store (parameter: \(url ?? "nil"), UserDefaults: \(UserDefaults.standard.string(forKey: PENDING_ALARM_DEEPLINK_KEY) ?? "nil"))")
+            logger.warning("[AlarmKitStopIntent] WARNING: No URL available to store (parameter: \(url ?? "nil", privacy: .public), UserDefaults: \(UserDefaults.standard.string(forKey: PENDING_ALARM_DEEPLINK_KEY) ?? "nil", privacy: .public))")
         }
 
         // Best-effort stop (the system may already be dismissing UI).
@@ -91,6 +94,7 @@ struct AlarmKitStopIntent: LiveActivityIntent {
 }
 
 // Metadata for alarms
+@available(iOS 26.0, *)
 nonisolated struct BasicAlarmMetadata: AlarmMetadata {
     // Empty metadata for basic alarms
 }
@@ -102,6 +106,8 @@ class AlarmKitManager {
     private let manager = AlarmManager.shared
     private var alarmMetadataStore: [String: [String: Any]] = [:]
     private var lastPresentationModeByAlarmId: [String: String] = [:]
+    private var currentAlarmIds: Set<String> = []
+    private var currentAlarmsFromKit: [String: Alarm] = [:]
 
     init() {
         // Start monitoring alarms
@@ -140,11 +146,42 @@ class AlarmKitManager {
         let uuid = UUID(uuidString: alarmId) ?? UUID()
         let canonicalAlarmId = uuid.uuidString
 
+        // Serialize schedule to ensure date fields are numbers (not Date objects) before storing
+        let serializedSchedule = serializeSchedule(schedule)
+        
         // Store metadata using canonical UUID string (AlarmKit reports ids using uuidString which may differ in casing).
         alarmMetadataStore[canonicalAlarmId] = [
-            "schedule": schedule,
+            "schedule": serializedSchedule,
             "config": config
         ]
+        
+        // Also persist metadata to UserDefaults so it survives app restarts
+        // Serialize schedule first to ensure all date fields are numbers (property-list compatible)
+        // Ensure config is also a proper NSDictionary (not a Swift Dictionary) for UserDefaults compatibility
+        let metadataKey = "alarm_metadata_\(canonicalAlarmId)"
+        let configDict = config as? NSDictionary ?? config as NSDictionary
+        let metadataToStore: [String: Any] = [
+            "schedule": serializedSchedule,
+            "config": configDict
+        ]
+        
+        // Log what we're storing for debugging
+        let configKeys = configDict.allKeys.compactMap { $0 as? String }.joined(separator: ", ")
+        let configTitle = configDict["title"] as? String ?? "nil"
+        let configBody = configDict["body"] as? String ?? "nil"
+        logger.info("[AlarmKitManager] Persisting metadata to UserDefaults for alarm: \(canonicalAlarmId, privacy: .public). Config keys: [\(configKeys, privacy: .public)], title: \(configTitle, privacy: .public), body: \(configBody, privacy: .public)")
+        
+        UserDefaults.standard.set(metadataToStore as NSDictionary, forKey: metadataKey)
+        UserDefaults.standard.synchronize()
+        
+        // Verify it was stored correctly
+        if let verifyMetadata = UserDefaults.standard.dictionary(forKey: metadataKey),
+           let verifyConfig = verifyMetadata["config"] as? NSDictionary {
+            let verifyKeys = verifyConfig.allKeys.compactMap { $0 as? String }.joined(separator: ", ")
+            logger.info("[AlarmKitManager] Verified metadata storage for \(canonicalAlarmId, privacy: .public). Stored config keys: [\(verifyKeys, privacy: .public)]")
+        } else {
+            logger.error("[AlarmKitManager] ERROR: Failed to verify metadata storage for \(canonicalAlarmId)")
+        }
 
         // AlarmKit supports true alarm scheduling via AlarmConfiguration.alarm(schedule:...)
         // Use alarm schedules for fixed/recurring to avoid timer limitations and ensure calendar dates are honored.
@@ -153,7 +190,7 @@ class AlarmKitManager {
 
         // Build deep link to Notification Detail (scheme URL) using the strict data contract.
         let deepLinkUrlString: String? = buildDeepLinkUrlString(config: config)
-        logger.info("[AlarmKitManager] Built deep link URL: \(deepLinkUrlString ?? "nil")")
+        logger.info("[AlarmKitManager] Built deep link URL: \(deepLinkUrlString ?? "nil", privacy: .public)")
         
         // Store the deep link URL in UserDefaults NOW (when scheduling), so it's available even if
         // perform() isn't called when the app launches from a closed state.
@@ -163,11 +200,10 @@ class AlarmKitManager {
             logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (key: \(storageKey)): \(urlString)")
             UserDefaults.standard.set(urlString, forKey: storageKey)
             UserDefaults.standard.synchronize()
-            // Also store under the main key (for backward compatibility and easy lookup)
-            logger.info("[AlarmKitManager] Also storing under main key: \(PENDING_ALARM_DEEPLINK_KEY)")
-            UserDefaults.standard.set(urlString, forKey: PENDING_ALARM_DEEPLINK_KEY)
-            UserDefaults.standard.synchronize()
-            logger.info("[AlarmKitManager] Deep link URL stored successfully for alarm: \(canonicalAlarmId)")
+            // Note: We do NOT store in the main key during scheduling. The main key should only
+            // be set when alarms are actually dismissed/fired, not when they're scheduled.
+            // This prevents premature navigation when app comes to foreground.
+            logger.info("[AlarmKitManager] Deep link URL stored successfully for alarm: \(canonicalAlarmId, privacy: .public)")
         } else {
             logger.warning("[AlarmKitManager] WARNING: Could not build deep link URL when scheduling alarm: \(canonicalAlarmId)")
         }
@@ -185,7 +221,7 @@ class AlarmKitManager {
         var stopIntentValue = AlarmKitStopIntent()
         stopIntentValue.alarmID = uuid.uuidString
         stopIntentValue.url = deepLinkUrlString
-        logger.info("[AlarmKitManager] Set stopIntent.url to: \(stopIntentValue.url ?? "nil")")
+        logger.info("[AlarmKitManager] Set stopIntent.url to: \(stopIntentValue.url ?? "nil", privacy: .public)")
         let stopIntent: (any LiveActivityIntent)? = stopIntentValue
 
         let secondaryIntent: (any LiveActivityIntent)? = {
@@ -230,9 +266,7 @@ class AlarmKitManager {
 
         let nextFireDate = resolveNextFireDateFromAlarmKitSchedule(schedule: alarmSchedule, now: now) ?? now
 
-        // Serialize schedule to ensure date fields are numbers (not Date objects)
-        let serializedSchedule = serializeSchedule(schedule)
-
+        // Schedule is already serialized above for persistence
         return [
             "id": canonicalAlarmId,
             "schedule": serializedSchedule,
@@ -271,6 +305,16 @@ class AlarmKitManager {
         }
         
         alarmMetadataStore.removeValue(forKey: id)
+        
+        // Clean up alarm-specific deep link key
+        let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(id)"
+        UserDefaults.standard.removeObject(forKey: storageKey)
+        
+        // Also clean up persisted metadata
+        let metadataKey = "alarm_metadata_\(id)"
+        UserDefaults.standard.removeObject(forKey: metadataKey)
+        UserDefaults.standard.synchronize()
+        logger.info("[AlarmKitManager] Cleaned up deep link key and metadata for cancelled alarm: \(id, privacy: .public)")
     }
 
     func cancelAllAlarms() async throws {
@@ -325,13 +369,676 @@ class AlarmKitManager {
 
     func getAllAlarms() async throws -> [[String: Any]] {
         var alarms: [[String: Any]] = []
-
-        for (id, _) in alarmMetadataStore {
-            if let alarm = try await getAlarm(id: id) {
-                alarms.append(alarm)
+        var addedAlarmIds = Set<String>()
+        
+        // Use currentAlarmsFromKit (populated by monitorAlarms())
+        // Note: If this is empty, monitorAlarms() hasn't received updates yet
+        // In that case, we'll still process alarms from metadata store
+        let alarmsFromKit = currentAlarmsFromKit
+        
+        // Restore metadata from UserDefaults for ALL alarms that have persisted metadata
+        // This handles alarms scheduled before app restart, even if they're not in currentAlarmsFromKit yet
+        // Check all UserDefaults keys that start with "alarm_metadata_"
+        let defaults = UserDefaults.standard
+        let allKeys = defaults.dictionaryRepresentation().keys
+        for key in allKeys {
+            if key.hasPrefix("alarm_metadata_") {
+                let alarmId = String(key.dropFirst("alarm_metadata_".count))
+                let canonicalId = UUID(uuidString: alarmId)?.uuidString ?? alarmId
+                
+                // Check if already in memory store (case-insensitive)
+                var alreadyRestored = false
+                let lowerAlarmId = alarmId.lowercased()
+                let lowerCanonicalId = canonicalId.lowercased()
+                for (storedKey, _) in alarmMetadataStore {
+                    if storedKey.lowercased() == lowerCanonicalId || storedKey.lowercased() == lowerAlarmId {
+                        alreadyRestored = true
+                        break
+                    }
+                }
+                
+                // If not already in memory store, restore it
+                if !alreadyRestored {
+                    if let restoredMetadata = defaults.dictionary(forKey: key) {
+                        // Verify config is present and is a dictionary
+                        if let config = restoredMetadata["config"] as? NSDictionary {
+                            let configKeys = config.allKeys.compactMap { $0 as? String }.joined(separator: ", ")
+                            logger.info("[AlarmKitManager] Restored metadata from UserDefaults during initial scan: \(key, privacy: .public) -> \(canonicalId, privacy: .public). Config keys: [\(configKeys, privacy: .public)]")
+                        } else {
+                            logger.warning("[AlarmKitManager] Restored metadata for \(canonicalId) but config is missing or not a dictionary. Config type: \(type(of: restoredMetadata["config"] ?? NSNull()))")
+                        }
+                        alarmMetadataStore[canonicalId] = restoredMetadata
+                    }
+                }
             }
         }
-
+        
+        // Also restore metadata for alarms currently in AlarmKit (with case-insensitive matching)
+        for (alarmId, _) in alarmsFromKit {
+            let canonicalId = UUID(uuidString: alarmId)?.uuidString ?? alarmId
+            let lowerAlarmId = alarmId.lowercased()
+            let lowerCanonicalId = canonicalId.lowercased()
+            
+            // Check if already in memory store (case-insensitive)
+            var alreadyRestored = false
+            for (storedKey, _) in alarmMetadataStore {
+                if storedKey.lowercased() == lowerCanonicalId || storedKey.lowercased() == lowerAlarmId {
+                    alreadyRestored = true
+                    break
+                }
+            }
+            
+            // If not in memory store, try to restore from UserDefaults
+            if !alreadyRestored {
+                let metadataKey = "alarm_metadata_\(canonicalId)"
+                if let restoredMetadata = defaults.dictionary(forKey: metadataKey) {
+                    alarmMetadataStore[canonicalId] = restoredMetadata
+                    logger.info("[AlarmKitManager] Restored metadata for AlarmKit alarm \(canonicalId, privacy: .public) using canonical ID")
+                } else {
+                    // Try with original ID too
+                    let metadataKey2 = "alarm_metadata_\(alarmId)"
+                    if let restoredMetadata = defaults.dictionary(forKey: metadataKey2) {
+                        alarmMetadataStore[canonicalId] = restoredMetadata
+                        logger.info("[AlarmKitManager] Restored metadata for AlarmKit alarm \(canonicalId) using original ID")
+                    } else {
+                        // Try case-insensitive search in UserDefaults
+                        for key in allKeys {
+                            if key.hasPrefix("alarm_metadata_") {
+                                let storedId = String(key.dropFirst("alarm_metadata_".count))
+                                if storedId.lowercased() == lowerCanonicalId || storedId.lowercased() == lowerAlarmId {
+                                    if let restoredMetadata = defaults.dictionary(forKey: key) {
+                                        alarmMetadataStore[canonicalId] = restoredMetadata
+                                        logger.info("[AlarmKitManager] Restored metadata for AlarmKit alarm \(canonicalId, privacy: .public) using case-insensitive match: \(key, privacy: .public)")
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Process alarms from metadata store first (these have full information)
+        // Include ALL alarms from metadata store, even if they're not in alarmsFromKit yet
+        for (storedId, metadata) in alarmMetadataStore {
+            guard let schedule = metadata["schedule"] as? NSDictionary,
+                  let config = metadata["config"] as? NSDictionary else {
+                logger.warning("[AlarmKitManager] Skipping alarm \(storedId, privacy: .public) in metadata store - missing schedule or config. Metadata keys: \(Array(metadata.keys).joined(separator: ", "), privacy: .public)")
+                continue
+            }
+            
+            logger.info("[AlarmKitManager] Processing alarm from metadata store: \(storedId, privacy: .public)")
+            
+            // Check if config has title/body - if not, try to extract from deep link URL
+            var finalConfig = config
+            let configTitle = config["title"] as? String
+            let configBody = config["body"] as? String ?? config["message"] as? String
+            
+            if configTitle == nil || configTitle!.isEmpty || configBody == nil || configBody!.isEmpty {
+                logger.warning("[AlarmKitManager] Alarm \(storedId, privacy: .public) config missing title/body, attempting to extract from deep link URL")
+                
+                // Try to extract from deep link URL
+                let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(storedId)"
+                var deepLinkUrl = UserDefaults.standard.string(forKey: storageKey)
+                
+                // Try case-insensitive search
+                if deepLinkUrl == nil || deepLinkUrl!.isEmpty {
+                    let defaults = UserDefaults.standard
+                    let allKeys = defaults.dictionaryRepresentation().keys
+                    for key in allKeys {
+                        if key.hasPrefix(PENDING_ALARM_DEEPLINK_KEY + "_") {
+                            let storedIdFromKey = String(key.dropFirst((PENDING_ALARM_DEEPLINK_KEY + "_").count))
+                            if storedIdFromKey.lowercased() == storedId.lowercased() {
+                                deepLinkUrl = defaults.string(forKey: key)
+                                if deepLinkUrl != nil && !deepLinkUrl!.isEmpty {
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Parse deep link URL if found
+                if let urlString = deepLinkUrl, !urlString.isEmpty,
+                   let url = URL(string: urlString),
+                   let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                   let queryItems = components.queryItems {
+                    var extractedTitle = configTitle
+                    var extractedBody = configBody
+                    
+                    for item in queryItems {
+                        if item.name == "title", let value = item.value, !value.isEmpty {
+                            extractedTitle = value
+                        } else if item.name == "message", let value = item.value, !value.isEmpty {
+                            extractedBody = value
+                        }
+                    }
+                    
+                    // Create a new config dictionary with extracted values
+                    if extractedTitle != nil || extractedBody != nil {
+                        let mutableConfig = NSMutableDictionary(dictionary: config)
+                        if let title = extractedTitle, !title.isEmpty {
+                            mutableConfig["title"] = title
+                        }
+                        if let body = extractedBody, !body.isEmpty {
+                            mutableConfig["body"] = body
+                        }
+                        finalConfig = mutableConfig
+                            logger.info("[AlarmKitManager] Fixed config for alarm \(storedId, privacy: .public) using deep link URL. Title: \(extractedTitle ?? "nil", privacy: .public), Body: \(extractedBody ?? "nil", privacy: .public)")
+                    }
+                }
+            }
+            
+            let serializedSchedule = serializeSchedule(schedule)
+            
+            // Try to get next fire date from AlarmKit Alarm object if available
+            // This is more accurate than calculateDuration() and handles edge cases
+            var nextFireDate: Date
+            var alarmKitAlarm: Alarm? = alarmsFromKit[storedId]
+            
+            // Try case-insensitive lookup if direct lookup failed
+            if alarmKitAlarm == nil {
+                for (key, alarm) in alarmsFromKit {
+                    if key.lowercased() == storedId.lowercased() {
+                        alarmKitAlarm = alarm
+                        break
+                    }
+                }
+            }
+            
+            if let kitAlarm = alarmKitAlarm {
+                // Use AlarmKit's schedule to get accurate next fire date
+                if let kitFireDate = resolveNextFireDateFromAlarmKitSchedule(schedule: kitAlarm.schedule, now: Date.now) {
+                    // Validate the date is not epoch
+                    if kitFireDate.timeIntervalSince1970 > 0 {
+                        nextFireDate = kitFireDate
+                    } else {
+                        // Invalid date, fallback to calculateDuration
+                        let duration = calculateDuration(schedule: schedule)
+                        let calculatedDate = Date.now.addingTimeInterval(duration)
+                        nextFireDate = (calculatedDate.timeIntervalSince1970 > 0 && calculatedDate > Date.now) 
+                            ? calculatedDate 
+                            : Date.now.addingTimeInterval(3600)
+                    }
+                } else {
+                    // resolveNextFireDateFromAlarmKitSchedule returned nil, use calculateDuration
+                    let duration = calculateDuration(schedule: schedule)
+                    let calculatedDate = Date.now.addingTimeInterval(duration)
+                    // Ensure date is valid and in the future
+                    if calculatedDate.timeIntervalSince1970 > 0 && calculatedDate > Date.now {
+                        nextFireDate = calculatedDate
+                    } else {
+                        // If calculation failed, use a safe fallback (1 hour from now)
+                        nextFireDate = Date.now.addingTimeInterval(3600)
+                    }
+                }
+            } else {
+                // No AlarmKit alarm found, use calculateDuration
+                let duration = calculateDuration(schedule: schedule)
+                let calculatedDate = Date.now.addingTimeInterval(duration)
+                // Ensure date is valid and in the future
+                if calculatedDate.timeIntervalSince1970 > 0 && calculatedDate > Date.now {
+                    nextFireDate = calculatedDate
+                } else {
+                    // If calculation failed, use a safe fallback (1 hour from now)
+                    nextFireDate = Date.now.addingTimeInterval(3600)
+                }
+            }
+            
+            let alarmDict: [String: Any] = [
+                "id": storedId,
+                "schedule": serializedSchedule,
+                "config": finalConfig,
+                "nextFireDate": ISO8601DateFormatter().string(from: nextFireDate),
+                "capability": "native_alarms",
+                "isActive": true,
+                "platformAlarmId": storedId
+            ]
+            addedAlarmIds.insert(storedId)
+            addedAlarmIds.insert(storedId.lowercased())
+            alarms.append(alarmDict)
+        }
+        
+        // Then process alarms from AlarmKit that aren't in metadata store
+        for (alarmId, alarmKitAlarm) in alarmsFromKit {
+            let canonicalId = UUID(uuidString: alarmId)?.uuidString ?? alarmId
+            
+            // Skip if already added (case-insensitive check)
+            let lowerAlarmId = alarmId.lowercased()
+            let lowerCanonicalId = canonicalId.lowercased()
+            if addedAlarmIds.contains(alarmId) || addedAlarmIds.contains(canonicalId) ||
+               addedAlarmIds.contains(lowerAlarmId) || addedAlarmIds.contains(lowerCanonicalId) {
+                continue
+            }
+            
+            // Try to find metadata (case-insensitive lookup)
+            var foundMetadata: [String: Any]? = nil
+            for (key, value) in alarmMetadataStore {
+                let lowerKey = key.lowercased()
+                if lowerKey == lowerCanonicalId || lowerKey == lowerAlarmId {
+                    foundMetadata = value
+                    logger.info("[AlarmKitManager] Found metadata for alarm \(canonicalId, privacy: .public) using key: \(key, privacy: .public)")
+                    break
+                }
+            }
+            
+            // If not found in memory store, try to restore from UserDefaults with various ID formats
+            if foundMetadata == nil {
+                // Try canonical ID first
+                let metadataKey = "alarm_metadata_\(canonicalId)"
+                if let restoredMetadata = UserDefaults.standard.dictionary(forKey: metadataKey) {
+                    foundMetadata = restoredMetadata
+                    alarmMetadataStore[canonicalId] = restoredMetadata
+                    logger.info("[AlarmKitManager] Restored metadata from UserDefaults for alarm \(canonicalId) using key: \(metadataKey)")
+                } else {
+                    // Try original ID
+                    let metadataKey2 = "alarm_metadata_\(alarmId)"
+                    if let restoredMetadata = UserDefaults.standard.dictionary(forKey: metadataKey2) {
+                        foundMetadata = restoredMetadata
+                        alarmMetadataStore[canonicalId] = restoredMetadata
+                        logger.info("[AlarmKitManager] Restored metadata from UserDefaults for alarm \(canonicalId, privacy: .public) using key: \(metadataKey2, privacy: .public)")
+                    } else {
+                        // Try case-insensitive search in UserDefaults
+                        let defaults = UserDefaults.standard
+                        let allKeys = defaults.dictionaryRepresentation().keys
+                        for key in allKeys {
+                            if key.hasPrefix("alarm_metadata_") {
+                                let storedId = String(key.dropFirst("alarm_metadata_".count))
+                                if storedId.lowercased() == lowerCanonicalId || storedId.lowercased() == lowerAlarmId {
+                                    if let restoredMetadata = defaults.dictionary(forKey: key) {
+                                        foundMetadata = restoredMetadata
+                                        alarmMetadataStore[canonicalId] = restoredMetadata
+                                        logger.info("[AlarmKitManager] Restored metadata from UserDefaults for alarm \(canonicalId, privacy: .public) using case-insensitive match: \(key, privacy: .public)")
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if foundMetadata == nil {
+                let availableKeys = Array(alarmMetadataStore.keys).joined(separator: ", ")
+                logger.warning("[AlarmKitManager] No metadata found for alarm \(canonicalId, privacy: .public) (original ID: \(alarmId, privacy: .public)). Available metadata keys: \(availableKeys, privacy: .public)")
+            }
+            
+            // Get next fire date from AlarmKit Alarm object (most accurate)
+            let nextFireDate: Date
+            if let kitFireDate = resolveNextFireDateFromAlarmKitSchedule(schedule: alarmKitAlarm.schedule, now: Date.now) {
+                // Ensure date is valid (not epoch) and in the future
+                let now = Date.now
+                if kitFireDate.timeIntervalSince1970 > 0 && kitFireDate > now {
+                    nextFireDate = kitFireDate
+                } else if kitFireDate.timeIntervalSince1970 > 0 {
+                    // Date is valid but in the past, use it anyway (might be a recurring alarm)
+                    nextFireDate = kitFireDate
+                } else {
+                    // Invalid date (epoch), use safe fallback
+                    nextFireDate = now.addingTimeInterval(3600)
+                }
+            } else {
+                // resolveNextFireDateFromAlarmKitSchedule returned nil
+                // Try to extract date from the schedule directly
+                switch alarmKitAlarm.schedule {
+                case .fixed(let date):
+                    // Use the fixed date directly
+                    if date.timeIntervalSince1970 > 0 {
+                        nextFireDate = date
+                    } else {
+                        nextFireDate = Date.now.addingTimeInterval(3600)
+                    }
+                case .relative(let rel):
+                    // Calculate next occurrence from relative schedule
+                    let hour = rel.time.hour
+                    let minute = rel.time.minute
+                    var calendar = Calendar.current
+                    calendar.timeZone = TimeZone.current
+                    let now = Date.now
+                    
+                    var components = calendar.dateComponents([.year, .month, .day], from: now)
+                    components.hour = hour
+                    components.minute = minute
+                    components.second = 0
+                    
+                    if let baseDate = calendar.date(from: components) {
+                        if baseDate > now {
+                            nextFireDate = baseDate
+                        } else {
+                            // Time has passed today, use tomorrow
+                            if let tomorrow = calendar.date(byAdding: .day, value: 1, to: baseDate) {
+                                nextFireDate = tomorrow
+                            } else {
+                                nextFireDate = now.addingTimeInterval(3600)
+                            }
+                        }
+                    } else {
+                        nextFireDate = now.addingTimeInterval(3600)
+                    }
+                @unknown default:
+                    nextFireDate = Date.now.addingTimeInterval(3600)
+                }
+            }
+            
+            // If we have complete metadata (both schedule and config), check if config has title/body
+            if let metadata = foundMetadata,
+               let schedule = metadata["schedule"] as? NSDictionary,
+               let config = metadata["config"] as? NSDictionary {
+                // Log config contents for debugging
+                let configKeys = config.allKeys.compactMap { $0 as? String }.joined(separator: ", ")
+                let configTitle = config["title"] as? String
+                let configBody = config["body"] as? String ?? config["message"] as? String
+                logger.info("[AlarmKitManager] Alarm \(canonicalId) has metadata. Config keys: [\(configKeys)], title: \(configTitle ?? "nil"), body: \(configBody ?? "nil")")
+                
+                // Check if config has title and body - if not, try to extract from deep link URL
+                var finalConfig = config
+                var needsConfigFix = false
+                
+                if configTitle == nil || configTitle!.isEmpty || configBody == nil || configBody!.isEmpty {
+                    logger.warning("[AlarmKitManager] Alarm \(canonicalId, privacy: .public) config missing title/body, attempting to extract from deep link URL")
+                    needsConfigFix = true
+                    
+                    // Try to extract from deep link URL
+                    let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(canonicalId)"
+                    var deepLinkUrl = UserDefaults.standard.string(forKey: storageKey)
+                    
+                    // Try with original ID if canonical ID didn't work
+                    if deepLinkUrl == nil || deepLinkUrl!.isEmpty {
+                        let storageKey2 = "\(PENDING_ALARM_DEEPLINK_KEY)_\(alarmId)"
+                        deepLinkUrl = UserDefaults.standard.string(forKey: storageKey2)
+                    }
+                    
+                    // Try case-insensitive search
+                    if deepLinkUrl == nil || deepLinkUrl!.isEmpty {
+                        let defaults = UserDefaults.standard
+                        let allKeys = defaults.dictionaryRepresentation().keys
+                        for key in allKeys {
+                            if key.hasPrefix(PENDING_ALARM_DEEPLINK_KEY + "_") {
+                                let storedId = String(key.dropFirst((PENDING_ALARM_DEEPLINK_KEY + "_").count))
+                                if storedId.lowercased() == lowerCanonicalId || storedId.lowercased() == lowerAlarmId {
+                                    deepLinkUrl = defaults.string(forKey: key)
+                                    if deepLinkUrl != nil && !deepLinkUrl!.isEmpty {
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Parse deep link URL if found
+                    if let urlString = deepLinkUrl, !urlString.isEmpty,
+                       let url = URL(string: urlString),
+                       let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                       let queryItems = components.queryItems {
+                        var extractedTitle = configTitle
+                        var extractedBody = configBody
+                        
+                        for item in queryItems {
+                            if item.name == "title", let value = item.value, !value.isEmpty {
+                                extractedTitle = value
+                            } else if item.name == "message", let value = item.value, !value.isEmpty {
+                                extractedBody = value
+                            }
+                        }
+                        
+                        // Create a new config dictionary with extracted values
+                        if extractedTitle != nil || extractedBody != nil {
+                            let mutableConfig = NSMutableDictionary(dictionary: config)
+                            if let title = extractedTitle, !title.isEmpty {
+                                mutableConfig["title"] = title
+                            }
+                            if let body = extractedBody, !body.isEmpty {
+                                mutableConfig["body"] = body
+                            }
+                            finalConfig = mutableConfig
+                            logger.info("[AlarmKitManager] Fixed config for alarm \(canonicalId, privacy: .public) using deep link URL. Title: \(extractedTitle ?? "nil", privacy: .public), Body: \(extractedBody ?? "nil", privacy: .public)")
+                        }
+                    }
+                }
+                
+                // Build alarm with metadata (potentially fixed config)
+                let serializedSchedule = serializeSchedule(schedule)
+                
+                let alarmDict: [String: Any] = [
+                    "id": canonicalId,
+                    "schedule": serializedSchedule,
+                    "config": finalConfig,
+                    "nextFireDate": ISO8601DateFormatter().string(from: nextFireDate),
+                    "capability": "native_alarms",
+                    "isActive": true,
+                    "platformAlarmId": canonicalId
+                ]
+                addedAlarmIds.insert(canonicalId)
+                addedAlarmIds.insert(canonicalId.lowercased())
+                alarms.append(alarmDict)
+                continue // Skip to next alarm
+            }
+            
+            // Log what we found in metadata for debugging
+            if let metadata = foundMetadata {
+                let metadataKeys = Array(metadata.keys).joined(separator: ", ")
+                let hasSchedule = metadata["schedule"] != nil
+                let hasConfig = metadata["config"] != nil
+                let configType = type(of: metadata["config"] ?? NSNull())
+                logger.warning("[AlarmKitManager] Alarm \(canonicalId, privacy: .public) metadata incomplete. Keys: [\(metadataKeys, privacy: .public)], hasSchedule: \(hasSchedule), hasConfig: \(hasConfig), configType: \(String(describing: configType))")
+                
+                // Try to inspect config even if it's not NSDictionary
+                if let config = metadata["config"] {
+                    let configDescription = String(describing: config)
+                    logger.warning("[AlarmKitManager] Config value for \(canonicalId, privacy: .public): \(configDescription, privacy: .public)")
+                }
+            }
+            
+            // Partial metadata or no metadata - extract what we can
+            var title = "Alarm (metadata unavailable)"
+            var body = "Scheduled before app restart"
+            var scheduleDict: NSDictionary? = nil
+            var configDict: NSDictionary? = nil
+            
+            if let metadata = foundMetadata {
+                // Try to extract config from metadata first
+                if let config = metadata["config"] as? NSDictionary {
+                    configDict = config
+                    // Extract title and body from config if available
+                    if let configTitle = config["title"] as? String, !configTitle.isEmpty {
+                        title = configTitle
+                    }
+                    if let configBody = config["body"] as? String, !configBody.isEmpty {
+                        body = configBody
+                    } else if let configMessage = config["message"] as? String, !configMessage.isEmpty {
+                        body = configMessage
+                    }
+                }
+                
+                // Extract schedule from metadata
+                if let schedule = metadata["schedule"] as? NSDictionary {
+                    scheduleDict = schedule
+                }
+            }
+            
+            // If title/body still not found, try to extract from deep link URL
+            if title == "Alarm (metadata unavailable)" || body == "Scheduled before app restart" {
+                let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(canonicalId)"
+                var deepLinkUrl = UserDefaults.standard.string(forKey: storageKey)
+                var foundKey = storageKey
+                
+                // Try with original ID if canonical ID didn't work
+                if deepLinkUrl == nil || deepLinkUrl!.isEmpty {
+                    let storageKey2 = "\(PENDING_ALARM_DEEPLINK_KEY)_\(alarmId)"
+                    deepLinkUrl = UserDefaults.standard.string(forKey: storageKey2)
+                    if deepLinkUrl != nil && !deepLinkUrl!.isEmpty {
+                        foundKey = storageKey2
+                        logger.info("[AlarmKitManager] Found deep link URL for alarm \(canonicalId, privacy: .public) using original ID key: \(storageKey2, privacy: .public)")
+                    }
+                } else {
+                    logger.info("[AlarmKitManager] Found deep link URL for alarm \(canonicalId, privacy: .public) using canonical ID key: \(storageKey, privacy: .public)")
+                }
+                
+                // Try case-insensitive search in UserDefaults if still not found
+                if deepLinkUrl == nil || deepLinkUrl!.isEmpty {
+                    let defaults = UserDefaults.standard
+                    let allKeys = defaults.dictionaryRepresentation().keys
+                    for key in allKeys {
+                        if key.hasPrefix(PENDING_ALARM_DEEPLINK_KEY + "_") {
+                            let storedId = String(key.dropFirst((PENDING_ALARM_DEEPLINK_KEY + "_").count))
+                            if storedId.lowercased() == lowerCanonicalId || storedId.lowercased() == lowerAlarmId {
+                                deepLinkUrl = defaults.string(forKey: key)
+                                if deepLinkUrl != nil && !deepLinkUrl!.isEmpty {
+                                    foundKey = key
+                                    logger.info("[AlarmKitManager] Found deep link URL for alarm \(canonicalId, privacy: .public) using case-insensitive match: \(key, privacy: .public)")
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Also try searching by partial UUID match (in case IDs differ slightly)
+                if deepLinkUrl == nil || deepLinkUrl!.isEmpty {
+                    let defaults = UserDefaults.standard
+                    let allKeys = defaults.dictionaryRepresentation().keys
+                    // Extract last 8 characters of UUID for matching (more lenient)
+                    let canonicalIdSuffix = String(canonicalId.suffix(8)).lowercased()
+                    let alarmIdSuffix = String(alarmId.suffix(8)).lowercased()
+                    
+                    for key in allKeys {
+                        if key.hasPrefix(PENDING_ALARM_DEEPLINK_KEY + "_") {
+                            let storedId = String(key.dropFirst((PENDING_ALARM_DEEPLINK_KEY + "_").count))
+                            let storedIdSuffix = String(storedId.suffix(8)).lowercased()
+                            if storedIdSuffix == canonicalIdSuffix || storedIdSuffix == alarmIdSuffix {
+                                deepLinkUrl = defaults.string(forKey: key)
+                                if deepLinkUrl != nil && !deepLinkUrl!.isEmpty {
+                                    foundKey = key
+                                    logger.info("[AlarmKitManager] Found deep link URL for alarm \(canonicalId, privacy: .public) using UUID suffix match: \(key, privacy: .public)")
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Parse deep link URL if found
+                if let urlString = deepLinkUrl, !urlString.isEmpty,
+                   let url = URL(string: urlString),
+                   let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                   let queryItems = components.queryItems {
+                    // Extract title and message from deep link query parameters
+                    for item in queryItems {
+                        if item.name == "title", let value = item.value, !value.isEmpty {
+                            title = value
+                            logger.info("[AlarmKitManager] Extracted title from deep link: \(title, privacy: .public)")
+                        } else if item.name == "message", let value = item.value, !value.isEmpty {
+                            body = value
+                            logger.info("[AlarmKitManager] Extracted body from deep link: \(body, privacy: .public)")
+                        }
+                    }
+                } else if deepLinkUrl == nil || deepLinkUrl!.isEmpty {
+                    // Log all available deep link keys for debugging
+                    let defaults = UserDefaults.standard
+                    let allKeys = defaults.dictionaryRepresentation().keys
+                    var foundDeepLinkKeys: [String] = []
+                    for key in allKeys {
+                        if key.hasPrefix(PENDING_ALARM_DEEPLINK_KEY + "_") {
+                            foundDeepLinkKeys.append(key)
+                        }
+                    }
+                    logger.warning("[AlarmKitManager] No deep link URL found for alarm \(canonicalId, privacy: .public) (canonical: \(canonicalId, privacy: .public), original: \(alarmId, privacy: .public)). Tried keys: \(storageKey, privacy: .public), \(PENDING_ALARM_DEEPLINK_KEY)_\(alarmId, privacy: .public). All available deep link keys: \(foundDeepLinkKeys.joined(separator: ", "), privacy: .public)")
+                }
+            }
+            
+            // Use schedule from metadata if available, otherwise build from AlarmKit
+            let finalScheduleDict: NSDictionary
+            if let schedule = scheduleDict {
+                finalScheduleDict = serializeSchedule(schedule)
+            } else {
+                // Build a basic schedule dictionary from AlarmKit's schedule
+                switch alarmKitAlarm.schedule {
+                case .fixed(let date):
+                    finalScheduleDict = [
+                        "type": "fixed",
+                        "date": date.timeIntervalSince1970 * 1000.0 // milliseconds
+                    ] as NSDictionary
+                case .relative(let rel):
+                    let timeDict: NSDictionary = [
+                        "hour": rel.time.hour,
+                        "minute": rel.time.minute
+                    ]
+                    var dict: [String: Any] = [
+                        "type": "recurring",
+                        "time": timeDict
+                    ]
+                    
+                    switch rel.repeats {
+                    case .weekly(let weekdays):
+                        dict["repeatInterval"] = "weekly"
+                        dict["daysOfWeek"] = weekdays.map { weekday in
+                            switch weekday {
+                            case .sunday: return 0
+                            case .monday: return 1
+                            case .tuesday: return 2
+                            case .wednesday: return 3
+                            case .thursday: return 4
+                            case .friday: return 5
+                            case .saturday: return 6
+                            @unknown default: return -1
+                            }
+                        }
+                    case .never:
+                        dict["repeatInterval"] = "never"
+                    @unknown default:
+                        dict["repeatInterval"] = "unknown"
+                    }
+                    finalScheduleDict = dict as NSDictionary
+                @unknown default:
+                    finalScheduleDict = ["type": "unknown"] as NSDictionary
+                }
+            }
+            
+            // Use config from metadata if available, but merge in extracted title/body if they were found
+            let finalConfigDict: NSDictionary
+            if let config = configDict {
+                // If we extracted title/body from deep link URL, merge them into the config
+                if title != "Alarm (metadata unavailable)" && body != "Scheduled before app restart" {
+                    let mutableConfig = NSMutableDictionary(dictionary: config)
+                    mutableConfig["title"] = title
+                    mutableConfig["body"] = body
+                    finalConfigDict = mutableConfig
+                    logger.info("[AlarmKitManager] Merged extracted title/body into config for alarm \(canonicalId, privacy: .public). Title: \(title, privacy: .public), Body: \(body, privacy: .public)")
+                } else {
+                    finalConfigDict = config
+                }
+            } else {
+                finalConfigDict = [
+                    "title": title,
+                    "body": body
+                ] as NSDictionary
+            }
+            
+            // Log final config for debugging
+            let finalConfigTitle = (finalConfigDict["title"] as? String) ?? "nil"
+            let finalConfigBody = (finalConfigDict["body"] as? String) ?? "nil"
+            logger.info("[AlarmKitManager] Final config for alarm \(canonicalId, privacy: .public): title=\(finalConfigTitle, privacy: .public), body=\(finalConfigBody, privacy: .public)")
+            
+            let alarmDict: [String: Any] = [
+                "id": canonicalId,
+                "schedule": finalScheduleDict,
+                "config": finalConfigDict,
+                "nextFireDate": ISO8601DateFormatter().string(from: nextFireDate),
+                "capability": "native_alarms",
+                "isActive": true,
+                "platformAlarmId": canonicalId
+            ]
+            addedAlarmIds.insert(canonicalId)
+            addedAlarmIds.insert(canonicalId.lowercased())
+            alarms.append(alarmDict)
+            
+            if foundMetadata == nil {
+                // Log when metadata is missing to help debug
+                logger.warning("[AlarmKitManager] Alarm \(canonicalId, privacy: .public) missing metadata, using fallback extraction")
+            }
+        }
+        
         return alarms
     }
 
@@ -969,6 +1676,13 @@ class AlarmKitManager {
     private func monitorAlarms() async {
         for await alarms in manager.alarmUpdates {
             let currentIds = Set(alarms.map { $0.id.uuidString })
+            // Update current alarm IDs for getAllAlarms() to query
+            currentAlarmIds = currentIds
+            // Store current alarms from AlarmKit for getAllAlarms() to access
+            currentAlarmsFromKit.removeAll()
+            for alarm in alarms {
+                currentAlarmsFromKit[alarm.id.uuidString] = alarm
+            }
 
             for alarm in alarms {
                 let alarmId = alarm.id.uuidString
@@ -991,18 +1705,20 @@ class AlarmKitManager {
                     let dismissedFromAlerting = (prev == "alerting" && currentMode != "alerting" && currentMode != "countdown")
                     let dismissedFromCountdown = (prev == "countdown" && currentMode != "countdown")
                     if dismissedFromAlerting || dismissedFromCountdown {
-                        logger.info("[AlarmKitManager] Alarm dismissed: \(alarmId), prev=\(prev), current=\(currentMode)")
+                        logger.info("[AlarmKitManager] Alarm dismissed: \(alarmId, privacy: .public), prev=\(prev, privacy: .public), current=\(currentMode, privacy: .public)")
                         if let metadata = alarmMetadataStore[alarmId],
                            let config = metadata["config"] as? NSDictionary,
                            let url = buildDeepLinkUrlString(config: config),
                            !url.isEmpty {
-                            logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults: \(url)")
+                            logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults: \(url, privacy: .public)")
                             UserDefaults.standard.set(url, forKey: PENDING_ALARM_DEEPLINK_KEY)
+                            // Store timestamp to validate freshness
+                            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY)
                             UserDefaults.standard.synchronize() // Force immediate write
                             logger.info("[AlarmKitManager] Deep link URL stored, calling delegate")
                             delegate?.alarmDidRequestDeepLink(url: url)
                         } else {
-                            logger.warning("[AlarmKitManager] WARNING: Could not build deep link URL for dismissed alarm \(alarmId)")
+                            logger.warning("[AlarmKitManager] WARNING: Could not build deep link URL for dismissed alarm \(alarmId, privacy: .public)")
                         }
                     }
                 }
@@ -1055,41 +1771,43 @@ class AlarmKitManager {
                 }
             }
 
-        // Detect alarms that disappeared from updates (treat as dismissal)
-        let knownIds = Set(lastPresentationModeByAlarmId.keys)
-        let missing = knownIds.subtracting(currentIds)
-        for id in missing {
-            if let prev = lastPresentationModeByAlarmId[id], (prev == "alerting" || prev == "countdown") {
-                logger.info("[AlarmKitManager] Alarm disappeared (dismissed): \(id), prev=\(prev)")
-                // Try to get URL from UserDefaults first (stored when alarm was scheduled)
-                let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(id)"
-                var url = UserDefaults.standard.string(forKey: storageKey)
-                
-                // Fallback: build URL from metadata if not in UserDefaults
-                if url == nil || url!.isEmpty {
-                    if let metadata = alarmMetadataStore[id],
-                       let config = metadata["config"] as? NSDictionary,
-                       let builtUrl = buildDeepLinkUrlString(config: config),
-                       !builtUrl.isEmpty {
-                        url = builtUrl
-                        // Store it for future reference
-                        UserDefaults.standard.set(url, forKey: storageKey)
-                        UserDefaults.standard.synchronize()
+            // Detect alarms that disappeared from updates (treat as dismissal)
+            let knownIds = Set(lastPresentationModeByAlarmId.keys)
+            let missing = knownIds.subtracting(currentIds)
+            for id in missing {
+                if let prev = lastPresentationModeByAlarmId[id], (prev == "alerting" || prev == "countdown") {
+                    logger.info("[AlarmKitManager] Alarm disappeared (dismissed): \(id, privacy: .public), prev=\(prev, privacy: .public)")
+                    // Try to get URL from UserDefaults first (stored when alarm was scheduled)
+                    let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(id)"
+                    var url = UserDefaults.standard.string(forKey: storageKey)
+                    
+                    // Fallback: build URL from metadata if not in UserDefaults
+                    if url == nil || url!.isEmpty {
+                        if let metadata = alarmMetadataStore[id],
+                           let config = metadata["config"] as? NSDictionary,
+                           let builtUrl = buildDeepLinkUrlString(config: config),
+                           !builtUrl.isEmpty {
+                            url = builtUrl
+                            // Store it for future reference
+                            UserDefaults.standard.set(url, forKey: storageKey)
+                            UserDefaults.standard.synchronize()
+                        }
+                    }
+                    
+                    if let finalUrl = url, !finalUrl.isEmpty {
+                        logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (disappeared): \(finalUrl, privacy: .public)")
+                        UserDefaults.standard.set(finalUrl, forKey: PENDING_ALARM_DEEPLINK_KEY)
+                        // Store timestamp to validate freshness
+                        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: PENDING_ALARM_DEEPLINK_TIMESTAMP_KEY)
+                        UserDefaults.standard.synchronize() // Force immediate write
+                        logger.info("[AlarmKitManager] Deep link URL stored (disappeared), calling delegate")
+                        delegate?.alarmDidRequestDeepLink(url: finalUrl)
+                    } else {
+                        logger.warning("[AlarmKitManager] WARNING: Could not find or build deep link URL for disappeared alarm \(id, privacy: .public)")
                     }
                 }
-                
-                if let finalUrl = url, !finalUrl.isEmpty {
-                    logger.info("[AlarmKitManager] Storing deep link URL in UserDefaults (disappeared): \(finalUrl)")
-                    UserDefaults.standard.set(finalUrl, forKey: PENDING_ALARM_DEEPLINK_KEY)
-                    UserDefaults.standard.synchronize() // Force immediate write
-                    logger.info("[AlarmKitManager] Deep link URL stored (disappeared), calling delegate")
-                    delegate?.alarmDidRequestDeepLink(url: finalUrl)
-                } else {
-                    logger.warning("[AlarmKitManager] WARNING: Could not find or build deep link URL for disappeared alarm \(id)")
-                }
+                lastPresentationModeByAlarmId.removeValue(forKey: id)
             }
-            lastPresentationModeByAlarmId.removeValue(forKey: id)
-        }
         }
     }
 }
