@@ -2,7 +2,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as Calendar from 'expo-calendar';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Animated, FlatList, StyleSheet, Switch, TouchableOpacity } from 'react-native';
+import { Alert, Animated, FlatList, Platform, StyleSheet, Switch, TouchableOpacity } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -48,6 +49,16 @@ export default function CalendarScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const t = useT();
+  const insets = useSafeAreaInsets();
+  
+  // Calculate bottom padding for calendar list to account for bottom navigation bar
+  // Tab bar height: Android button nav = 113px, Android gesture nav = 80px, iOS = ~80-90px
+  // Add safe area bottom inset plus tab bar height
+  const isButtonNavigation = Platform.OS === 'android' && insets.bottom >= 16;
+  const tabBarHeight = Platform.OS === 'android' 
+    ? (isButtonNavigation ? 113 : 80)
+    : 80; // iOS default
+  const calendarListBottomPadding = tabBarHeight + insets.bottom + 20; // Extra 20px for comfortable spacing
 
   useEffect(() => {
     let mounted = true;
@@ -765,6 +776,7 @@ export default function CalendarScreen() {
             )}
             // style={styles.calendarList}
             style={[{ backgroundColor: colors.background }]}
+            contentContainerStyle={{ paddingBottom: calendarListBottomPadding }}
           />
         </ThemedView>
       )}
