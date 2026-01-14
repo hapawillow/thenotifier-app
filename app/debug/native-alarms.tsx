@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { FlatList, RefreshControl, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { Alert, FlatList, Platform, RefreshControl, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { NativeAlarmManager } from 'notifier-alarm-manager';
 
 import { ThemedText } from '@/components/themed-text';
@@ -8,7 +8,9 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { ScheduledAlarm } from 'notifier-alarm-manager/src/types';
+import type { ScheduledAlarm } from 'notifier-alarm-manager';
+import { getAllScheduledNotificationData, getAllDailyAlarmInstances } from '@/utils/database';
+import { reconcileOrphansOnStartup } from '@/utils/orphan-reconcile';
 
 // Helper to safely stringify objects with Date handling
 const safePretty = (obj: any, indent: number = 2): string => {
@@ -25,59 +27,171 @@ const safePretty = (obj: any, indent: number = 2): string => {
   }
 };
 
+type AlarmWithOrphanStatus = ScheduledAlarm & { isOrphan?: boolean };
+
 export default function NativeAlarmsScreen() {
   const router = useRouter();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
-  const [alarms, setAlarms] = useState<ScheduledAlarm[]>([]);
+  const [alarms, setAlarms] = useState<AlarmWithOrphanStatus[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [orphanCount, setOrphanCount] = useState(0);
 
   const loadAlarms = useCallback(async () => {
     try {
       const allAlarms = await NativeAlarmManager.getAllAlarms();
-      console.log('[NativeAlarmsDebug] Loaded alarms:', allAlarms.length);
+      console.log('[NativeAlarmsDebug] Loaded alarms from native:', allAlarms.length);
+      console.log('[NativeAlarmsDebug] Alarm IDs:', allAlarms.map(a => a.id).join(', '));
       
-      // Validate and filter alarms
-      const validAlarms = allAlarms.filter((alarm) => {
-        if (!alarm || !alarm.id) {
-          console.warn('[NativeAlarmsDebug] Invalid alarm (missing id):', alarm);
-          return false;
+      // Also log what's in the database for comparison
+      try {
+        const dbNotifications = await getAllScheduledNotificationData();
+        const dbAlarms = dbNotifications.filter(n => n.hasAlarm);
+        console.log('[NativeAlarmsDebug] Database has', dbAlarms.length, 'alarms with hasAlarm=true');
+        console.log('[NativeAlarmsDebug] Database alarm notification IDs:', dbAlarms.map(n => n.notificationId).join(', '));
+        
+        // Check for mismatches (case-insensitive comparison)
+        const dbAlarmIds = new Set(dbAlarms.map(n => {
+          const NOTIFIER_PREFIX = 'thenotifier-';
+          const id = n.notificationId.startsWith(NOTIFIER_PREFIX) 
+            ? n.notificationId.substring(NOTIFIER_PREFIX.length)
+            : n.notificationId;
+          return id.toLowerCase(); // Normalize to lowercase for comparison
+        }));
+        const nativeAlarmIds = new Set(allAlarms.map(a => a.id.toLowerCase())); // Normalize to lowercase
+        
+        const missingFromNative = Array.from(dbAlarmIds).filter(id => !nativeAlarmIds.has(id));
+        if (missingFromNative.length > 0) {
+          console.warn('[NativeAlarmsDebug] Alarms in database but NOT in native:', missingFromNative.join(', '));
         }
         
-        // Filter out past-due one-time alarms (they should have been cleaned up)
-        const scheduleType = alarm.schedule?.type;
-        if (scheduleType === 'fixed' && alarm.nextFireDate) {
-          try {
-            const fireDate = new Date(alarm.nextFireDate);
-            if (!isNaN(fireDate.getTime())) {
-              const now = new Date();
-              // If fire date is in the past, filter it out (one-time alarms should be cleaned up after firing)
-              if (fireDate < now) {
-                console.log('[NativeAlarmsDebug] Filtering out past-due one-time alarm:', alarm.id, 'fired at:', fireDate.toISOString());
-                return false;
+        const extraInNative = Array.from(nativeAlarmIds).filter(id => !dbAlarmIds.has(id));
+        if (extraInNative.length > 0) {
+          console.warn('[NativeAlarmsDebug] Alarms in native but NOT in database:', extraInNative.join(', '));
+        }
+      } catch (dbError) {
+        console.warn('[NativeAlarmsDebug] Failed to compare with database:', dbError);
+      }
+      
+      // Get database notifications to check for orphaned alarms
+      let dbScheduledParents: Set<string>;
+      let dbScheduledWithAlarms: Set<string>;
+      let validAlarmIds: Set<string>;
+      let validAlarmCategories: Set<string>;
+      
+      try {
+        const dbScheduledParentsArray = await getAllScheduledNotificationData();
+        dbScheduledParents = new Set(dbScheduledParentsArray.map(p => p.notificationId));
+        dbScheduledWithAlarms = new Set(
+          dbScheduledParentsArray
+            .filter(p => p.hasAlarm)
+            .map(p => p.notificationId)
+        );
+
+        // Build set of valid alarm IDs
+        validAlarmIds = new Set<string>();
+        validAlarmCategories = new Set<string>();
+        const NOTIFIER_PREFIX = 'thenotifier-';
+        
+        for (const notificationId of dbScheduledWithAlarms) {
+          if (notificationId.startsWith(NOTIFIER_PREFIX)) {
+            const derivedId = notificationId.substring(NOTIFIER_PREFIX.length);
+            validAlarmIds.add(derivedId);
+          } else {
+            validAlarmIds.add(notificationId);
+          }
+          validAlarmCategories.add(notificationId);
+        }
+
+        // Add alarm IDs from dailyAlarmInstance table
+        for (const notificationId of dbScheduledWithAlarms) {
+          const instances = await getAllDailyAlarmInstances(notificationId);
+          for (const instance of instances) {
+            validAlarmIds.add(instance.alarmId);
+            if (instance.alarmId.startsWith(NOTIFIER_PREFIX)) {
+              validAlarmIds.add(instance.alarmId.substring(NOTIFIER_PREFIX.length));
+            }
+          }
+        }
+      } catch (dbError) {
+        console.warn('[NativeAlarmsDebug] Failed to load database data:', dbError);
+        dbScheduledParents = new Set();
+        dbScheduledWithAlarms = new Set();
+        validAlarmIds = new Set();
+        validAlarmCategories = new Set();
+      }
+      
+      // Validate and filter alarms, mark orphans
+      let filteredCount = 0;
+      const validAlarms: AlarmWithOrphanStatus[] = allAlarms
+        .filter((alarm) => {
+          if (!alarm || !alarm.id) {
+            console.warn('[NativeAlarmsDebug] Invalid alarm (missing id):', alarm);
+            filteredCount++;
+            return false;
+          }
+          
+          // Log past-due one-time alarms but don't filter them out (for debugging)
+          const scheduleType = alarm.schedule?.type;
+          if (scheduleType === 'fixed' && alarm.nextFireDate) {
+            try {
+              const fireDate = new Date(alarm.nextFireDate);
+              if (!isNaN(fireDate.getTime())) {
+                const now = new Date();
+                // If fire date is in the past, log it but still show it
+                if (fireDate < now) {
+                  console.warn('[NativeAlarmsDebug] Past-due one-time alarm (should have been cleaned up):', alarm.id, 'fired at:', fireDate.toISOString());
+                }
               }
+            } catch (e) {
+              console.warn('[NativeAlarmsDebug] Error parsing nextFireDate for alarm:', alarm.id, e);
             }
-          } catch (e) {
-            console.warn('[NativeAlarmsDebug] Error parsing nextFireDate for alarm:', alarm.id, e);
           }
-        }
-        
-        // Validate nextFireDate if present
-        if (alarm.nextFireDate) {
-          try {
-            const fireDate = new Date(alarm.nextFireDate);
-            if (isNaN(fireDate.getTime())) {
-              console.warn('[NativeAlarmsDebug] Invalid nextFireDate for alarm:', alarm.id, alarm.nextFireDate);
-              // Don't filter out - just log the warning
+          
+          // Validate nextFireDate if present
+          if (alarm.nextFireDate) {
+            try {
+              const fireDate = new Date(alarm.nextFireDate);
+              if (isNaN(fireDate.getTime())) {
+                console.warn('[NativeAlarmsDebug] Invalid nextFireDate for alarm:', alarm.id, alarm.nextFireDate);
+              }
+            } catch (e) {
+              console.warn('[NativeAlarmsDebug] Error parsing nextFireDate for alarm:', alarm.id, e);
             }
-          } catch (e) {
-            console.warn('[NativeAlarmsDebug] Error parsing nextFireDate for alarm:', alarm.id, e);
           }
-        }
-        
-        return true;
-      });
+          
+          return true;
+        })
+        .map((alarm) => {
+          // Check if alarm is orphaned
+          let isOrphan = true;
+          const alarmId = alarm.id;
+
+          // Check if alarm ID matches a valid ID
+          if (validAlarmIds.has(alarmId)) {
+            isOrphan = false;
+          }
+
+          // Check Android category match
+          if (Platform.OS === 'android' && alarm.category && validAlarmCategories.has(alarm.category)) {
+            isOrphan = false;
+          }
+
+          // Check config.data.notificationId match
+          if (alarm.config?.data?.notificationId) {
+            const parentNotificationId = alarm.config.data.notificationId as string;
+            if (dbScheduledParents.has(parentNotificationId)) {
+              isOrphan = false;
+            }
+          }
+
+          return { ...alarm, isOrphan };
+        });
+      
+      // Count orphans
+      const orphaned = validAlarms.filter(a => a.isOrphan);
+      setOrphanCount(orphaned.length);
       
       // Sort by earliest next fire time (unknowns last) for easier debugging
       const sorted = [...validAlarms].sort((a, b) => {
@@ -91,12 +205,14 @@ export default function NativeAlarmsScreen() {
         return String(a.id).localeCompare(String(b.id));
       });
       
-      console.log('[NativeAlarmsDebug] Valid alarms after filtering:', sorted.length);
+      console.log('[NativeAlarmsDebug] Valid alarms after filtering:', sorted.length, `(${orphaned.length} orphaned, ${filteredCount} filtered out)`);
+      console.log('[NativeAlarmsDebug] Valid alarm IDs:', sorted.map(a => a.id).join(', '));
       setAlarms(sorted);
     } catch (error) {
       console.error('[NativeAlarmsDebug] Failed to load alarms:', error);
       // Set empty array on error to prevent crashes
       setAlarms([]);
+      setOrphanCount(0);
     }
   }, []);
 
@@ -120,22 +236,42 @@ export default function NativeAlarmsScreen() {
     setExpandedIds(newExpanded);
   };
 
-  const renderAlarmItem = ({ item }: { item: ScheduledAlarm }) => {
+  const handleCleanupOrphans = useCallback(async () => {
+    try {
+      await reconcileOrphansOnStartup();
+      Alert.alert('Cleanup Complete', 'Orphaned alarms have been cleaned up. Pull to refresh to see updated list.');
+      await loadAlarms();
+    } catch (error) {
+      console.error('[NativeAlarmsDebug] Failed to cleanup orphans:', error);
+      Alert.alert('Error', 'Failed to cleanup orphaned alarms. Please try again.');
+    }
+  }, [loadAlarms]);
+
+  const renderAlarmItem = ({ item }: { item: AlarmWithOrphanStatus }) => {
     const isExpanded = expandedIds.has(item.id);
     const nextFireStr = item.nextFireDate && !isNaN(item.nextFireDate.getTime())
       ? item.nextFireDate.toLocaleString()
       : 'Unknown';
 
     return (
-      <ThemedView style={[styles.alarmCard, { borderColor: colors.icon + '40' }]}>
+      <ThemedView style={[styles.alarmCard, { borderColor: item.isOrphan ? '#ff6b6b' : colors.icon + '40' }]}>
         <TouchableOpacity
           style={styles.cardHeader}
           onPress={() => toggleExpand(item.id)}
           activeOpacity={0.7}>
           <ThemedView style={styles.cardHeaderContent}>
-            <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.6} style={styles.alarmId} selectable>
-              {item.config?.title || item.id}
-            </ThemedText>
+            <ThemedView style={styles.titleRow}>
+              <ThemedText type="defaultSemiBold" maxFontSizeMultiplier={1.6} style={styles.alarmId} selectable>
+                {item.config?.title || item.id}
+              </ThemedText>
+              {item.isOrphan && (
+                <ThemedView style={[styles.orphanBadge, { backgroundColor: '#ff6b6b' }]}>
+                  <ThemedText maxFontSizeMultiplier={1.2} style={styles.orphanBadgeText}>
+                    Orphaned
+                  </ThemedText>
+                </ThemedView>
+              )}
+            </ThemedView>
             <ThemedText maxFontSizeMultiplier={1.4} style={styles.alarmSubtitle} selectable>
               ID: {item.id}
             </ThemedText>
@@ -157,6 +293,16 @@ export default function NativeAlarmsScreen() {
 
         {isExpanded && (
           <ScrollView style={styles.cardContent} nestedScrollEnabled>
+            {item.isOrphan && (
+              <ThemedView style={[styles.section, { backgroundColor: '#ff6b6b20', padding: 12, borderRadius: 8, marginBottom: 8 }]}>
+                <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={[styles.sectionTitle, { color: '#ff6b6b' }]}>
+                  ⚠️ Orphaned Alarm
+                </ThemedText>
+                <ThemedText maxFontSizeMultiplier={1.4} style={styles.orphanWarning}>
+                  This alarm does not belong to any notification in the database. It may have been deleted or is a leftover from a previous session.
+                </ThemedText>
+              </ThemedView>
+            )}
             <ThemedView style={styles.section}>
               <ThemedText type="subtitle" maxFontSizeMultiplier={1.6} style={styles.sectionTitle}>
                 Schedule
@@ -237,9 +383,26 @@ export default function NativeAlarmsScreen() {
       </ThemedView>
 
       <ThemedView style={styles.countContainer}>
-        <ThemedText maxFontSizeMultiplier={1.4} style={styles.countText}>
-          {alarms.length} scheduled alarm{alarms.length !== 1 ? 's' : ''}
-        </ThemedText>
+        <ThemedView style={styles.countRow}>
+          <ThemedText maxFontSizeMultiplier={1.4} style={styles.countText}>
+            {alarms.length} scheduled alarm{alarms.length !== 1 ? 's' : ''}
+            {orphanCount > 0 && (
+              <ThemedText maxFontSizeMultiplier={1.4} style={[styles.countText, { color: '#ff6b6b', marginLeft: 8 }]}>
+                ({orphanCount} orphaned)
+              </ThemedText>
+            )}
+          </ThemedText>
+          {orphanCount > 0 && (
+            <TouchableOpacity
+              style={[styles.cleanupButton, { backgroundColor: colors.tint }]}
+              onPress={handleCleanupOrphans}
+              activeOpacity={0.7}>
+              <ThemedText maxFontSizeMultiplier={1.2} style={styles.cleanupButtonText}>
+                Cleanup Orphans
+              </ThemedText>
+            </TouchableOpacity>
+          )}
+        </ThemedView>
       </ThemedView>
 
       <FlatList
@@ -296,9 +459,45 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 10,
   },
+  countRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   countText: {
     fontSize: 16,
     opacity: 0.7,
+  },
+  cleanupButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  cleanupButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  orphanBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  orphanBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  orphanWarning: {
+    fontSize: 14,
+    opacity: 0.9,
+    lineHeight: 20,
   },
   listContent: {
     padding: 20,

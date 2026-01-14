@@ -165,6 +165,20 @@ export async function cancelAlarmKitForParent(
       try {
         await NativeAlarmManager.cancelAlarm(derivedAlarmId);
         logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Cancelled native recurring daily alarm: ${derivedAlarmId}`);
+        
+        // Verify cancellation succeeded (iOS only)
+        if (Platform.OS === 'ios') {
+          try {
+            const allAlarms = await NativeAlarmManager.getAllAlarms();
+            const stillExists = allAlarms.some(alarm => alarm.id === derivedAlarmId);
+            if (stillExists) {
+              logger.warn(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[iOS] Warning: Alarm ${derivedAlarmId} still exists after cancellation attempt`);
+            }
+          } catch (verifyError) {
+            // Ignore verification errors - cancellation may have succeeded even if verification fails
+            logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[iOS] Could not verify cancellation for ${derivedAlarmId}:`, verifyError);
+          }
+        }
       } catch (error: any) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         // Ignore "not found" errors - alarm may not exist or already cancelled
@@ -181,6 +195,20 @@ export async function cancelAlarmKitForParent(
       try {
         await NativeAlarmManager.cancelAlarm(alarmId);
         logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Cancelled non-daily alarm: ${alarmId}`);
+        
+        // Verify cancellation succeeded (iOS only)
+        if (Platform.OS === 'ios') {
+          try {
+            const allAlarms = await NativeAlarmManager.getAllAlarms();
+            const stillExists = allAlarms.some(alarm => alarm.id === alarmId);
+            if (stillExists) {
+              logger.warn(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[iOS] Warning: Alarm ${alarmId} still exists after cancellation attempt`);
+            }
+          } catch (verifyError) {
+            // Ignore verification errors - cancellation may have succeeded even if verification fails
+            logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[iOS] Could not verify cancellation for ${alarmId}:`, verifyError);
+          }
+        }
       } catch (error: any) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         // Ignore "not found" errors - alarm may have already been cancelled
@@ -196,6 +224,20 @@ export async function cancelAlarmKitForParent(
         try {
           await NativeAlarmManager.cancelAlarm(notificationId);
           logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `Cancelled non-daily alarm (legacy id): ${notificationId}`);
+          
+          // Verify cancellation succeeded (iOS only)
+          if (Platform.OS === 'ios') {
+            try {
+              const allAlarms = await NativeAlarmManager.getAllAlarms();
+              const stillExists = allAlarms.some(alarm => alarm.id === notificationId);
+              if (stillExists) {
+                logger.warn(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[iOS] Warning: Alarm ${notificationId} (legacy id) still exists after cancellation attempt`);
+              }
+            } catch (verifyError) {
+              // Ignore verification errors
+              logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmKitForParent'), `[iOS] Could not verify cancellation for ${notificationId}:`, verifyError);
+            }
+          }
         } catch {
           // Ignore
         }
