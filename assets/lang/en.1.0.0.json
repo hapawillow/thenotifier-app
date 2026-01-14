@@ -27,7 +27,9 @@
     "done": "Done",
     "ok": "OK",
     "scheduleNotification": "Schedule Notification",
+    "scheduleAlarm": "Schedule Alarm",
     "updateNotification": "Update Notification",
+    "updateAlarm": "Update Alarm",
     "close": "Close",
     "openLink": "Open Link",
     "openCalendarEvent": "Open Calendar Event",
@@ -47,12 +49,13 @@
     "repeat": "Repeat"
   },
   "inputPlaceholders": {
-    "notificationMessage": "Notification message",
+    "notificationMessage": "Short message",
     "shortNote": "A short note",
     "linkToOpen": "Link to open for this notification"
   },
   "alertTitles": {
     "deleteNotification": "Delete Notification",
+    "deleteAlarm": "Delete Alarm",
     "cancelEdit": "Cancel Edit",
     "error": "Error",
     "warning": "Warning",
@@ -76,14 +79,18 @@
   },
   "alertMessages": {
     "deleteConfirmation": "Are you sure you want to cancel this scheduled notification?",
+    "deleteNotificationConfirmation": "Are you sure you want to cancel this scheduled notification?",
+    "deleteAlarmConfirmation": "Are you sure you want to cancel this scheduled alarm?",
     "cancelEditConfirmation": "The upcoming event will be unchanged.",
     "forgotMessage": "You forgot the message",
     "selectFutureDate": "Select a future date and time more than 1 minute from now",
     "failedToUpdate": "Failed to update notification. Please try again.",
     "failedToSchedule": "Sorry, your notification could not be scheduled.",
+    "failedToScheduleAlarm": "Sorry, your alarm could not be scheduled.",
     "failedToUpdateGeneric": "Sorry, your notification could not be updated.",
-    "maxNotificationsReached": "Uh oh, you've reached the maximum of {{max}} scheduled notifications. You can delete an upcoming notification if you need to schedule a new notification.",
-    "maxNotificationsCapacityExceeded": "Your phone limits the number of notifications that can be scheduled. To schedule this, you will need to delete {{needed}} notifications.",
+    "failedToUpdateAlarm": "Sorry, your alarm could not be updated.",
+    "maxNotificationsReached": "Uh oh, you've reached the maximum of {{max}} scheduled notifications and alarms. You can delete an upcoming notification or alarm if you need to schedule a new notification.",
+    "maxNotificationsCapacityExceeded": "Your phone limits the number of notifications and alarms that can be scheduled. To schedule this, you will need to delete {{needed}} notifications and alarms.",
     "alarmWillBeRemoved": "The alarm will be removed from this upcoming notification because this app no longer has permission to set alarms.",
     "notificationPermissionRequired": "This app will not work until notifications are enabled.\n\n{{instructions}}",
     "alarmPermissionDenied": "{{instructions}}",
@@ -126,10 +133,13 @@
   },
   "toastMessages": {
     "notificationCancelled": "Your notification has been cancelled",
+    "alarmCancelled": "Your alarm has been cancelled",
     "notificationScheduled": "Your notification has been scheduled!",
+    "alarmScheduled": "Your alarm has been scheduled!",
     "notificationUpdated": "Your notification has been updated!",
-    "messageLimitExceeded": "Messages are limited to 60 characters",
-    "noteLimitExceeded": "Notes are limited to 240 characters",
+    "alarmUpdated": "Your alarm has been updated!",
+    "messageLimitExceeded": "Messages are limited to 80 characters",
+    "noteLimitExceeded": "Notes are limited to 480 characters",
     "linkLimitExceeded": "Links are limited to 2048 characters"
   },
   "emptyStates": {

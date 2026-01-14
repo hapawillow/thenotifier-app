@@ -55,12 +55,14 @@ export default function ScheduleFormScreen() {
   // Determine source: home if editMode, calendar if params exist but not editMode, tab otherwise
   const source: 'home' | 'calendar' | 'tab' = isEditMode ? 'home' : (formParams ? 'calendar' : 'tab');
 
-  const handleSuccess = useCallback(() => {
+  const handleSuccess = useCallback((isAlarm?: boolean) => {
     // Always navigate to Home screen (Upcoming tab) after success
     // Small delay to ensure alert is dismissed before navigation
     Toast.show({
       type: 'success',
-      text1: isEditMode ? t('toastMessages.notificationUpdated') : t('toastMessages.notificationScheduled'),
+      text1: isEditMode 
+        ? (isAlarm ? t('toastMessages.alarmUpdated') : t('toastMessages.notificationUpdated'))
+        : (isAlarm ? t('toastMessages.alarmScheduled') : t('toastMessages.notificationScheduled')),
       position: 'center',
       visibilityTime: 3000,
       autoHide: true,
@@ -74,7 +76,7 @@ export default function ScheduleFormScreen() {
     setTimeout(() => {
       router.replace('/(tabs)' as any);
     }, 100);
-  }, [router, isEditMode, t]);
+  }, [router, isEditMode, t, colors]);
 
   const handleCancel = useCallback(() => {
     if (isEditMode) {
