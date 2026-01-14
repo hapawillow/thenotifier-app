@@ -24,11 +24,11 @@ export default function ScheduleTabScreen() {
     }, [router])
   );
 
-  const handleSuccess = useCallback(() => {
+  const handleSuccess = useCallback((isAlarm?: boolean) => {
     // Form handles its own success message
     Toast.show({
       type: 'success',
-      text1: t('toastMessages.notificationScheduled'),
+      text1: isAlarm ? t('toastMessages.alarmScheduled') : t('toastMessages.notificationScheduled'),
       position: 'center',
       visibilityTime: 3000,
       autoHide: true,
@@ -43,7 +43,7 @@ export default function ScheduleTabScreen() {
       router.replace('/(tabs)' as any);
     }, 100);
 
-  }, [router]);
+  }, [router, t, colors]);
 
   const handleCancel = useCallback(() => {
     // Form handles its own cancel logic

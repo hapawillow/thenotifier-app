@@ -374,7 +374,26 @@ class AlarmKitManager {
         // Use currentAlarmsFromKit (populated by monitorAlarms())
         // Note: If this is empty, monitorAlarms() hasn't received updates yet
         // In that case, we'll still process alarms from metadata store
-        let alarmsFromKit = currentAlarmsFromKit
+        var alarmsFromKit = currentAlarmsFromKit
+        logger.info("[AlarmKitManager] getAllAlarms() called. currentAlarmsFromKit count: \(alarmsFromKit.count), metadata store count: \(self.alarmMetadataStore.count)")
+        
+        // If currentAlarmsFromKit is empty, wait briefly for monitorAlarms() to populate it
+        // This handles the case where getAllAlarms() is called before monitorAlarms() has received its first update
+        if alarmsFromKit.isEmpty {
+            logger.info("[AlarmKitManager] currentAlarmsFromKit is empty, waiting briefly for monitorAlarms() to populate")
+            // Wait up to 500ms for monitorAlarms() to populate currentAlarmsFromKit
+            for _ in 0..<5 {
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                alarmsFromKit = self.currentAlarmsFromKit
+                if !alarmsFromKit.isEmpty {
+                    logger.info("[AlarmKitManager] Got \(alarmsFromKit.count) alarms from monitorAlarms() after wait")
+                    break
+                }
+            }
+            if alarmsFromKit.isEmpty {
+                logger.warning("[AlarmKitManager] Still empty after waiting, proceeding with metadata-only alarms")
+            }
+        }
         
         // Restore metadata from UserDefaults for ALL alarms that have persisted metadata
         // This handles alarms scheduled before app restart, even if they're not in currentAlarmsFromKit yet
@@ -601,6 +620,7 @@ class AlarmKitManager {
         }
         
         // Then process alarms from AlarmKit that aren't in metadata store
+        logger.info("[AlarmKitManager] Processing \(alarmsFromKit.count) alarms from AlarmKit")
         for (alarmId, alarmKitAlarm) in alarmsFromKit {
             let canonicalId = UUID(uuidString: alarmId)?.uuidString ?? alarmId
             
@@ -609,8 +629,11 @@ class AlarmKitManager {
             let lowerCanonicalId = canonicalId.lowercased()
             if addedAlarmIds.contains(alarmId) || addedAlarmIds.contains(canonicalId) ||
                addedAlarmIds.contains(lowerAlarmId) || addedAlarmIds.contains(lowerCanonicalId) {
+                logger.info("[AlarmKitManager] Skipping alarm \(canonicalId, privacy: .public) - already added from metadata")
                 continue
             }
+            
+            logger.info("[AlarmKitManager] Processing alarm from AlarmKit: \(canonicalId, privacy: .public)")
             
             // Try to find metadata (case-insensitive lookup)
             var foundMetadata: [String: Any]? = nil
@@ -1038,6 +1061,15 @@ class AlarmKitManager {
                 logger.warning("[AlarmKitManager] Alarm \(canonicalId, privacy: .public) missing metadata, using fallback extraction")
             }
         }
+        
+        let returnedIds = alarms.compactMap { $0["id"] as? String }
+        logger.info("[AlarmKitManager] getAllAlarms() returning \(alarms.count) alarms. Alarm IDs: \(returnedIds.joined(separator: ", "), privacy: .public)")
+        
+        // Log summary: how many from metadata vs AlarmKit
+        let fromMetadataCount = returnedIds.filter { id in
+            self.alarmMetadataStore.keys.contains { $0.lowercased() == id.lowercased() }
+        }.count
+        logger.info("[AlarmKitManager] Summary: \(fromMetadataCount) from metadata, \(alarms.count - fromMetadataCount) from AlarmKit only")
         
         return alarms
     }
@@ -1676,6 +1708,7 @@ class AlarmKitManager {
     private func monitorAlarms() async {
         for await alarms in manager.alarmUpdates {
             let currentIds = Set(alarms.map { $0.id.uuidString })
+            logger.info("[AlarmKitManager] monitorAlarms() received update with \(alarms.count) alarms. IDs: \(currentIds.joined(separator: ", "), privacy: .public)")
             // Update current alarm IDs for getAllAlarms() to query
             currentAlarmIds = currentIds
             // Store current alarms from AlarmKit for getAllAlarms() to access
@@ -1765,6 +1798,14 @@ class AlarmKitManager {
                                 } catch {
                                     print("Failed to reschedule recurring alarm \(alarmId): \(error)")
                                 }
+                            }
+                        } else if scheduleType == "fixed" {
+                            // One-time alarm: clean up after firing
+                            do {
+                                try await cancelAlarm(id: alarmId)
+                                logger.info("[AlarmKitManager] Cleaned up one-time alarm after firing: \(alarmId, privacy: .public)")
+                            } catch {
+                                logger.warning("[AlarmKitManager] Failed to cleanup one-time alarm \(alarmId, privacy: .public): \(error)")
                             }
                         }
                     }

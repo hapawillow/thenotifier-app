@@ -52,9 +52,150 @@ export async function setOrphanReconcileMode(mode: 'silent' | 'alert'): Promise<
  */
 interface ReconcileSummary {
   cancelledPlatformOrphans: number;
+  cancelledAlarmOrphans: number;
   rescheduledItems: number;
   cancelledDbRemovedItems: number;
   failures: number;
+}
+
+/**
+ * Cancel orphaned alarms that don't belong to any database notification
+ */
+async function cancelAlarmOrphans(
+  dbScheduledParents: Set<string>,
+  dbScheduledWithAlarms: Set<string>
+): Promise<{ cancelled: number; failures: number }> {
+  let cancelled = 0;
+  let failures = 0;
+
+  try {
+    // Get all alarms from OS
+    const allAlarms = await NativeAlarmManager.getAllAlarms();
+    logger.info(
+      makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+      `Found ${allAlarms.length} alarms in OS. ` +
+      `Database has ${dbScheduledWithAlarms.size} notifications with alarms. ` +
+      `Valid alarm IDs: ${Array.from(validAlarmIds).join(', ')}`
+    );
+
+    // Build set of valid alarm IDs from database
+    const validAlarmIds = new Set<string>();
+    const validAlarmCategories = new Set<string>(); // For Android category matching
+
+    // Add derived alarm IDs from notificationIds (remove "thenotifier-" prefix)
+    const NOTIFIER_PREFIX = 'thenotifier-';
+    for (const notificationId of dbScheduledWithAlarms) {
+      if (notificationId.startsWith(NOTIFIER_PREFIX)) {
+        const derivedId = notificationId.substring(NOTIFIER_PREFIX.length);
+        validAlarmIds.add(derivedId);
+      } else {
+        validAlarmIds.add(notificationId);
+      }
+      // Android: alarms are tagged with category=notificationId
+      validAlarmCategories.add(notificationId);
+    }
+
+    // Add alarm IDs from dailyAlarmInstance table
+    try {
+      const { getAllDailyAlarmInstances } = await import('./database');
+      for (const notificationId of dbScheduledWithAlarms) {
+        const instances = await getAllDailyAlarmInstances(notificationId);
+        for (const instance of instances) {
+          validAlarmIds.add(instance.alarmId);
+          // Also try without prefix if it has one
+          if (instance.alarmId.startsWith(NOTIFIER_PREFIX)) {
+            validAlarmIds.add(instance.alarmId.substring(NOTIFIER_PREFIX.length));
+          }
+        }
+      }
+    } catch (error) {
+      logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), 'Failed to get daily alarm instances:', error);
+    }
+
+    // Check each OS alarm to see if it belongs to a valid parent
+    for (const alarm of allAlarms) {
+      let isOrphan = true;
+      const alarmId = alarm.id;
+      let matchReason = '';
+
+      // Check if alarm ID matches a valid ID
+      if (validAlarmIds.has(alarmId)) {
+        isOrphan = false;
+        matchReason = 'alarm ID match';
+      }
+
+      // Check Android category match
+      if (Platform.OS === 'android' && alarm.category && validAlarmCategories.has(alarm.category)) {
+        isOrphan = false;
+        matchReason = 'category match';
+      }
+
+      // Check config.data.notificationId match
+      if (alarm.config?.data?.notificationId) {
+        const parentNotificationId = alarm.config.data.notificationId as string;
+        if (dbScheduledParents.has(parentNotificationId)) {
+          isOrphan = false;
+          matchReason = 'config.data.notificationId match';
+        }
+      }
+
+      // Log the decision for debugging
+      if (isOrphan) {
+        let shouldCancel = true;
+        
+        // Check if alarm is scheduled for the future - if so, be more conservative about cancelling
+        // On iOS, alarms scheduled for the future might not have metadata yet
+        if (alarm.nextFireDate) {
+          try {
+            const fireDate = new Date(alarm.nextFireDate);
+            const now = new Date();
+            // If alarm is scheduled more than 1 hour in the future, don't cancel it
+            // It might be a valid alarm that just doesn't have metadata yet
+            if (fireDate.getTime() > now.getTime() + 3600000) {
+              logger.warn(
+                makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+                `Skipping cancellation of future alarm ${alarmId} (fires at ${fireDate.toISOString()}) - may be valid but missing metadata`
+              );
+              shouldCancel = false;
+            }
+          } catch (e) {
+            // If we can't parse the date, proceed with cancellation
+          }
+        }
+        
+        if (shouldCancel) {
+          logger.warn(
+            makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+            `Alarm ${alarmId} appears to be orphaned. ` +
+            `Valid alarm IDs: ${Array.from(validAlarmIds).slice(0, 5).join(', ')}${validAlarmIds.size > 5 ? '...' : ''}, ` +
+            `Category: ${alarm.category || 'none'}, ` +
+            `Config notificationId: ${alarm.config?.data?.notificationId || 'none'}`
+          );
+          try {
+            await NativeAlarmManager.cancelAlarm(alarmId);
+            logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Cancelled orphaned alarm: ${alarmId}`);
+            cancelled++;
+          } catch (error: any) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+              logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Failed to cancel orphaned alarm ${alarmId}:`, error);
+              failures++;
+            }
+          }
+        }
+      } else {
+        logger.info(
+          makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+          `Alarm ${alarmId} is valid (${matchReason}), keeping it`
+        );
+      }
+    }
+  } catch (error) {
+    logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), 'Failed to cancel alarm orphans:', error);
+    failures++;
+  }
+
+  return { cancelled, failures };
 }
 
 /**
@@ -63,8 +204,9 @@ interface ReconcileSummary {
  */
 async function cancelPlatformOrphans(
   dbScheduledParents: Set<string>
-): Promise<{ cancelled: number; failures: number }> {
+): Promise<{ cancelled: number; alarmCancelled: number; failures: number }> {
   let cancelled = 0;
+  let alarmCancelled = 0;
   let failures = 0;
 
   try {
@@ -97,18 +239,29 @@ async function cancelPlatformOrphans(
       }
     }
 
-    // Cancel orphaned alarms (best-effort DB-driven probing)
-    // Since we can't enumerate alarms, we'll rely on DB-driven cancellation in step 3
-    // But we can probe for known alarm IDs that shouldn't exist
-    for (const parentId of Array.from(dbScheduledParents)) {
-      // This will be handled in step 3 (DB-driven cancellation)
+    // Cancel orphaned alarms
+    // Get notifications that have alarms enabled
+    try {
+      const dbScheduledParentsArray = await getAllScheduledNotificationData();
+      const dbScheduledWithAlarms = new Set(
+        dbScheduledParentsArray
+          .filter(p => p.hasAlarm)
+          .map(p => p.notificationId)
+      );
+
+      const alarmOrphanResult = await cancelAlarmOrphans(dbScheduledParents, dbScheduledWithAlarms);
+      alarmCancelled = alarmOrphanResult.cancelled;
+      failures += alarmOrphanResult.failures;
+    } catch (alarmError) {
+      logger.error(makeLogHeader(LOG_FILE, 'cancelPlatformOrphans'), 'Failed to cancel alarm orphans:', alarmError);
+      failures++;
     }
   } catch (error) {
     logger.error(makeLogHeader(LOG_FILE, 'cancelPlatformOrphans'), 'Failed to cancel platform orphans:', error);
     failures++;
   }
 
-  return { cancelled, failures };
+  return { cancelled, alarmCancelled, failures };
 }
 
 /**
@@ -291,6 +444,7 @@ async function cancelDbRemovedItems(
 export async function reconcileOrphansOnStartup(t?: (key: string) => string): Promise<ReconcileSummary> {
   const summary: ReconcileSummary = {
     cancelledPlatformOrphans: 0,
+    cancelledAlarmOrphans: 0,
     rescheduledItems: 0,
     cancelledDbRemovedItems: 0,
     failures: 0,
@@ -326,6 +480,7 @@ export async function reconcileOrphansOnStartup(t?: (key: string) => string): Pr
     // Step 1: Cancel platform extras (true orphans)
     const step1Result = await cancelPlatformOrphans(dbParentIds);
     summary.cancelledPlatformOrphans = step1Result.cancelled;
+    summary.cancelledAlarmOrphans = step1Result.alarmCancelled;
     summary.failures += step1Result.failures;
 
     // Step 2: Ensure platform matches DB (auto-heal)
@@ -349,10 +504,11 @@ export async function reconcileOrphansOnStartup(t?: (key: string) => string): Pr
 
     // Show alert if mode is 'alert' and actions were taken
     const mode = await getOrphanReconcileMode();
-    const hasActions = summary.cancelledPlatformOrphans > 0 || summary.rescheduledItems > 0 || summary.cancelledDbRemovedItems > 0;
+    const hasActions = summary.cancelledPlatformOrphans > 0 || summary.cancelledAlarmOrphans > 0 || summary.rescheduledItems > 0 || summary.cancelledDbRemovedItems > 0;
 
     if (mode === 'alert' && hasActions && t) {
-      const message = `Reconciled ${summary.cancelledPlatformOrphans + summary.cancelledDbRemovedItems} orphaned items and rescheduled ${summary.rescheduledItems} missing items.`;
+      const totalCancelled = summary.cancelledPlatformOrphans + summary.cancelledAlarmOrphans + summary.cancelledDbRemovedItems;
+      const message = `Reconciled ${totalCancelled} orphaned items (${summary.cancelledPlatformOrphans} notifications, ${summary.cancelledAlarmOrphans} alarms) and rescheduled ${summary.rescheduledItems} missing items.`;
       Alert.alert('Orphan Reconciliation', message, [{ text: 'OK' }]);
     }
 
@@ -375,6 +531,7 @@ export async function reconcileOrphansOnStartup(t?: (key: string) => string): Pr
 export async function reconcileOrphansOnForeground(t?: (key: string) => string): Promise<ReconcileSummary> {
   const summary: ReconcileSummary = {
     cancelledPlatformOrphans: 0,
+    cancelledAlarmOrphans: 0,
     rescheduledItems: 0,
     cancelledDbRemovedItems: 0,
     failures: 0,
@@ -410,6 +567,7 @@ export async function reconcileOrphansOnForeground(t?: (key: string) => string):
     // Step 1: Cancel platform extras (true orphans)
     const step1Result = await cancelPlatformOrphans(dbParentIds);
     summary.cancelledPlatformOrphans = step1Result.cancelled;
+    summary.cancelledAlarmOrphans = step1Result.alarmCancelled;
     summary.failures += step1Result.failures;
 
     // Step 2: Ensure platform matches DB (auto-heal) - lighter version
@@ -427,7 +585,7 @@ export async function reconcileOrphansOnForeground(t?: (key: string) => string):
     logger.info(makeLogHeader(LOG_FILE, 'reconcileOrphansOnForeground'), 'Foreground orphan reconciliation complete:', summary);
 
     // Emit refresh event if actions were taken
-    const hasActions = summary.cancelledPlatformOrphans > 0 || summary.rescheduledItems > 0;
+    const hasActions = summary.cancelledPlatformOrphans > 0 || summary.cancelledAlarmOrphans > 0 || summary.rescheduledItems > 0;
     if (hasActions) {
       notificationRefreshEvents.emit();
     }

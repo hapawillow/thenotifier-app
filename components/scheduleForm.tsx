@@ -126,7 +126,7 @@ export interface ScheduleFormProps {
   initialParams?: ScheduleFormParams;
   isEditMode: boolean;
   source?: 'home' | 'calendar' | 'tab' | 'schedule';
-  onSuccess?: () => void;
+  onSuccess?: (isAlarm?: boolean) => void;
   onCancel?: () => void;
 }
 
@@ -682,7 +682,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   }, []);
 
   const handleMessageChange = useCallback((text: string) => {
-    const MAX_LENGTH = 60;
+    const MAX_LENGTH = 80;
     if (text.length > MAX_LENGTH) {
       setMessage(text.substring(0, MAX_LENGTH));
       Toast.show({
@@ -700,7 +700,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
   }, [t]);
 
   const handleNoteChange = useCallback((text: string) => {
-    const MAX_LENGTH = 240;
+    const MAX_LENGTH = 480;
     if (text.length > MAX_LENGTH) {
       setNote(text.substring(0, MAX_LENGTH));
       Toast.show({
@@ -1983,7 +1983,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                   logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Error in resetForm (from alert):', resetError);
                   // Continue anyway - form reset is not critical
                 }
-                onSuccess?.();
+                onSuccess?.(scheduleAlarm);
               },
             },
           ]
@@ -2017,9 +2017,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       logger.error(makeLogHeader(LOG_FILE, 'scheduleNotification'), 'Failed link:', link);
 
       if (isEditMode) {
-        Alert.alert(t('alertTitles.error'), t('alertMessages.failedToUpdateGeneric'));
+        Alert.alert(t('alertTitles.error'), scheduleAlarm ? t('alertMessages.failedToUpdateAlarm') : t('alertMessages.failedToUpdateGeneric'));
       } else {
-        Alert.alert(t('alertTitles.error'), t('alertMessages.failedToSchedule'));
+        Alert.alert(t('alertTitles.error'), scheduleAlarm ? t('alertMessages.failedToScheduleAlarm') : t('alertMessages.failedToSchedule'));
       }
     }
   };
@@ -2278,7 +2278,9 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
               <ThemedText
                 maxFontSizeMultiplier={1.6}
                 style={scheduleButtonTextStyle}>
-                {isEditMode ? t('buttonText.updateNotification') : t('buttonText.scheduleNotification')}
+                {isEditMode
+                  ? (scheduleAlarm ? t('buttonText.updateAlarm') : t('buttonText.updateNotification'))
+                  : (scheduleAlarm ? t('buttonText.scheduleAlarm') : t('buttonText.scheduleNotification'))}
               </ThemedText>
             </TouchableOpacity >
           </ThemedView >

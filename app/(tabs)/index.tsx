@@ -451,9 +451,17 @@ export default function HomeScreen() {
   };
 
   const handleDelete = async (notification: ScheduledNotification) => {
+    const alertTitle = notification.hasAlarm 
+      ? t('alertTitles.deleteAlarm')
+      : t('alertTitles.deleteNotification');
+    
+    const alertMessage = notification.hasAlarm
+      ? t('alertMessages.deleteAlarmConfirmation')
+      : t('alertMessages.deleteNotificationConfirmation');
+
     Alert.alert(
-      t('alertTitles.deleteNotification'),
-      t('alertMessages.deleteConfirmation'),
+      alertTitle,
+      alertMessage,
       [
         { text: t('buttonText.cancel'), style: 'cancel' },
         {
@@ -495,7 +503,7 @@ export default function HomeScreen() {
 
               Toast.show({
                 type: 'success',
-                text1: t('toastMessages.notificationCancelled'),
+                text1: notification.hasAlarm ? t('toastMessages.alarmCancelled') : t('toastMessages.notificationCancelled'),
                 position: 'center',
                 visibilityTime: 3000,
                 autoHide: true,
