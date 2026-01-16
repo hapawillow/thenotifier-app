@@ -2,13 +2,14 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo } from 'react';
-import { StyleSheet, TouchableOpacity } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
 import { useT } from '@/utils/i18n';
-import { openNotifierLink } from '@/utils/open-link';
 import { logger, makeLogHeader } from '@/utils/logger';
+import { openNotifierLink } from '@/utils/open-link';
+import { useNavigation } from '@react-navigation/native';
+import { router, useLocalSearchParams } from 'expo-router';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
+import { useEffect, useMemo } from 'react';
+import { Platform, StyleSheet, TouchableOpacity } from 'react-native';
 
 const LOG_FILE = 'app/notification-display.tsx';
 
@@ -39,16 +40,27 @@ export default function NotificationDisplayScreen() {
 
 
 
-  const { title, message, note, link } = useLocalSearchParams<{ title: string, message: string, note: string, link: string }>();
+  const { title, message, note, link, alarmId } = useLocalSearchParams<{ title: string, message: string, note: string, link: string, alarmId: string }>();
   logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'title', title);
   logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'message', message);
   logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'note', note);
   logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'link', link);
+  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'alarmId', alarmId);
 
   const handleOpenLink = async () => {
     if (!link) return;
     await openNotifierLink(link, t);
   };
+
+  // Android: Stop alarm sound and dismiss notification banner when screen is displayed
+  useEffect(() => {
+    if (Platform.OS === 'android' && alarmId) {
+      logger.info(makeLogHeader(LOG_FILE, 'useEffect'), 'Calling stopAlarmSoundAndDismiss for alarmId:', alarmId);
+      NativeAlarmManager.stopAlarmSoundAndDismiss?.(alarmId).catch((error) => {
+        logger.error(makeLogHeader(LOG_FILE, 'useEffect'), 'Failed to stop alarm sound/dismiss notification:', error);
+      });
+    }
+  }, [alarmId]);
 
   return (
     <ThemedView style={styles.container}>
