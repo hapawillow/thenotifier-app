@@ -9,7 +9,15 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "developmentClient": false,
+        "distribution": "internal",
+        "env": {
+          "__DEV__": "true"
+        }
+      }
     },
     "beta": {
       "autoIncrement": true,
