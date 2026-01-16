@@ -28,6 +28,12 @@ import appJson from '../app.json';
 
 const LOG_FILE = 'app/_layout.tsx';
 
+// Module-scoped variables to survive component re-mounts
+// These persist even when the component unmounts/remounts (e.g., after router.replace())
+let initialUrlProcessed = false;
+let lastProcessedResponseKey: string | null = null;
+const handledDeepLinks = new Set<string>();
+const handledNotifications = new Set<string>();
 
 // Keep the splash screen visible while we fetch resources
 SplashScreen.preventAutoHideAsync();
@@ -41,15 +47,12 @@ export default function RootLayout() {
   const router = useRouter();
   const responseListener = useRef<EventSubscription | null>(null);
   const lastNotificationResponse = Notifications.useLastNotificationResponse();
-  const handledNotificationsRef = useRef<Set<string>>(new Set());
   const pendingNavTimeoutRef = useRef<NodeJS.Timeout | number | null>(null);
   const navigationCooldownRef = useRef<Map<string, number>>(new Map());
-  const lastProcessedResponseKeyRef = useRef<string | null>(null);
   const awaitingInitialResponseRef = useRef<boolean>(false);
   const retryTimeoutRef = useRef<NodeJS.Timeout | number | null>(null);
   const pendingDeepLinkUrlRef = useRef<string | null>(null);
   const lastHandledDeepLinkRef = useRef<{ url: string; at: number } | null>(null);
-  const handledDeepLinksRef = useRef<Set<string>>(new Set());
   const lastNavigatedScreenRef = useRef<{ pathname: string; params: Record<string, string>; at: number } | null>(null);
   const [changedEvents, setChangedEvents] = useState<ChangedCalendarEvent[]>([]);
   const [showCalendarChangeModal, setShowCalendarChangeModal] = useState(false);
@@ -105,14 +108,14 @@ export default function RootLayout() {
 
       // Check if this URL is already in the handled set (prevents rapid re-processing)
       // This check happens BEFORE marking as handled, so if it's already handled, we skip entirely
-      if (handledDeepLinksRef.current.has(url)) {
+      if (handledDeepLinks.has(url)) {
         logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Deep link already handled, skipping');
         return;
       }
 
       if (!loaded || !i18nLoaded || !i18nPack) {
         // Only store in pending ref if not already handled
-        if (!handledDeepLinksRef.current.has(url)) {
+        if (!handledDeepLinks.has(url)) {
           pendingDeepLinkUrlRef.current = url;
           logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'App not ready; deferring deep link handling');
         }
@@ -121,7 +124,7 @@ export default function RootLayout() {
 
       // Mark as handled IMMEDIATELY before processing to prevent re-entry
       // This must happen before any async operations or navigation
-      handledDeepLinksRef.current.add(url);
+      handledDeepLinks.add(url);
       lastHandledDeepLinkRef.current = { url, at: now };
 
       // Clear from pending ref if it was stored there
@@ -149,7 +152,7 @@ export default function RootLayout() {
         // Try to find matching notification and mark it as handled
         // Use a combination of title and message as a dedupe key since we don't have notificationId in the URL
         const notificationDedupeKey = `deepLink_${title}_${message}`;
-        handledNotificationsRef.current.add(notificationDedupeKey);
+        handledNotifications.add(notificationDedupeKey);
         logger.info(makeLogHeader(LOG_FILE, 'handleDeepLinkNavigation'), 'Marked notification as handled via deep link:', notificationDedupeKey);
       }
 
@@ -161,6 +164,7 @@ export default function RootLayout() {
           message: normalize(params.message),
           note: normalize(params.note),
           link: normalize(params.link),
+          alarmId: normalize(params.alarmId),
         },
       };
 
@@ -205,6 +209,12 @@ export default function RootLayout() {
           // Small additional delay to ensure router is ready
           setTimeout(performNavigation, 100);
         });
+      } else if (isColdStart) {
+        // Cold start: add delay to ensure router is fully ready
+        // This is especially important for deferred deep links that run after initialization
+        InteractionManager.runAfterInteractions(() => {
+          setTimeout(performNavigation, 300); // Slightly longer delay for cold start
+        });
       } else {
         performNavigation();
       }
@@ -217,15 +227,19 @@ export default function RootLayout() {
   useEffect(() => {
     let isMounted = true;
 
-    Linking.getInitialURL()
-      .then((url) => {
-        if (!isMounted || !url) return;
-        logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Initial URL:', url);
-        handleDeepLinkNavigation(url, true);
-      })
-      .catch((error) => {
-        logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to get initial URL:', error);
-      });
+    // Only process initial URL once, even if component re-mounts
+    if (!initialUrlProcessed) {
+      Linking.getInitialURL()
+        .then((url) => {
+          if (!isMounted || !url) return;
+          initialUrlProcessed = true; // Mark as processed
+          logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Initial URL:', url);
+          handleDeepLinkNavigation(url, true);
+        })
+        .catch((error) => {
+          logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to get initial URL:', error);
+        });
+    }
 
     const sub = Linking.addEventListener('url', (event) => {
       if (!event?.url) return;
@@ -233,7 +247,7 @@ export default function RootLayout() {
 
       // Mark as handled IMMEDIATELY to prevent AppState listener from processing it
       // This must happen before any async operations
-      if (handledDeepLinksRef.current.has(event.url)) {
+      if (handledDeepLinks.has(event.url)) {
         logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'URL already handled, skipping Linking listener');
         return;
       }
@@ -245,7 +259,7 @@ export default function RootLayout() {
       }
 
       // Mark as handled immediately to prevent duplicate processing
-      handledDeepLinksRef.current.add(event.url);
+      handledDeepLinks.add(event.url);
       lastHandledDeepLinkRef.current = { url: event.url, at: Date.now() };
 
       handleDeepLinkNavigation(event.url, false);
@@ -296,9 +310,10 @@ export default function RootLayout() {
     const data = notification.request.content.data;
 
     // Compute dedupe key: use parent notification ID if available (for repeat notifications),
-    // otherwise fall back to the instance identifier
+    // otherwise fall back to the instance identifier, or alarmId if notificationId is null
     const parentId = (data?.notificationId as string) || null;
-    const dedupeKey = parentId || notificationId;
+    const alarmId = (data?.alarmId as string) || null;
+    const dedupeKey = parentId || notificationId || alarmId || 'unknown';
 
     // Also create a deep link dedupe key based on notification content to prevent duplicate navigation
     // when both deep link and notification handlers fire for the same alarm
@@ -314,13 +329,13 @@ export default function RootLayout() {
 
     // CRITICAL: Check dedupe key FIRST before any async operations
     // This prevents multiple calls from processing the same notification
-    if (handledNotificationsRef.current.has(dedupeKey)) {
+    if (handledNotifications.has(dedupeKey)) {
       logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Notification already handled (dedupe key), skipping...');
       return;
     }
 
     // Also check if this notification was already handled via deep link
-    if (handledDeepLinksRef.current.has(deepLinkDedupeKey) || handledNotificationsRef.current.has(deepLinkDedupeKey)) {
+    if (handledDeepLinks.has(deepLinkDedupeKey) || handledNotifications.has(deepLinkDedupeKey)) {
       logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Notification already handled via deep link, skipping...');
       return;
     }
@@ -340,8 +355,8 @@ export default function RootLayout() {
       // Mark as handled NOW - just before we start processing the navigation
       // This is done here instead of at the top to ensure we don't mark it handled too early
       // (e.g., before dev menu is dismissed on cold start)
-      handledNotificationsRef.current.add(dedupeKey);
-      handledNotificationsRef.current.add(notificationId);
+      handledNotifications.add(dedupeKey);
+      handledNotifications.add(notificationId);
       logger.info(makeLogHeader(LOG_FILE, 'handleNotificationNavigation'), 'handleNotificationNavigation: Marked notification as handled');
 
       // Check if we need to archive any scheduled notifications
@@ -489,6 +504,9 @@ export default function RootLayout() {
         // Update cooldown timestamp BEFORE navigation to prevent rapid re-navigation
         navigationCooldownRef.current.set(dedupeKey, Date.now());
 
+        // Extract alarmId from notification data (Android alarms include this)
+        const alarmId = (data?.alarmId as string) || '';
+
         // Check if we just navigated to this same screen with the same params (prevent duplicate navigation)
         const navParams = {
           pathname: '/notification-display' as const,
@@ -496,7 +514,8 @@ export default function RootLayout() {
             title: notification.request.content.title || '',
             message: notification.request.content.body || '',
             note: (data?.note as string) || '',
-            link: (data?.link as string) || ''
+            link: (data?.link as string) || '',
+            alarmId: alarmId,
           },
         };
 
@@ -547,6 +566,38 @@ export default function RootLayout() {
   useEffect(() => {
     logger.info(makeLogHeader(LOG_FILE), '=== useEffect: lastNotificationResponse changed ===');
     logger.info(makeLogHeader(LOG_FILE), 'lastNotificationResponse:', lastNotificationResponse);
+
+    // EARLY EXIT: If response is null, don't continue
+    if (!lastNotificationResponse) {
+      return;
+    }
+
+    // Check if already processed BEFORE any other checks (prevents re-processing on re-mount)
+    const { notification, actionIdentifier } = lastNotificationResponse;
+    const notificationId = notification.request.identifier;
+    const trigger = notification.request.trigger;
+    const triggerDate = trigger && 'date' in trigger ? trigger.date : undefined;
+    const dateValue = notification.date || triggerDate || 0;
+    const responseKey = `${notificationId}-${actionIdentifier}-${dateValue}`;
+
+    // SKIP Android alarm fake notification responses
+    // Android alarms create fake notification responses from Intent extras
+    // These have no content (null identifier, null title) and should be skipped
+    // The deep link path will handle navigation with full data
+    const title = notification.request.content.title;
+    const data = notification.request.content.data;
+    const fromNotificationTap = data?.fromNotificationTap;
+
+    if (Platform.OS === 'android' && notificationId === null && title === null && fromNotificationTap === true) {
+      logger.info(makeLogHeader(LOG_FILE), 'Skipping fake Android alarm notification response (will handle via deep link path)');
+      return;
+    }
+
+    if (lastProcessedResponseKey === responseKey) {
+      logger.info(makeLogHeader(LOG_FILE), 'Response already processed, skipping');
+      return;
+    }
+
     logger.info(makeLogHeader(LOG_FILE), 'Current app state:', AppState.currentState);
     logger.info(makeLogHeader(LOG_FILE), 'App initialized?', { loaded, i18nLoaded, hasI18nPack: !!i18nPack });
 
@@ -560,36 +611,17 @@ export default function RootLayout() {
     // Detect cold start: responseListener not set up yet
     const isColdStart = !responseListener.current;
 
-    // If lastNotificationResponse is null and this is a cold start, mark that we're awaiting it
-    // The effect will re-run when lastNotificationResponse becomes available (it's in the dependency array)
-    if (!lastNotificationResponse && isColdStart) {
-      if (!awaitingInitialResponseRef.current) {
-        logger.info(makeLogHeader(LOG_FILE), 'Cold start detected but lastNotificationResponse is null, marking as awaiting initial response');
-        awaitingInitialResponseRef.current = true;
-      }
-      // Effect will re-run when lastNotificationResponse changes from null to a value
-      return;
-    }
-
-    if (lastNotificationResponse) {
+    // Process the notification response
+    {
       // Clear awaiting flag since we have the response
       if (awaitingInitialResponseRef.current) {
         logger.info(makeLogHeader(LOG_FILE), 'lastNotificationResponse now available, processing');
         awaitingInitialResponseRef.current = false;
       }
-      const { notification, actionIdentifier } = lastNotificationResponse;
-      const notificationId = notification.request.identifier;
       const data = notification.request.content.data;
       const parentId = (data?.notificationId as string) || null;
-      const dedupeKey = parentId || notificationId;
-
-      // Create a unique response key to prevent React rerenders from retriggering
-      // Use notification.date for stable key - this should be consistent across re-renders
-      // If notification.date is not available, use a combination that's stable per notification instance
-      const trigger = notification.request.trigger;
-      const triggerDate = trigger && 'date' in trigger ? trigger.date : undefined;
-      const dateValue = notification.date || triggerDate || 0;
-      const responseKey = `${notificationId}-${actionIdentifier}-${dateValue}`;
+      const alarmId = (data?.alarmId as string) || null;
+      const dedupeKey = parentId || notificationId || alarmId || 'unknown';
 
       logger.info(makeLogHeader(LOG_FILE), '=== LAST NOTIFICATION RESPONSE DETECTED ===');
       logger.info(makeLogHeader(LOG_FILE), 'Notification ID:', notificationId);
@@ -598,14 +630,14 @@ export default function RootLayout() {
       logger.info(makeLogHeader(LOG_FILE), 'Response key:', responseKey);
       logger.info(makeLogHeader(LOG_FILE), 'Action identifier:', actionIdentifier);
       logger.info(makeLogHeader(LOG_FILE), 'Notification data:', notification.request.content.data);
-      logger.info(makeLogHeader(LOG_FILE), 'Already handled (dedupe)?', handledNotificationsRef.current.has(dedupeKey));
-      logger.info(makeLogHeader(LOG_FILE), 'Already processed (response key)?', lastProcessedResponseKeyRef.current === responseKey);
+      logger.info(makeLogHeader(LOG_FILE), 'Already handled (dedupe)?', handledNotifications.has(dedupeKey));
+      logger.info(makeLogHeader(LOG_FILE), 'Already processed (response key)?', lastProcessedResponseKey === responseKey);
 
       // CRITICAL: Check both response key AND dedupe key to prevent any reprocessing
       // The response key prevents the same response object from being processed twice
       // The dedupe key prevents different instances of the same parent notification from triggering navigation
-      const alreadyProcessed = lastProcessedResponseKeyRef.current === responseKey;
-      const alreadyHandled = handledNotificationsRef.current.has(dedupeKey);
+      const alreadyProcessed = lastProcessedResponseKey === responseKey;
+      const alreadyHandled = handledNotifications.has(dedupeKey);
 
       if (alreadyProcessed || alreadyHandled) {
         logger.info(makeLogHeader(LOG_FILE), `LastNotificationResponse skipped - alreadyProcessed: ${alreadyProcessed}, alreadyHandled: ${alreadyHandled}`);
@@ -615,7 +647,7 @@ export default function RootLayout() {
       // Mark as processed to prevent re-processing of the same response object
       // But DON'T mark as handled yet - that will be done in handleNotificationNavigation
       // just before navigation to ensure we don't mark it handled too early (e.g., before dev menu is dismissed)
-      lastProcessedResponseKeyRef.current = responseKey;
+      lastProcessedResponseKey = responseKey;
 
       logger.info(makeLogHeader(LOG_FILE), 'Processing lastNotificationResponse - calling handleNotificationNavigation');
 
@@ -661,7 +693,7 @@ export default function RootLayout() {
       logger.info(makeLogHeader(LOG_FILE), 'Notification data:', notification.request.content.data);
 
       // Only process if we haven't already handled this notification (by dedupe key)
-      if (!handledNotificationsRef.current.has(dedupeKey)) {
+      if (!handledNotifications.has(dedupeKey)) {
         // Check if this is the first response after cold start (fallback case)
         // If we were awaiting initial response, treat this as cold start navigation
         const isColdStartFallback = awaitingInitialResponseRef.current;
@@ -825,16 +857,18 @@ export default function RootLayout() {
     const checkImmediately = async () => {
       if (AppState.currentState === 'active' && loaded && i18nLoaded && i18nPack) {
         logger.info(makeLogHeader(LOG_FILE), 'App already active on mount, checking for pending deep links immediately');
-        try {
-          const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
-          if (pendingFromAlarmKit) {
-            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Found pending deep link on mount (app already active):', pendingFromAlarmKit);
-            await handleDeepLinkNavigation(pendingFromAlarmKit, false);
-          } else {
-            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'No pending deep link found on mount (app already active)');
+        if (Platform.OS === 'ios') {
+          try {
+            const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
+            if (pendingFromAlarmKit) {
+              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Found pending deep link on mount (app already active):', pendingFromAlarmKit);
+              await handleDeepLinkNavigation(pendingFromAlarmKit, false);
+            } else {
+              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'No pending deep link found on mount (app already active)');
+            }
+          } catch (error) {
+            logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to check pending deep link on mount:', error);
           }
-        } catch (error) {
-          logger.error(makeLogHeader(LOG_FILE, 'deepLink'), 'Failed to check pending deep link on mount:', error);
         }
       }
     };
@@ -851,51 +885,54 @@ export default function RootLayout() {
           // Wait for interactions to complete before handling deep links
           // This ensures the app is fully interactive and router is ready
           InteractionManager.runAfterInteractions(async () => {
-            // Check multiple times with delays to catch deep links that were stored while app was backgrounded
-            const checkPendingDeepLink = async (attempt: number): Promise<boolean> => {
-              try {
-                logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Checking for pending deep link from AlarmKit (attempt ${attempt}), AppState: ${AppState.currentState}`);
-                const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
-                if (pendingFromAlarmKit) {
-                  // Check if already handled by Linking listener
-                  if (handledDeepLinksRef.current.has(pendingFromAlarmKit)) {
-                    logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Pending deep link from AlarmKit already handled by Linking listener, skipping (attempt ${attempt}):`, pendingFromAlarmKit);
-                    return false;
+            // iOS AlarmKit: Check multiple times with delays to catch deep links that were stored while app was backgrounded
+            if (Platform.OS === 'ios') {
+              const checkPendingDeepLink = async (attempt: number): Promise<boolean> => {
+                try {
+                  logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Checking for pending deep link from AlarmKit (attempt ${attempt}), AppState: ${AppState.currentState}`);
+                  const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
+                  if (pendingFromAlarmKit) {
+                    // Check if already handled by Linking listener
+                    if (handledDeepLinksRef.current.has(pendingFromAlarmKit)) {
+                      logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Pending deep link from AlarmKit already handled by Linking listener, skipping (attempt ${attempt}):`, pendingFromAlarmKit);
+                      return false;
+                    }
+                    logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Consumed pending deep link from AlarmKit on AppState active (attempt ${attempt}):`, pendingFromAlarmKit);
+                    await handleDeepLinkNavigation(pendingFromAlarmKit, false);
+                    return true; // Found and handled
+                  } else {
+                    logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `No pending deep link found from AlarmKit (attempt ${attempt})`);
                   }
-                  logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Consumed pending deep link from AlarmKit on AppState active (attempt ${attempt}):`, pendingFromAlarmKit);
-                  await handleDeepLinkNavigation(pendingFromAlarmKit, false);
-                  return true; // Found and handled
-                } else {
-                  logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `No pending deep link found from AlarmKit (attempt ${attempt})`);
+                  return false; // Not found
+                } catch (error) {
+                  logger.error(makeLogHeader(LOG_FILE, 'deepLink'), `Failed to consume pending deep link from AlarmKit on AppState active (attempt ${attempt}):`, error);
+                  return false;
                 }
-                return false; // Not found
-              } catch (error) {
-                logger.error(makeLogHeader(LOG_FILE, 'deepLink'), `Failed to consume pending deep link from AlarmKit on AppState active (attempt ${attempt}):`, error);
-                return false;
+              };
+
+              // Check immediately
+              let found = await checkPendingDeepLink(1);
+
+              // If not found, check again after delays
+              if (!found) {
+                setTimeout(async () => {
+                  found = await checkPendingDeepLink(2);
+                  if (!found) {
+                    setTimeout(async () => {
+                      await checkPendingDeepLink(3);
+                    }, 500);
+                  }
+                }, 300);
               }
-            };
-
-            // Check immediately
-            let found = await checkPendingDeepLink(1);
-
-            // If not found, check again after delays
-            if (!found) {
-              setTimeout(async () => {
-                found = await checkPendingDeepLink(2);
-                if (!found) {
-                  setTimeout(async () => {
-                    await checkPendingDeepLink(3);
-                  }, 500);
-                }
-              }, 300);
             }
 
             // Also check if there's a pending deep link stored in the ref (from onDeepLink event)
+            // This part runs on both platforms
             // But only if it hasn't already been handled by the Linking listener
             const pendingFromRef = pendingDeepLinkUrlRef.current;
             if (pendingFromRef && loaded && i18nLoaded && i18nPack) {
               // Check if this URL was already handled (by Linking listener)
-              if (!handledDeepLinksRef.current.has(pendingFromRef)) {
+              if (!handledDeepLinks.has(pendingFromRef)) {
                 logger.info(makeLogHeader(LOG_FILE, 'deepLink'), 'Consumed pending deep link from ref on AppState active:', pendingFromRef);
                 pendingDeepLinkUrlRef.current = null;
                 await handleDeepLinkNavigation(pendingFromRef, false);
@@ -1060,64 +1097,66 @@ export default function RootLayout() {
 
       // iOS AlarmKit: consume a pending deep link saved by the stop/dismiss LiveActivityIntent.
       // Check multiple times with delays to catch deep links that were stored while app was backgrounded.
-      (async () => {
-        const checkPendingDeepLink = async (attempt: number) => {
-          try {
-            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Checking for pending deep link from AlarmKit (attempt ${attempt}), AppState: ${AppState.currentState}`);
+      if (Platform.OS === 'ios') {
+        (async () => {
+          const checkPendingDeepLink = async (attempt: number) => {
+            try {
+              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Checking for pending deep link from AlarmKit (attempt ${attempt}), AppState: ${AppState.currentState}`);
 
-            // Add a small delay before checking to ensure UserDefaults has synced
-            if (attempt > 1) {
-              await new Promise(resolve => setTimeout(resolve, 100));
+              // Add a small delay before checking to ensure UserDefaults has synced
+              if (attempt > 1) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+              }
+
+              const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
+              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `getPendingDeepLink returned (attempt ${attempt}):`, pendingFromAlarmKit || 'null');
+
+              if (pendingFromAlarmKit) {
+                logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Consumed pending deep link from AlarmKit (attempt ${attempt}):`, pendingFromAlarmKit);
+                handleDeepLinkNavigation(pendingFromAlarmKit, true);
+                return true; // Found and handled
+              } else {
+                logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `No pending deep link found from AlarmKit (attempt ${attempt})`);
+              }
+              return false; // Not found
+            } catch (error) {
+              logger.error(makeLogHeader(LOG_FILE, 'deepLink'), `Failed to consume pending deep link from AlarmKit (attempt ${attempt}):`, error);
+              return false;
             }
+          };
 
-            const pendingFromAlarmKit = await NativeAlarmManager.getPendingDeepLink?.();
-            logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `getPendingDeepLink returned (attempt ${attempt}):`, pendingFromAlarmKit || 'null');
+          // Check immediately
+          let found = await checkPendingDeepLink(1);
 
-            if (pendingFromAlarmKit) {
-              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `Consumed pending deep link from AlarmKit (attempt ${attempt}):`, pendingFromAlarmKit);
-              handleDeepLinkNavigation(pendingFromAlarmKit, true);
-              return true; // Found and handled
-            } else {
-              logger.info(makeLogHeader(LOG_FILE, 'deepLink'), `No pending deep link found from AlarmKit (attempt ${attempt})`);
-            }
-            return false; // Not found
-          } catch (error) {
-            logger.error(makeLogHeader(LOG_FILE, 'deepLink'), `Failed to consume pending deep link from AlarmKit (attempt ${attempt}):`, error);
-            return false;
+          // If not found, check multiple times with increasing delays
+          // This handles the case where perform() stores the URL after the app starts launching
+          if (!found) {
+            // Check after 500ms
+            setTimeout(async () => {
+              found = await checkPendingDeepLink(2);
+              if (!found) {
+                // Check after another 500ms (total 1s)
+                setTimeout(async () => {
+                  found = await checkPendingDeepLink(3);
+                  if (!found) {
+                    // Check after another 1s (total 2s)
+                    setTimeout(async () => {
+                      await checkPendingDeepLink(4);
+                    }, 1000);
+                  }
+                }, 500);
+              }
+            }, 500);
           }
-        };
 
-        // Check immediately
-        let found = await checkPendingDeepLink(1);
-
-        // If not found, check multiple times with increasing delays
-        // This handles the case where perform() stores the URL after the app starts launching
-        if (!found) {
-          // Check after 500ms
-          setTimeout(async () => {
-            found = await checkPendingDeepLink(2);
-            if (!found) {
-              // Check after another 500ms (total 1s)
-              setTimeout(async () => {
-                found = await checkPendingDeepLink(3);
-                if (!found) {
-                  // Check after another 1s (total 2s)
-                  setTimeout(async () => {
-                    await checkPendingDeepLink(4);
-                  }, 1000);
-                }
-              }, 500);
-            }
-          }, 500);
-        }
-
-        // Also check after interactions complete (in case there's a delay in storing the URL)
-        InteractionManager.runAfterInteractions(async () => {
-          setTimeout(async () => {
-            await checkPendingDeepLink(5);
-          }, 500);
-        });
-      })();
+          // Also check after interactions complete (in case there's a delay in storing the URL)
+          InteractionManager.runAfterInteractions(async () => {
+            setTimeout(async () => {
+              await checkPendingDeepLink(5);
+            }, 500);
+          });
+        })();
+      }
     }
   }, [loaded, i18nLoaded, i18nPack, handleDeepLinkNavigation]);
 
