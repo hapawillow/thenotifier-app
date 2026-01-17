@@ -245,6 +245,28 @@ class NotifierNativeAlarmsModule(private val reactContext: ReactApplicationConte
         }
     }
 
+    @ReactMethod
+    fun deleteAlarmFromStorage(alarmId: String, promise: Promise) {
+        try {
+            // Delete alarm from storage only (alarm should already be cancelled)
+            // Used after alarm has fired and been marked as fired in database
+            // Try both exact and fallback storage since getAllAlarms() combines both
+            try {
+                exactAlarmManager.deleteAlarmFromStorage(alarmId)
+            } catch (e: Exception) {
+                // Ignore if not found in exact storage
+            }
+            try {
+                notificationFallback.deleteAlarmFromStorage(alarmId)
+            } catch (e: Exception) {
+                // Ignore if not found in fallback storage
+            }
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("DELETE_ALARM_STORAGE_ERROR", e.message, e)
+        }
+    }
+
     // MARK: - Helper Methods
 
     private fun getCapabilityCheck(): WritableMap {

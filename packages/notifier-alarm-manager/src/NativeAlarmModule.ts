@@ -47,6 +47,7 @@ interface NativeAlarmsSpec {
 
   // Actions
   stopAlarmSoundAndDismiss?(alarmId: string): Promise<void>;
+  deleteAlarmFromStorage?(alarmId: string): Promise<void>;
 
   // Query
   getAlarm(id: string): Promise<ScheduledAlarm | null>;

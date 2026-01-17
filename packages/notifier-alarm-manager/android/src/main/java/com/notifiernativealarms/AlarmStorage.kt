@@ -114,11 +114,25 @@ object AlarmStorage {
         val alarmsJson = prefs.getString(KEY_ALARMS, "{}") ?: "{}"
         val alarmsObj = JSONObject(alarmsJson)
 
+        // Log all keys before deletion for debugging
+        val keysBefore = alarmsObj.keys().asSequence().toList()
+        android.util.Log.d("AlarmStorage", "deleteAlarm: Before deletion - alarmId=$alarmId, existingKeys=$keysBefore")
+
+        val hadKey = alarmsObj.has(alarmId)
         alarmsObj.remove(alarmId)
 
-        prefs.edit()
+        // Use commit() instead of apply() to ensure immediate persistence
+        val success = prefs.edit()
             .putString(KEY_ALARMS, alarmsObj.toString())
-            .apply()
+            .commit()
+        
+        // Verify deletion by reading back
+        val alarmsJsonAfter = prefs.getString(KEY_ALARMS, "{}") ?: "{}"
+        val alarmsObjAfter = JSONObject(alarmsJsonAfter)
+        val keysAfter = alarmsObjAfter.keys().asSequence().toList()
+        val stillExists = alarmsObjAfter.has(alarmId)
+        
+        android.util.Log.d("AlarmStorage", "deleteAlarm: After deletion - alarmId=$alarmId, hadKey=$hadKey, commitSuccess=$success, stillExists=$stillExists, remainingKeys=$keysAfter")
     }
 
     /**

@@ -245,13 +245,15 @@ class AlarmReceiver : BroadcastReceiver() {
 
     private fun cleanupOneTimeAlarm(context: Context, alarmId: String, isInexact: Boolean) {
         try {
-            // Cancel the alarm and remove from storage
+            // Cancel just the AlarmManager alarm without deleting from storage
+            // Storage will be cleaned up by JS replenisher after marking as fired
+            // This keeps alarm config available for verification by replenisher
             if (isInexact) {
                 val fallback = NotificationFallback(context)
-                fallback.cancelAlarm(alarmId)
+                fallback.cancelSingleAlarm(alarmId)
             } else {
                 val exactManager = ExactAlarmManager(context)
-                exactManager.cancelAlarm(alarmId)
+                exactManager.cancelSingleAlarm(alarmId)
             }
         } catch (e: Exception) {
             e.printStackTrace()
