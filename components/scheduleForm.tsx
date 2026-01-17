@@ -30,7 +30,7 @@ import { Toast } from 'toastify-react-native';
 const LOG_FILE = 'components/scheduleForm.tsx';
 
 // Maximum number of scheduled notifications allowed on the device
-const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 64 : 25);
+const MAX_SCHEDULED_NOTIFICATION_COUNT = (Platform.OS === 'ios' ? 64 : 50);
 logger.info(makeLogHeader(LOG_FILE), 'Maximum scheduled notification count for', Platform.OS, ':', MAX_SCHEDULED_NOTIFICATION_COUNT);
 
 // Minimum iOS version required for alarms
