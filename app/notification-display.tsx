@@ -40,16 +40,114 @@ export default function NotificationDisplayScreen() {
 
 
 
-  const { title, message, note, link, alarmId } = useLocalSearchParams<{ title: string, message: string, note: string, link: string, alarmId: string }>();
+  const { title, message, note, link: rawLink, alarmId } = useLocalSearchParams<{ title: string, message: string, note: string, link: string, alarmId: string }>();
+  
+  // Decode the link parameter - it may be URL-encoded when passed through deep link query parameters
+  // expo-router should decode it, but we'll ensure it's decoded here as a safeguard
+  const link = useMemo(() => {
+    if (!rawLink) return rawLink;
+    try {
+      // Check if link appears to be URL-encoded
+      if (rawLink.includes('%')) {
+        const decoded = decodeURIComponent(rawLink);
+        logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), `Decoded link parameter: ${rawLink} -> ${decoded}`);
+        return decoded;
+      }
+      return rawLink;
+    } catch (e) {
+      logger.error(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'Failed to decode link parameter, using original:', e);
+      return rawLink;
+    }
+  }, [rawLink]);
+  
   logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'title', title);
   logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'message', message);
   logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'note', note);
-  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'link', link);
+  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'link (raw):', rawLink);
+  logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'link (decoded):', link);
   logger.info(makeLogHeader(LOG_FILE, 'NotificationDisplayScreen'), 'alarmId', alarmId);
 
   const handleOpenLink = async () => {
-    if (!link) return;
-    await openNotifierLink(link, t);
+    if (!link) {
+      logger.info(makeLogHeader(LOG_FILE, 'handleOpenLink'), 'No link provided');
+      return;
+    }
+    
+    // Check if link is incomplete (only has eventId, missing calendarId and startDate)
+    // This can happen when the link was stored incompletely in the database
+    let completeLink = link;
+    if (link.startsWith('thenotifier://calendar-event')) {
+      try {
+        const url = new URL(link);
+        const eventId = url.searchParams.get('eventId');
+        const calendarId = url.searchParams.get('calendarId');
+        const startDate = url.searchParams.get('startDate');
+        
+        // If link is incomplete and we have alarmId, fetch missing data from database
+        if (eventId && (!calendarId || !startDate) && alarmId) {
+          logger.info(makeLogHeader(LOG_FILE, 'handleOpenLink'), 
+            `Link is incomplete - eventId: ${eventId}, calendarId: ${calendarId || 'MISSING'}, startDate: ${startDate || 'MISSING'}. Fetching from database using alarmId: ${alarmId}`);
+          
+          try {
+            const { getNotificationIdFromAlarmId, getScheduledNotificationData, getArchivedNotificationData } = await import('@/utils/database');
+            
+            // Get notificationId from alarmId
+            const notificationId = await getNotificationIdFromAlarmId(alarmId);
+            if (!notificationId) {
+              logger.error(makeLogHeader(LOG_FILE, 'handleOpenLink'), `Could not find notificationId for alarmId: ${alarmId}`);
+              // Continue with incomplete link - openNotifierLink will handle the error
+            } else {
+              // Fetch notification data - try scheduled first, then archived
+              let notificationLink: string | null = null;
+              let isArchived = false;
+              
+              const scheduledNotification = await getScheduledNotificationData(notificationId);
+              if (scheduledNotification?.link) {
+                notificationLink = scheduledNotification.link;
+              } else {
+                const archivedNotification = await getArchivedNotificationData(notificationId);
+                if (archivedNotification?.link) {
+                  notificationLink = archivedNotification.link;
+                  isArchived = true;
+                }
+              }
+              
+              if (notificationLink && notificationLink.startsWith('thenotifier://calendar-event')) {
+                try {
+                  const notificationLinkUrl = new URL(notificationLink);
+                  const notificationEventId = notificationLinkUrl.searchParams.get('eventId');
+                  const notificationCalendarId = notificationLinkUrl.searchParams.get('calendarId');
+                  const notificationStartDate = notificationLinkUrl.searchParams.get('startDate');
+                  
+                  // Verify the eventId matches and the link is complete
+                  if (notificationEventId === eventId && notificationCalendarId && notificationStartDate) {
+                    completeLink = notificationLink;
+                    logger.info(makeLogHeader(LOG_FILE, 'handleOpenLink'), 
+                      `Using complete link from ${isArchived ? 'archived' : 'scheduled'} notification: ${completeLink}`);
+                  } else {
+                    logger.error(makeLogHeader(LOG_FILE, 'handleOpenLink'), 
+                      `Notification link is incomplete or eventId mismatch - eventId: ${notificationEventId}, calendarId: ${notificationCalendarId || 'MISSING'}, startDate: ${notificationStartDate || 'MISSING'}`);
+                  }
+                } catch (linkError) {
+                  logger.error(makeLogHeader(LOG_FILE, 'handleOpenLink'), 'Failed to parse notification link:', linkError);
+                }
+              } else {
+                logger.error(makeLogHeader(LOG_FILE, 'handleOpenLink'), 
+                  `Notification not found or has no link - notificationId: ${notificationId}`);
+              }
+            }
+          } catch (dbError) {
+            logger.error(makeLogHeader(LOG_FILE, 'handleOpenLink'), 'Failed to fetch notification data from database:', dbError);
+            // Continue with incomplete link - openNotifierLink will handle the error
+          }
+        }
+      } catch (urlError) {
+        logger.error(makeLogHeader(LOG_FILE, 'handleOpenLink'), 'Failed to parse link URL:', urlError);
+        // Continue with original link
+      }
+    }
+    
+    await openNotifierLink(completeLink, t);
   };
 
   // Android: Stop alarm sound, dismiss notification banner, and clean up storage

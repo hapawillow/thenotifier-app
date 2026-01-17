@@ -1401,6 +1401,46 @@ export const isDailyAlarmInstance = async (alarmId: string): Promise<boolean> =>
   }
 };
 
+// Get notificationId from alarmId (works for both daily alarm instances and one-time alarms)
+export const getNotificationIdFromAlarmId = async (alarmId: string): Promise<string | null> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    
+    // First check if it's a daily alarm instance
+    const dailyInstance = await db.getFirstAsync<{ notificationId: string }>(
+      `SELECT notificationId FROM dailyAlarmInstance WHERE alarmId = '${escapeSql(alarmId)}';`
+    );
+    if (dailyInstance) {
+      return dailyInstance.notificationId;
+    }
+    
+    // If not found in dailyAlarmInstance, check if alarmId matches notificationId pattern
+    // Some alarms use notificationId directly (e.g., "thenotifier-{uuid}")
+    // Try querying scheduledNotification with alarmId as notificationId
+    const notification = await db.getFirstAsync<{ notificationId: string }>(
+      `SELECT notificationId FROM scheduledNotification WHERE notificationId = '${escapeSql(alarmId)}';`
+    );
+    if (notification) {
+      return notification.notificationId;
+    }
+    
+    // Also check archived notifications
+    const archivedNotification = await db.getFirstAsync<{ notificationId: string }>(
+      `SELECT notificationId FROM archivedNotification WHERE notificationId = '${escapeSql(alarmId)}';`
+    );
+    if (archivedNotification) {
+      return archivedNotification.notificationId;
+    }
+    
+    return null;
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'getNotificationIdFromAlarmId'), 'Failed to get notificationId from alarmId:', error);
+    return null;
+  }
+};
+
 // Mark a daily alarm instance as fired (not active, but not cancelled either)
 export const markDailyAlarmInstanceFired = async (alarmId: string): Promise<void> => {
   try {
@@ -1469,10 +1509,9 @@ export const cleanupFiredDailyAlarmsFromNative = async (): Promise<void> => {
 /**
  * Clean up past-due one-time alarms from native storage
  * One-time alarms that have fired should be removed from native storage
+ * Works on both Android and iOS with platform-specific cleanup methods
  */
 export const cleanupPastDueOneTimeAlarms = async (): Promise<void> => {
-  if (Platform.OS !== 'android') return;
-
   try {
     const allAlarms = await NativeAlarmManager.getAllAlarms();
     const now = new Date();
@@ -1509,6 +1548,8 @@ export const cleanupPastDueOneTimeAlarms = async (): Promise<void> => {
           const nowTime = now.getTime();
           const fireTime = fireDate.getTime();
           
+          // CRITICAL SAFEGUARD: Only clean up if fireTime < nowTime (strictly less than, not <=)
+          // This ensures we only remove alarms that have definitely fired
           if (fireTime < nowTime) {
             // Past-due one-time alarm - check if it's in dailyAlarmInstance (shouldn't be)
             const isDailyInstance = await isDailyAlarmInstance(alarm.id);
@@ -1516,36 +1557,48 @@ export const cleanupPastDueOneTimeAlarms = async (): Promise<void> => {
             if (!isDailyInstance) {
               // This is a past-due one-time alarm, clean it up
               try {
+                const platform = Platform.OS === 'android' ? 'Android' : 'iOS';
                 logger.info(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
-                  `[Android] Cleaning up past-due one-time alarm: ${alarm.id} (fired at ${fireDate.toISOString()}, now is ${now.toISOString()})`);
-                await NativeAlarmManager.deleteAlarmFromStorage?.(alarm.id);
+                  `[${platform}] Cleaning up past-due one-time alarm: ${alarm.id} (fired at ${fireDate.toISOString()}, now is ${now.toISOString()})`);
+                
+                // Platform-specific cleanup
+                if (Platform.OS === 'android') {
+                  await NativeAlarmManager.deleteAlarmFromStorage?.(alarm.id);
+                } else {
+                  // iOS: Use cancelAlarm which handles both AlarmKit cancellation and metadata cleanup
+                  await NativeAlarmManager.cancelAlarm(alarm.id);
+                }
+                
                 logger.info(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
-                  `[Android] Successfully cleaned up past-due one-time alarm: ${alarm.id}`);
+                  `[${platform}] Successfully cleaned up past-due one-time alarm: ${alarm.id}`);
                 cleanedCount++;
               } catch (error) {
+                const platform = Platform.OS === 'android' ? 'Android' : 'iOS';
                 logger.error(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
-                  `[Android] Failed to clean up past-due one-time alarm: ${alarm.id}`, error);
+                  `[${platform}] Failed to clean up past-due one-time alarm: ${alarm.id}`, error);
               }
             } else {
+              const platform = Platform.OS === 'android' ? 'Android' : 'iOS';
               logger.info(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
-                `[Android] Skipping cleanup of ${alarm.id} - it's a daily alarm instance, not a one-time alarm`);
+                `[${platform}] Skipping cleanup of ${alarm.id} - it's a daily alarm instance, not a one-time alarm`);
             }
           }
         } catch (e) {
-          // Skip if we can't parse the date
+          // Skip if we can't parse the date - don't risk removing valid alarms
           logger.error(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
-            `[Android] Failed to parse nextFireDate for alarm: ${alarm.id}`, e);
+            `Failed to parse nextFireDate for alarm: ${alarm.id}`, e);
         }
       }
     }
 
     if (cleanedCount > 0) {
+      const platform = Platform.OS === 'android' ? 'Android' : 'iOS';
       logger.info(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
-        `[Android] Cleaned up ${cleanedCount} past-due one-time alarms`);
+        `[${platform}] Cleaned up ${cleanedCount} past-due one-time alarms`);
     }
   } catch (error) {
     logger.error(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
-      '[Android] Failed to clean up past-due one-time alarms:', error);
+      'Failed to clean up past-due one-time alarms:', error);
   }
 };
 

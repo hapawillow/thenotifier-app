@@ -59,6 +59,145 @@ interface ReconcileSummary {
 }
 
 /**
+ * Force cancel orphaned alarms (for debugging - bypasses future-date safeguards)
+ * This function cancels ALL orphaned alarms regardless of their fire date
+ */
+export async function forceCancelAlarmOrphans(): Promise<{ cancelled: number; failures: number }> {
+  let cancelled = 0;
+  let failures = 0;
+
+  logger.info(
+    makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'),
+    'Starting force cleanup of orphaned alarms (bypassing safeguards for debugging)'
+  );
+
+  try {
+    // Get all alarms from OS
+    const allAlarms = await NativeAlarmManager.getAllAlarms();
+    logger.info(makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'), `Found ${allAlarms.length} alarms in OS`);
+
+    // Get database notifications to determine valid alarms
+    const { getAllScheduledNotificationData, getAllDailyAlarmInstances } = await import('./database');
+    const dbScheduledParentsArray = await getAllScheduledNotificationData();
+    const dbScheduledParents = new Set(dbScheduledParentsArray.map(p => p.notificationId));
+    const dbScheduledWithAlarms = new Set(
+      dbScheduledParentsArray
+        .filter(p => p.hasAlarm)
+        .map(p => p.notificationId)
+    );
+
+    // Build set of valid alarm IDs from database
+    const validAlarmIds = new Set<string>();
+    const validAlarmCategories = new Set<string>(); // For Android category matching
+    const NOTIFIER_PREFIX = 'thenotifier-';
+
+    for (const notificationId of dbScheduledWithAlarms) {
+      if (notificationId.startsWith(NOTIFIER_PREFIX)) {
+        const derivedId = notificationId.substring(NOTIFIER_PREFIX.length);
+        validAlarmIds.add(derivedId);
+      } else {
+        validAlarmIds.add(notificationId);
+      }
+      validAlarmCategories.add(notificationId);
+    }
+
+    // Add alarm IDs from dailyAlarmInstance table
+    try {
+      for (const notificationId of dbScheduledWithAlarms) {
+        const instances = await getAllDailyAlarmInstances(notificationId);
+        for (const instance of instances) {
+          validAlarmIds.add(instance.alarmId);
+          if (instance.alarmId.startsWith(NOTIFIER_PREFIX)) {
+            validAlarmIds.add(instance.alarmId.substring(NOTIFIER_PREFIX.length));
+          }
+        }
+      }
+    } catch (error) {
+      logger.error(makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'), 'Failed to get daily alarm instances:', error);
+    }
+
+    // Check each OS alarm to see if it belongs to a valid parent
+    for (const alarm of allAlarms) {
+      try {
+        let isOrphan = true;
+        const alarmId = alarm?.id;
+
+        if (!alarmId) {
+          logger.info(makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'), 'Skipping alarm with no ID:', alarm);
+          continue;
+        }
+
+        // Check if alarm ID matches a valid ID
+        if (validAlarmIds.has(alarmId)) {
+          isOrphan = false;
+        }
+
+        // Check Android category match
+        if (Platform.OS === 'android' && alarm.config?.category && validAlarmCategories.has(alarm.config.category)) {
+          isOrphan = false;
+        }
+
+        // Check config.data.notificationId match
+        if (alarm.config?.data?.notificationId) {
+          const parentNotificationId = alarm.config.data.notificationId as string;
+          if (dbScheduledParents.has(parentNotificationId)) {
+            isOrphan = false;
+          }
+        }
+
+        // If orphaned, force cancel it (bypassing future-date safeguards)
+        if (isOrphan) {
+          const scheduleType = alarm.schedule?.type || 'unknown';
+          const isOneTime = scheduleType === 'fixed';
+          const nextFireStr = alarm.nextFireDate 
+            ? (alarm.nextFireDate instanceof Date 
+                ? alarm.nextFireDate.toISOString() 
+                : String(alarm.nextFireDate))
+            : 'unknown';
+
+          logger.info(
+            makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'),
+            `Force cancelling orphaned alarm: ${alarmId} (schedule type: ${scheduleType}, isOneTime: ${isOneTime}, nextFireDate: ${nextFireStr})`
+          );
+
+          try {
+            await NativeAlarmManager.cancelAlarm(alarmId);
+            logger.info(makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'), `Successfully force-cancelled orphaned alarm: ${alarmId}`);
+            cancelled++;
+          } catch (error: any) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+              logger.error(makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'), `Failed to force-cancel orphaned alarm ${alarmId}:`, error);
+              failures++;
+            } else {
+              logger.info(makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'), `Orphaned alarm ${alarmId} already cleaned up (not found)`);
+              cancelled++; // Count as success since it's already cleaned up
+            }
+          }
+        }
+      } catch (alarmError) {
+        logger.error(
+          makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'),
+          `Error processing alarm ${alarm?.id || 'unknown'}:`,
+          alarmError
+        );
+        failures++;
+      }
+    }
+
+    logger.info(
+      makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'),
+      `Force cleanup complete: cancelled ${cancelled}, failures ${failures}`
+    );
+  } catch (error) {
+    logger.error(makeLogHeader(LOG_FILE, 'forceCancelAlarmOrphans'), 'Failed to force cancel alarm orphans:', error);
+    failures++;
+  }
+
+  return { cancelled, failures };
+}
+
+/**
  * Cancel orphaned alarms that don't belong to any database notification
  */
 async function cancelAlarmOrphans(
@@ -214,6 +353,7 @@ async function cancelAlarmOrphans(
 
           // Check if alarm is scheduled for the future - if so, be more conservative about cancelling
           // On iOS, alarms scheduled for the future might not have metadata yet
+          // CRITICAL SAFEGUARD: This prevents premature removal of valid alarms
           if (alarm.nextFireDate) {
             try {
               // Handle both Date objects and string/number timestamps
@@ -241,8 +381,9 @@ async function cancelAlarmOrphans(
               const fireTime = fireDate.getTime();
               const nowTime = now.getTime();
 
-              // If alarm is scheduled more than 1 hour in the future, don't cancel it
-              // It might be a valid alarm that just doesn't have metadata yet
+              // CRITICAL SAFEGUARD: If alarm is scheduled more than 1 hour in the future, don't cancel it
+              // This prevents premature removal of valid alarms that might be missing metadata temporarily
+              // Applies to both Android and iOS to prevent regressions
               if (fireTime > nowTime + 3600000) {
                 logger.info(
                   makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
@@ -250,16 +391,20 @@ async function cancelAlarmOrphans(
                 );
                 shouldCancel = false;
               } else if (fireTime < nowTime) {
+                // CRITICAL SAFEGUARD: Only mark as past-due if fireTime < nowTime (strictly less than, not <=)
+                // This ensures we only clean up alarms that have definitely fired
                 // Past-due alarm (fired more than 1 second ago to account for timing)
                 isPastDue = true;
                 logger.info(
                   makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
-                  `Detected past-due orphan alarm ${alarmId}: fired at ${fireDate.toISOString()}, now is ${now.toISOString()}, schedule type: ${scheduleType}`
+                  `Detected past-due orphan alarm ${alarmId}: fired at ${fireDate.toISOString()}, now is ${now.toISOString()}, schedule type: ${scheduleType}, platform: ${Platform.OS}`
                 );
               }
             } catch (e) {
               logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Error parsing nextFireDate for alarm ${alarmId}:`, e);
-              // If we can't parse the date, proceed with cancellation
+              // If we can't parse the date, don't risk removing valid alarms - skip cancellation
+              // This is a safeguard to prevent premature removal
+              shouldCancel = false;
             }
           }
 
