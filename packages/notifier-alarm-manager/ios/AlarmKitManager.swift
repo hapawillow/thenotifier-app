@@ -287,13 +287,18 @@ class AlarmKitManager {
             )
         }
 
+        let canonicalId = uuid.uuidString
+        let lowerId = id.lowercased()
+        let lowerCanonicalId = canonicalId.lowercased()
+
         // AlarmKit's cancel and stop are synchronous-throwing (not async)
         // Attempt cancel first (primary operation)
         do {
             try manager.cancel(id: uuid)
+            logger.info("[AlarmKitManager] Successfully cancelled alarm in AlarmKit: \(canonicalId, privacy: .public)")
         } catch {
             // If cancel fails, still try stop as fallback
-            print("[AlarmKitManager] cancel failed for \(id), attempting stop: \(error)")
+            logger.warning("[AlarmKitManager] cancel failed for \(canonicalId, privacy: .public), attempting stop: \(error)")
         }
         
         // Best-effort stop to dismiss alarms that might be in .alerting state
@@ -301,20 +306,65 @@ class AlarmKitManager {
             try manager.stop(id: uuid)
         } catch {
             // Ignore stop errors - it's best-effort cleanup
-            print("[AlarmKitManager] stop failed for \(id) (may not be alerting): \(error)")
+            logger.info("[AlarmKitManager] stop failed for \(canonicalId, privacy: .public) (may not be alerting): \(error)")
         }
         
-        alarmMetadataStore.removeValue(forKey: id)
+        // Remove from metadata store using case-insensitive matching
+        // Check all keys and remove any that match (case-insensitive)
+        var removedFromStore = false
+        for (key, _) in alarmMetadataStore {
+            if key.lowercased() == lowerCanonicalId || key.lowercased() == lowerId {
+                alarmMetadataStore.removeValue(forKey: key)
+                removedFromStore = true
+                logger.info("[AlarmKitManager] Removed alarm from metadata store using key: \(key, privacy: .public)")
+            }
+        }
+        if !removedFromStore {
+            logger.info("[AlarmKitManager] Alarm \(canonicalId, privacy: .public) not found in metadata store (may have already been removed)")
+        }
         
-        // Clean up alarm-specific deep link key
-        let storageKey = "\(PENDING_ALARM_DEEPLINK_KEY)_\(id)"
-        UserDefaults.standard.removeObject(forKey: storageKey)
+        // Clean up alarm-specific deep link key (try multiple ID formats)
+        let storageKeys = [
+            "\(PENDING_ALARM_DEEPLINK_KEY)_\(canonicalId)",
+            "\(PENDING_ALARM_DEEPLINK_KEY)_\(id)"
+        ]
+        for storageKey in storageKeys {
+            UserDefaults.standard.removeObject(forKey: storageKey)
+        }
         
-        // Also clean up persisted metadata
-        let metadataKey = "alarm_metadata_\(id)"
-        UserDefaults.standard.removeObject(forKey: metadataKey)
+        // Also clean up persisted metadata (try multiple ID formats)
+        let metadataKeys = [
+            "alarm_metadata_\(canonicalId)",
+            "alarm_metadata_\(id)"
+        ]
+        for metadataKey in metadataKeys {
+            UserDefaults.standard.removeObject(forKey: metadataKey)
+        }
+        
+        // Case-insensitive cleanup: search all UserDefaults keys for matching alarm IDs
+        let defaults = UserDefaults.standard
+        let allKeys = defaults.dictionaryRepresentation().keys
+        for key in allKeys {
+            // Check deep link keys
+            if key.hasPrefix(PENDING_ALARM_DEEPLINK_KEY + "_") {
+                let storedId = String(key.dropFirst((PENDING_ALARM_DEEPLINK_KEY + "_").count))
+                if storedId.lowercased() == lowerCanonicalId || storedId.lowercased() == lowerId {
+                    UserDefaults.standard.removeObject(forKey: key)
+                    logger.info("[AlarmKitManager] Removed deep link key (case-insensitive match): \(key, privacy: .public)")
+                }
+            }
+            // Check metadata keys
+            if key.hasPrefix("alarm_metadata_") {
+                let storedId = String(key.dropFirst("alarm_metadata_".count))
+                if storedId.lowercased() == lowerCanonicalId || storedId.lowercased() == lowerId {
+                    UserDefaults.standard.removeObject(forKey: key)
+                    logger.info("[AlarmKitManager] Removed metadata key (case-insensitive match): \(key, privacy: .public)")
+                }
+            }
+        }
+        
         UserDefaults.standard.synchronize()
-        logger.info("[AlarmKitManager] Cleaned up deep link key and metadata for cancelled alarm: \(id, privacy: .public)")
+        logger.info("[AlarmKitManager] Cleaned up deep link keys and metadata for cancelled alarm: \(canonicalId, privacy: .public)")
     }
 
     func cancelAllAlarms() async throws {
@@ -1801,11 +1851,37 @@ class AlarmKitManager {
                             }
                         } else if scheduleType == "fixed" {
                             // One-time alarm: clean up after firing
+                            // Use case-insensitive ID matching to ensure cleanup succeeds even if ID casing differs
+                            let canonicalId = UUID(uuidString: alarmId)?.uuidString ?? alarmId
                             do {
-                                try await cancelAlarm(id: alarmId)
-                                logger.info("[AlarmKitManager] Cleaned up one-time alarm after firing: \(alarmId, privacy: .public)")
+                                try await cancelAlarm(id: canonicalId)
+                                logger.info("[AlarmKitManager] Cleaned up one-time alarm after firing: \(canonicalId, privacy: .public)")
+                                
+                                // Verify cleanup succeeded by checking if alarm still exists in currentAlarmsFromKit
+                                // Wait briefly for AlarmKit to update its internal state
+                                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                                let stillExists = currentAlarmsFromKit.keys.contains { key in
+                                    key.lowercased() == canonicalId.lowercased() || key.lowercased() == alarmId.lowercased()
+                                }
+                                if stillExists {
+                                    logger.warning("[AlarmKitManager] One-time alarm \(canonicalId, privacy: .public) still exists in currentAlarmsFromKit after cleanup attempt, retrying...")
+                                    // Retry cleanup once more
+                                    try await cancelAlarm(id: canonicalId)
+                                    logger.info("[AlarmKitManager] Retried cleanup for one-time alarm: \(canonicalId, privacy: .public)")
+                                } else {
+                                    logger.info("[AlarmKitManager] Verified one-time alarm cleanup succeeded: \(canonicalId, privacy: .public)")
+                                }
                             } catch {
-                                logger.warning("[AlarmKitManager] Failed to cleanup one-time alarm \(alarmId, privacy: .public): \(error)")
+                                logger.error("[AlarmKitManager] Failed to cleanup one-time alarm \(canonicalId, privacy: .public): \(error)")
+                                // Best-effort: try cleanup with original ID format in case canonical ID failed
+                                if canonicalId != alarmId {
+                                    do {
+                                        try await cancelAlarm(id: alarmId)
+                                        logger.info("[AlarmKitManager] Cleaned up one-time alarm using original ID format: \(alarmId, privacy: .public)")
+                                    } catch {
+                                        logger.error("[AlarmKitManager] Failed to cleanup one-time alarm with original ID \(alarmId, privacy: .public): \(error)")
+                                    }
+                                }
                             }
                         }
                     }

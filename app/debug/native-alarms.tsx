@@ -10,7 +10,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import type { ScheduledAlarm } from 'notifier-alarm-manager';
 import { getAllScheduledNotificationData, getAllDailyAlarmInstances } from '@/utils/database';
-import { reconcileOrphansOnStartup } from '@/utils/orphan-reconcile';
+import { reconcileOrphansOnStartup, forceCancelAlarmOrphans } from '@/utils/orphan-reconcile';
 
 // Helper to safely stringify objects with Date handling
 const safePretty = (obj: any, indent: number = 2): string => {
@@ -238,8 +238,13 @@ export default function NativeAlarmsScreen() {
 
   const handleCleanupOrphans = useCallback(async () => {
     try {
-      await reconcileOrphansOnStartup();
-      Alert.alert('Cleanup Complete', 'Orphaned alarms have been cleaned up. Pull to refresh to see updated list.');
+      // Use force cleanup which bypasses future-date safeguards for debugging
+      // This allows developers to remove orphaned alarms even if they're scheduled for the future
+      const result = await forceCancelAlarmOrphans();
+      const message = result.cancelled > 0
+        ? `Force cleaned up ${result.cancelled} orphaned alarm${result.cancelled !== 1 ? 's' : ''}. ${result.failures > 0 ? `${result.failures} failed.` : ''} Pull to refresh to see updated list.`
+        : 'No orphaned alarms found to clean up.';
+      Alert.alert('Force Cleanup Complete', message);
       await loadAlarms();
     } catch (error) {
       console.error('[NativeAlarmsDebug] Failed to cleanup orphans:', error);

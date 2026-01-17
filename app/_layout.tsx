@@ -960,14 +960,17 @@ export default function RootLayout() {
             logger.error(makeLogHeader(LOG_FILE), 'Failed to reconcile orphans on foreground:', error);
           });
 
-          // Android: Clean up fired daily alarms and past-due one-time alarms on foreground
+          // Clean up past-due one-time alarms on foreground (both Android and iOS)
+          const { cleanupPastDueOneTimeAlarms } = await import('@/utils/database');
+          await cleanupPastDueOneTimeAlarms().catch((error) => {
+            logger.error(makeLogHeader(LOG_FILE), 'Failed to clean up past-due one-time alarms:', error);
+          });
+
+          // Android: Also clean up fired daily alarms on foreground
           if (Platform.OS === 'android') {
-            const { cleanupFiredDailyAlarmsFromNative, cleanupPastDueOneTimeAlarms } = await import('@/utils/database');
+            const { cleanupFiredDailyAlarmsFromNative } = await import('@/utils/database');
             await cleanupFiredDailyAlarmsFromNative().catch((error) => {
               logger.error(makeLogHeader(LOG_FILE), 'Failed to clean up fired daily alarms:', error);
-            });
-            await cleanupPastDueOneTimeAlarms().catch((error) => {
-              logger.error(makeLogHeader(LOG_FILE), 'Failed to clean up past-due one-time alarms:', error);
             });
           }
         }
