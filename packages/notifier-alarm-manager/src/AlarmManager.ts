@@ -255,6 +255,14 @@ class AlarmManager implements INativeAlarmManager {
   }
 
   /**
+   * Delete alarm from native storage (Android only)
+   * Used after alarm has fired and been marked as fired in database
+   */
+  async deleteAlarmFromStorage(alarmId: string): Promise<void> {
+    await NativeAlarmModule.deleteAlarmFromStorage?.(alarmId);
+  }
+
+  /**
    * Get alarm by ID
    */
   async getAlarm(id: string): Promise<ScheduledAlarm | null> {

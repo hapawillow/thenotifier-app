@@ -35,39 +35,78 @@ export async function openNotifierLink(link: string, t?: (key: string) => string
               const timestamp = Math.floor((startDate.getTime() - new Date('2001-01-01').getTime()) / 1000);
               calendarUrl = `calshow:${timestamp}`;
             }
-          } else {
-            // Android: Use content:// URI with the event ID
-            calendarUrl = `content://com.android.calendar/events/${encodeURIComponent(eventId)}`;
-          }
 
-          if (calendarUrl) {
-            const canOpen = await Linking.canOpenURL(calendarUrl);
-            if (canOpen) {
-              await Linking.openURL(calendarUrl);
-            } else {
-              // Fallback: try to get the event and show details
-              const startDate = startDateStr ? new Date(startDateStr) : new Date();
-              const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000); // Add 1 day
-
-              const events = await Calendar.getEventsAsync(
-                [calendarId],
-                new Date(startDate.getTime() - 7 * 24 * 60 * 60 * 1000), // 7 days before
-                endDate
-              );
-
-              const event = events.find(e => e.id === eventId);
-              if (event) {
-                Alert.alert(
-                  getText('alertTitles.menu'),
-                  `Event: ${event.title || 'Untitled'}\n\nTo view this event, please open your calendar app.`,
-                  [{ text: getText('buttonText.ok') }]
-                );
+            if (calendarUrl) {
+              const canOpen = await Linking.canOpenURL(calendarUrl);
+              if (canOpen) {
+                await Linking.openURL(calendarUrl);
               } else {
-                Alert.alert(getText('alertTitles.error'), getText('errorMessages.calendarEventNotFound'));
+                Alert.alert(getText('alertTitles.error'), getText('errorMessages.unableToOpenCalendarEvent'));
               }
+            } else {
+              Alert.alert(getText('alertTitles.error'), getText('errorMessages.unableToGenerateCalendarLink'));
             }
           } else {
-            Alert.alert(getText('alertTitles.error'), getText('errorMessages.unableToGenerateCalendarLink'));
+            // Android: Try generic calendar provider URI first (works with any calendar app)
+            // Then fallback to Google Calendar URI, then use Expo Calendar API
+            let opened = false;
+
+            // Try generic calendar provider URI first (standard Android CalendarContract)
+            const genericCalendarUrl = `content://calendar/events/${encodeURIComponent(eventId)}`;
+            const canOpenGeneric = await Linking.canOpenURL(genericCalendarUrl);
+            
+            if (canOpenGeneric) {
+              try {
+                await Linking.openURL(genericCalendarUrl);
+                opened = true;
+              } catch (error) {
+                logger.warn(makeLogHeader(LOG_FILE, 'openNotifierLink'), 'Failed to open generic calendar URI, trying Google Calendar:', error);
+              }
+            }
+            
+            // If generic URI failed, try Google Calendar URI as fallback
+            if (!opened) {
+              const googleCalendarUrl = `content://com.android.calendar/events/${encodeURIComponent(eventId)}`;
+              const canOpenGoogle = await Linking.canOpenURL(googleCalendarUrl);
+              
+              if (canOpenGoogle) {
+                try {
+                  await Linking.openURL(googleCalendarUrl);
+                  opened = true;
+                } catch (error) {
+                  logger.warn(makeLogHeader(LOG_FILE, 'openNotifierLink'), 'Failed to open Google Calendar URI:', error);
+                }
+              }
+            }
+            
+            // If both URI schemes failed, fallback to Expo Calendar API
+            if (!opened) {
+              try {
+                // Fallback: try to get the event and show details
+                const startDate = startDateStr ? new Date(startDateStr) : new Date();
+                const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000); // Add 1 day
+
+                const events = await Calendar.getEventsAsync(
+                  [calendarId],
+                  new Date(startDate.getTime() - 7 * 24 * 60 * 60 * 1000), // 7 days before
+                  endDate
+                );
+
+                const event = events.find(e => e.id === eventId);
+                if (event) {
+                  Alert.alert(
+                    getText('alertTitles.menu'),
+                    `Event: ${event.title || 'Untitled'}\n\nTo view this event, please open your calendar app.`,
+                    [{ text: getText('buttonText.ok') }]
+                  );
+                } else {
+                  Alert.alert(getText('alertTitles.error'), getText('errorMessages.calendarEventNotFound'));
+                }
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE, 'openNotifierLink'), 'Failed to get calendar event:', error);
+                Alert.alert(getText('alertTitles.error'), getText('errorMessages.unableToOpenCalendarEvent'));
+              }
+            }
           }
         } catch (error) {
           logger.error(makeLogHeader(LOG_FILE, 'openNotifierLink'), 'Failed to open calendar event:', error);

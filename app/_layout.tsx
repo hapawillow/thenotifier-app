@@ -35,6 +35,10 @@ let lastProcessedResponseKey: string | null = null;
 const handledDeepLinks = new Set<string>();
 const handledNotifications = new Set<string>();
 
+// Module-scoped variable for replenisher cooldown
+let lastReplenisherRun = 0;
+const REPLENISHER_COOLDOWN_MS = 5000; // 5 seconds
+
 // Keep the splash screen visible while we fetch resources
 SplashScreen.preventAutoHideAsync();
 
@@ -955,6 +959,17 @@ export default function RootLayout() {
           await reconcileOrphansOnForeground(t).catch((error) => {
             logger.error(makeLogHeader(LOG_FILE), 'Failed to reconcile orphans on foreground:', error);
           });
+
+          // Android: Clean up fired daily alarms and past-due one-time alarms on foreground
+          if (Platform.OS === 'android') {
+            const { cleanupFiredDailyAlarmsFromNative, cleanupPastDueOneTimeAlarms } = await import('@/utils/database');
+            await cleanupFiredDailyAlarmsFromNative().catch((error) => {
+              logger.error(makeLogHeader(LOG_FILE), 'Failed to clean up fired daily alarms:', error);
+            });
+            await cleanupPastDueOneTimeAlarms().catch((error) => {
+              logger.error(makeLogHeader(LOG_FILE), 'Failed to clean up past-due one-time alarms:', error);
+            });
+          }
         }
 
         // Ensure push tokens are up to date (handles permission revoke/restore)
@@ -1056,12 +1071,18 @@ export default function RootLayout() {
           });
         }
 
-        // Replenish daily alarm windows (ensure 7 future alarms per daily notification)
+        // Replenish daily alarm windows (ensure rolling window size future alarms per daily notification)
         // Only if both notification and alarm permissions are granted
         if (notificationPermissionGranted && alarmPermissionAuthorized) {
-          ensureDailyAlarmWindowForAllNotifications().catch((error) => {
-            logger.error(makeLogHeader(LOG_FILE), 'Failed to replenish daily alarm windows:', error);
-          });
+          const now = Date.now();
+          if (now - lastReplenisherRun > REPLENISHER_COOLDOWN_MS) {
+            lastReplenisherRun = now;
+            ensureDailyAlarmWindowForAllNotifications().catch((error) => {
+              logger.error(makeLogHeader(LOG_FILE), 'Failed to replenish daily alarm windows:', error);
+            });
+          } else {
+            logger.info(makeLogHeader(LOG_FILE), 'Replenisher cooldown active, skipping run');
+          }
         }
 
         // Replenish rolling-window notification instances (ensure required window size per rolling-window notification)

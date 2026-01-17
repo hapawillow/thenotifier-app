@@ -52,13 +52,59 @@ export default function NotificationDisplayScreen() {
     await openNotifierLink(link, t);
   };
 
-  // Android: Stop alarm sound and dismiss notification banner when screen is displayed
+  // Android: Stop alarm sound, dismiss notification banner, and clean up storage
   useEffect(() => {
     if (Platform.OS === 'android' && alarmId) {
       logger.info(makeLogHeader(LOG_FILE, 'useEffect'), 'Calling stopAlarmSoundAndDismiss for alarmId:', alarmId);
       NativeAlarmManager.stopAlarmSoundAndDismiss?.(alarmId).catch((error) => {
         logger.error(makeLogHeader(LOG_FILE, 'useEffect'), 'Failed to stop alarm sound/dismiss notification:', error);
       });
+
+      // Determine if this is a daily alarm instance or one-time alarm and clean up
+      // Use a fire-and-forget approach to prevent any errors from affecting the UI
+      (async () => {
+        try {
+          const { markDailyAlarmInstanceFired, isDailyAlarmInstance } = await import('@/utils/database');
+
+          // Check if this alarmId exists in dailyAlarmInstance table
+          const isDailyInstance = await isDailyAlarmInstance(alarmId);
+
+          if (isDailyInstance) {
+            // Daily repeat alarm: mark as fired in DB
+            try {
+              await markDailyAlarmInstanceFired(alarmId);
+              logger.info(makeLogHeader(LOG_FILE, 'useEffect'), `Marked daily alarm instance as fired: ${alarmId}`);
+            } catch (markError) {
+              // Log but continue - we'll still clean up native storage
+              logger.error(makeLogHeader(LOG_FILE, 'useEffect'), `Failed to mark daily alarm instance as fired: ${alarmId}`, markError);
+            }
+          } else {
+            // One-time alarm: just log (no DB entry to update)
+            logger.info(makeLogHeader(LOG_FILE, 'useEffect'), `One-time alarm fired: ${alarmId}`);
+          }
+
+          // Clean up native storage for both types using cancelAlarm (more reliable)
+          // cancelAlarm handles both AlarmManager cancellation and storage deletion
+          // For already-fired alarms, cancelling is safe (no-op if already fired)
+          try {
+            await NativeAlarmManager.cancelAlarm(alarmId);
+            logger.info(makeLogHeader(LOG_FILE, 'useEffect'), `Cleaned up alarm from native storage: ${alarmId}`);
+          } catch (cancelError) {
+            const errorMessage = cancelError instanceof Error ? cancelError.message : String(cancelError);
+            // Don't log "not found" errors - alarm may have already been cleaned up
+            if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+              // Log but don't throw - native cleanup failure shouldn't crash the screen
+              logger.error(makeLogHeader(LOG_FILE, 'useEffect'), `Failed to clean up alarm from native storage: ${alarmId}`, cancelError);
+            } else {
+              logger.info(makeLogHeader(LOG_FILE, 'useEffect'), `Alarm already cleaned up: ${alarmId}`);
+            }
+          }
+        } catch (error) {
+          // Log error but don't throw - we don't want to crash the screen
+          // This catch is for any unexpected errors in the async flow
+          logger.error(makeLogHeader(LOG_FILE, 'useEffect'), 'Unexpected error in alarm cleanup:', error);
+        }
+      })(); // Fire and forget - don't await or catch here to prevent any navigation issues
     }
   }, [alarmId]);
 

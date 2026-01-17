@@ -20,7 +20,7 @@ import {
   mapJsMonthToExpoMonth,
   mapJsWeekdayToExpoWeekday
 } from '@/utils/repeat-start-date';
-import { getRollingWindowSize } from '@/utils/rolling-window-config';
+import { getDailyRollingWindowSize, getRollingWindowSize, getWeeklyRollingWindowSize } from '@/utils/rolling-window-config';
 import { getCurrentTimeZoneAbbr, getCurrentTimeZoneId } from '@/utils/timezone';
 import * as Crypto from 'expo-crypto';
 import { DefaultKeyboardToolbarTheme, KeyboardAwareScrollView, KeyboardToolbar, KeyboardToolbarProps } from 'react-native-keyboard-controller';
@@ -365,9 +365,22 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       );
       const count = futureNotifications.length;
 
+      // For daily/weekly alarms, account for rolling window size
+      // Each daily/weekly alarm creates multiple alarm instances (rolling window size)
+      // Check if current form state indicates a daily/weekly alarm with alarm enabled
+      const isDailyAlarm = repeatOption === 'daily' && scheduleAlarm;
+      const isWeeklyAlarm = repeatOption === 'weekly' && scheduleAlarm;
+      let rollingWindowSize = 1;
+      if (isDailyAlarm) {
+        rollingWindowSize = getDailyRollingWindowSize();
+      } else if (isWeeklyAlarm) {
+        rollingWindowSize = getWeeklyRollingWindowSize();
+      }
+      const projectedCount = count + rollingWindowSize;
+
       // Check if we've reached the maximum
-      if (count >= MAX_SCHEDULED_NOTIFICATION_COUNT) {
-        logger.info(makeLogHeader(LOG_FILE, 'checkNotificationLimit'), 'Maximum notifications reached:', count);
+      if (projectedCount > MAX_SCHEDULED_NOTIFICATION_COUNT) {
+        logger.info(makeLogHeader(LOG_FILE, 'checkNotificationLimit'), `Maximum notifications reached: ${count} current + ${rollingWindowSize} projected = ${projectedCount} (max: ${MAX_SCHEDULED_NOTIFICATION_COUNT})`);
         Alert.alert(
           t('alertTitles.maximumNotificationsReached'),
           t('alertMessages.maxNotificationsReached', { max: MAX_SCHEDULED_NOTIFICATION_COUNT }),
@@ -380,7 +393,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
       logger.error(makeLogHeader(LOG_FILE, 'checkNotificationLimit'), 'Failed to check scheduled notifications count:', error);
       return false;
     }
-  }, [isEditMode]);
+  }, [isEditMode, repeatOption, scheduleAlarm]);
 
   useEffect(() => {
     // Request permissions
@@ -1766,7 +1779,7 @@ export function ScheduleForm({ initialParams, isEditMode, source = 'schedule', o
                   },
                   actions: ALARM_ACTIONS
                 },
-                7
+                getDailyRollingWindowSize()
               );
               logger.info(makeLogHeader(LOG_FILE, 'scheduleNotification'), '[AlarmWindow] Scheduled rolling window alarm instances for:', notificationId);
             }

@@ -87,6 +87,17 @@ class NotificationFallback(private val context: Context) {
     }
 
     /**
+     * Delete alarm from storage only (without cancelling AlarmManager alarm)
+     * Used after alarm has already fired and been cleaned up
+     */
+    fun deleteAlarmFromStorage(alarmId: String) {
+        val prefixedId = storagePrefix + alarmId
+        android.util.Log.d("NotificationFallback", "deleteAlarmFromStorage: alarmId=$alarmId, prefixedId=$prefixedId")
+        AlarmStorage.deleteAlarm(context, prefixedId)
+        android.util.Log.d("NotificationFallback", "deleteAlarmFromStorage: completed for alarmId=$alarmId")
+    }
+
+    /**
      * Cancel all alarms
      */
     fun cancelAllAlarms() {
@@ -236,7 +247,11 @@ class NotificationFallback(private val context: Context) {
         }
     }
 
-    private fun cancelSingleAlarm(alarmId: String) {
+    /**
+     * Cancel just the AlarmManager alarm without touching storage
+     * Public method for use by AlarmReceiver when cleaning up fired alarms
+     */
+    fun cancelSingleAlarm(alarmId: String) {
         // IMPORTANT:
         // PendingIntent identity matching includes the Intent's action/data/type/class/categories
         // (extras are ignored). We schedule alarms with action = "com.notifiernativealarms.ALARM_ACTION".

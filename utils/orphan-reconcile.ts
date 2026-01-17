@@ -1,6 +1,6 @@
 import * as Notifications from 'expo-notifications';
-import { Alert, Platform } from 'react-native';
 import { NativeAlarmManager } from 'notifier-alarm-manager';
+import { Alert, Platform } from 'react-native';
 import { cancelAlarmKitForParent, cancelExpoForParent } from './cancel-scheduling';
 import {
   ensureDailyAlarmWindowForAllNotifications,
@@ -68,19 +68,32 @@ async function cancelAlarmOrphans(
   let cancelled = 0;
   let failures = 0;
 
+  logger.info(
+    makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+    `Starting cancelAlarmOrphans: dbScheduledParents=${dbScheduledParents.size}, dbScheduledWithAlarms=${dbScheduledWithAlarms.size}`
+  );
+
   try {
     // Get all alarms from OS
-    const allAlarms = await NativeAlarmManager.getAllAlarms();
-    logger.info(
-      makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
-      `Found ${allAlarms.length} alarms in OS. ` +
-      `Database has ${dbScheduledWithAlarms.size} notifications with alarms. ` +
-      `Valid alarm IDs: ${Array.from(validAlarmIds).join(', ')}`
-    );
+    logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), 'Calling NativeAlarmManager.getAllAlarms()...');
+    let allAlarms;
+    try {
+      allAlarms = await NativeAlarmManager.getAllAlarms();
+      logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `getAllAlarms returned ${allAlarms.length} alarms`);
+    } catch (getAllAlarmsError) {
+      logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), 'Failed to get all alarms:', getAllAlarmsError);
+      throw getAllAlarmsError; // Re-throw to be caught by outer catch
+    }
 
     // Build set of valid alarm IDs from database
     const validAlarmIds = new Set<string>();
     const validAlarmCategories = new Set<string>(); // For Android category matching
+
+    logger.info(
+      makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+      `Found ${allAlarms.length} alarms in OS. ` +
+      `Database has ${dbScheduledWithAlarms.size} notifications with alarms.`
+    );
 
     // Add derived alarm IDs from notificationIds (remove "thenotifier-" prefix)
     const NOTIFIER_PREFIX = 'thenotifier-';
@@ -113,85 +126,218 @@ async function cancelAlarmOrphans(
     }
 
     // Check each OS alarm to see if it belongs to a valid parent
+    logger.info(
+      makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+      `Processing ${allAlarms.length} alarms. Valid alarm IDs: ${Array.from(validAlarmIds).join(', ') || '(none)'}`
+    );
+
     for (const alarm of allAlarms) {
-      let isOrphan = true;
-      const alarmId = alarm.id;
-      let matchReason = '';
+      try {
+        let isOrphan = true;
+        const alarmId = alarm?.id;
 
-      // Check if alarm ID matches a valid ID
-      if (validAlarmIds.has(alarmId)) {
-        isOrphan = false;
-        matchReason = 'alarm ID match';
-      }
-
-      // Check Android category match
-      if (Platform.OS === 'android' && alarm.category && validAlarmCategories.has(alarm.category)) {
-        isOrphan = false;
-        matchReason = 'category match';
-      }
-
-      // Check config.data.notificationId match
-      if (alarm.config?.data?.notificationId) {
-        const parentNotificationId = alarm.config.data.notificationId as string;
-        if (dbScheduledParents.has(parentNotificationId)) {
-          isOrphan = false;
-          matchReason = 'config.data.notificationId match';
+        if (!alarmId) {
+          logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), 'Skipping alarm with no ID:', alarm);
+          continue;
         }
-      }
 
-      // Log the decision for debugging
-      if (isOrphan) {
-        let shouldCancel = true;
-        
-        // Check if alarm is scheduled for the future - if so, be more conservative about cancelling
-        // On iOS, alarms scheduled for the future might not have metadata yet
-        if (alarm.nextFireDate) {
-          try {
-            const fireDate = new Date(alarm.nextFireDate);
-            const now = new Date();
-            // If alarm is scheduled more than 1 hour in the future, don't cancel it
-            // It might be a valid alarm that just doesn't have metadata yet
-            if (fireDate.getTime() > now.getTime() + 3600000) {
-              logger.warn(
-                makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
-                `Skipping cancellation of future alarm ${alarmId} (fires at ${fireDate.toISOString()}) - may be valid but missing metadata`
-              );
-              shouldCancel = false;
-            }
-          } catch (e) {
-            // If we can't parse the date, proceed with cancellation
-          }
-        }
-        
-        if (shouldCancel) {
-          logger.warn(
-            makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
-            `Alarm ${alarmId} appears to be orphaned. ` +
-            `Valid alarm IDs: ${Array.from(validAlarmIds).slice(0, 5).join(', ')}${validAlarmIds.size > 5 ? '...' : ''}, ` +
-            `Category: ${alarm.category || 'none'}, ` +
-            `Config notificationId: ${alarm.config?.data?.notificationId || 'none'}`
-          );
-          try {
-            await NativeAlarmManager.cancelAlarm(alarmId);
-            logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Cancelled orphaned alarm: ${alarmId}`);
-            cancelled++;
-          } catch (error: any) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
-              logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Failed to cancel orphaned alarm ${alarmId}:`, error);
-              failures++;
-            }
-          }
-        }
-      } else {
+        let matchReason = '';
+
         logger.info(
           makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
-          `Alarm ${alarmId} is valid (${matchReason}), keeping it`
+          `Checking alarm ${alarmId}: schedule type=${alarm.schedule?.type || 'unknown'}, category=${alarm.config?.category || 'none'}, nextFireDate=${alarm.nextFireDate || 'none'}`
         );
+
+        // Check if alarm ID matches a valid ID
+        if (validAlarmIds.has(alarmId)) {
+          isOrphan = false;
+          matchReason = 'alarm ID match';
+        }
+
+        // Check Android category match
+        if (Platform.OS === 'android' && alarm.config?.category && validAlarmCategories.has(alarm.config.category)) {
+          isOrphan = false;
+          matchReason = 'category match';
+        }
+
+        // Check config.data.notificationId match
+        if (alarm.config?.data?.notificationId) {
+          const parentNotificationId = alarm.config.data.notificationId as string;
+          if (dbScheduledParents.has(parentNotificationId)) {
+            isOrphan = false;
+            matchReason = 'config.data.notificationId match';
+
+            // Only check dailyAlarmInstance tracking for daily repeat alarms
+            // One-time alarms are NOT in dailyAlarmInstance - that's expected
+            if (Platform.OS === 'android') {
+              try {
+                // Check if parent notification is a daily repeat
+                const { getScheduledNotificationData, isDailyAlarmInstance } = await import('./database');
+                const parentNotification = await getScheduledNotificationData(parentNotificationId);
+
+                // Only check tracking for daily repeat alarms
+                if (parentNotification?.repeatOption === 'daily') {
+                  const isTracked = await isDailyAlarmInstance(alarmId);
+
+                  if (!isTracked) {
+                    // Daily repeat alarm not tracked - treat as duplicate/orphan
+                    logger.info(
+                      makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+                      `Alarm ${alarmId} belongs to daily repeat notification ${parentNotificationId} but is not tracked in dailyAlarmInstance - treating as duplicate/orphan`
+                    );
+                    isOrphan = true; // Override: treat as orphan even though parent exists
+                    matchReason = ''; // Clear match reason
+                  }
+                }
+                // For one-time alarms (repeatOption !== 'daily'), if they match via notificationId, they're valid
+                // No need to check dailyAlarmInstance - one-time alarms don't belong there
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+                  `Failed to check if alarm ${alarmId} is tracked:`, error);
+                // Continue - if check fails, rely on other orphan detection
+              }
+            }
+          }
+        }
+
+        // Log the decision for debugging
+        if (isOrphan) {
+          let shouldCancel = true;
+          let isPastDue = false;
+          const scheduleType = alarm.schedule?.type;
+          const isOneTime = scheduleType === 'fixed';
+
+          logger.info(
+            makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+            `Alarm ${alarmId} is orphaned. Schedule type: ${scheduleType || 'unknown'}, isOneTime: ${isOneTime}, schedule object: ${alarm.schedule ? JSON.stringify(alarm.schedule).substring(0, 100) : 'null'}`
+          );
+
+          // Check if alarm is scheduled for the future - if so, be more conservative about cancelling
+          // On iOS, alarms scheduled for the future might not have metadata yet
+          if (alarm.nextFireDate) {
+            try {
+              // Handle both Date objects and string/number timestamps
+              let fireDate: Date;
+              if (alarm.nextFireDate instanceof Date) {
+                fireDate = alarm.nextFireDate;
+              } else if (typeof alarm.nextFireDate === 'string') {
+                // Try parsing as ISO string first, then as timestamp
+                fireDate = new Date(alarm.nextFireDate);
+                if (isNaN(fireDate.getTime())) {
+                  // Might be a numeric string (timestamp in milliseconds)
+                  const timestamp = parseFloat(alarm.nextFireDate);
+                  fireDate = isNaN(timestamp) ? new Date() : new Date(timestamp);
+                }
+              } else if (typeof alarm.nextFireDate === 'number') {
+                // Timestamp - if it's a small number (< year 2000 in seconds), assume seconds, otherwise milliseconds
+                fireDate = alarm.nextFireDate < 946684800000
+                  ? new Date(alarm.nextFireDate * 1000)
+                  : new Date(alarm.nextFireDate);
+              } else {
+                fireDate = new Date();
+              }
+
+              const now = new Date();
+              const fireTime = fireDate.getTime();
+              const nowTime = now.getTime();
+
+              // If alarm is scheduled more than 1 hour in the future, don't cancel it
+              // It might be a valid alarm that just doesn't have metadata yet
+              if (fireTime > nowTime + 3600000) {
+                logger.info(
+                  makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+                  `Skipping cancellation of future alarm ${alarmId} (fires at ${fireDate.toISOString()}) - may be valid but missing metadata`
+                );
+                shouldCancel = false;
+              } else if (fireTime < nowTime) {
+                // Past-due alarm (fired more than 1 second ago to account for timing)
+                isPastDue = true;
+                logger.info(
+                  makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+                  `Detected past-due orphan alarm ${alarmId}: fired at ${fireDate.toISOString()}, now is ${now.toISOString()}, schedule type: ${scheduleType}`
+                );
+              }
+            } catch (e) {
+              logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Error parsing nextFireDate for alarm ${alarmId}:`, e);
+              // If we can't parse the date, proceed with cancellation
+            }
+          }
+
+          if (shouldCancel) {
+            logger.info(
+              makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+              `Alarm ${alarmId} appears to be orphaned (${isPastDue ? 'past-due' : 'future'}, ${isOneTime ? 'one-time' : 'repeat'}). ` +
+              `Schedule type: ${scheduleType || 'unknown'}, ` +
+              `Valid alarm IDs: ${Array.from(validAlarmIds).slice(0, 5).join(', ')}${validAlarmIds.size > 5 ? '...' : ''}, ` +
+              `Category: ${alarm.config?.category || 'none'}, ` +
+              `Config notificationId: ${alarm.config?.data?.notificationId || 'none'}`
+            );
+            try {
+              // Use cancelAlarm for all orphan alarms - it handles both AlarmManager cancellation and storage deletion
+              // This is simpler and more reliable than trying to use deleteAlarmFromStorage
+              logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Attempting to cancel orphaned alarm: ${alarmId} (pastDue=${isPastDue}, oneTime=${isOneTime}, platform=${Platform.OS})`);
+              await NativeAlarmManager.cancelAlarm(alarmId);
+              logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Successfully cancelled orphaned alarm: ${alarmId}`);
+              cancelled++;
+            } catch (error: any) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              // Don't count "not found" errors as failures - alarm may have already been cleaned up
+              if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+                logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Failed to cancel orphaned alarm ${alarmId}:`, error);
+                failures++;
+              } else {
+                logger.info(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), `Orphaned alarm ${alarmId} already cleaned up (not found)`);
+                cancelled++; // Count as success since it's already cleaned up
+              }
+            }
+          }
+        } else {
+          logger.info(
+            makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+            `Alarm ${alarmId} is valid (${matchReason}), keeping it`
+          );
+        }
+      } catch (alarmError) {
+        const errorMessage = alarmError instanceof Error ? alarmError.message : String(alarmError);
+        const errorStack = alarmError instanceof Error ? alarmError.stack : undefined;
+        logger.error(
+          makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+          `Error processing alarm ${alarm?.id || 'unknown'}: ${errorMessage}`,
+          errorStack ? { stack: errorStack } : alarmError
+        );
+        failures++;
+        // Continue with next alarm
       }
     }
   } catch (error) {
-    logger.error(makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'), 'Failed to cancel alarm orphans:', error);
+    // Log error details in multiple ways to ensure we capture it
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    const errorName = error instanceof Error ? error.name : typeof error;
+    const errorString = error instanceof Error ? error.toString() : JSON.stringify(error);
+
+    console.error('[cancelAlarmOrphans] Error caught:', {
+      error,
+      errorMessage,
+      errorStack,
+      errorName,
+      errorString,
+      errorType: typeof error,
+      errorConstructor: error?.constructor?.name
+    });
+
+    logger.error(
+      makeLogHeader(LOG_FILE, 'cancelAlarmOrphans'),
+      `Failed to cancel alarm orphans: ${errorMessage || errorString || 'Unknown error'}`,
+      {
+        errorName,
+        errorMessage,
+        errorStack,
+        errorString,
+        errorType: typeof error,
+        rawError: error
+      }
+    );
     failures++;
   }
 
@@ -298,7 +444,7 @@ async function ensurePlatformMatchesDB(
 
     // iOS-only: Track if we need to replenish daily alarm windows (call once per pass, not per parent)
     let iosNeedsDailyAlarmReplenish = false;
-    
+
     for (const parent of dbScheduledParents) {
       try {
         const existsOnPlatform = platformNotificationIds.has(parent.notificationId);
@@ -332,7 +478,7 @@ async function ensurePlatformMatchesDB(
         ) {
           iosNeedsDailyAlarmReplenish = true;
         }
-        
+
         // Android: Continue calling per-parent (existing behavior)
         if (
           Platform.OS === 'android' &&
@@ -358,7 +504,7 @@ async function ensurePlatformMatchesDB(
         failures++;
       }
     }
-    
+
     // iOS-only: Call replenisher once per reconcile pass (not per parent)
     if (Platform.OS === 'ios' && iosNeedsDailyAlarmReplenish && alarmPermissionAuthorized && notificationPermissionGranted) {
       try {
@@ -453,6 +599,9 @@ export async function reconcileOrphansOnStartup(t?: (key: string) => string): Pr
   try {
     logger.info(makeLogHeader(LOG_FILE, 'reconcileOrphansOnStartup'), 'Starting orphan reconciliation');
 
+    // Wrap each step in try-catch to prevent one failure from crashing the entire process
+    // This prevents app restarts caused by unhandled errors
+
     // Check permissions
     let notificationPermissionGranted = false;
     let alarmPermissionAuthorized = false;
@@ -478,26 +627,44 @@ export async function reconcileOrphansOnStartup(t?: (key: string) => string): Pr
     const dbParentIds = new Set(dbScheduledParents.map(p => p.notificationId));
 
     // Step 1: Cancel platform extras (true orphans)
-    const step1Result = await cancelPlatformOrphans(dbParentIds);
-    summary.cancelledPlatformOrphans = step1Result.cancelled;
-    summary.cancelledAlarmOrphans = step1Result.alarmCancelled;
-    summary.failures += step1Result.failures;
+    try {
+      const step1Result = await cancelPlatformOrphans(dbParentIds);
+      summary.cancelledPlatformOrphans = step1Result.cancelled;
+      summary.cancelledAlarmOrphans = step1Result.alarmCancelled;
+      summary.failures += step1Result.failures;
+    } catch (step1Error) {
+      logger.error(makeLogHeader(LOG_FILE, 'reconcileOrphansOnStartup'), 'Step 1 (cancel platform orphans) failed:', step1Error);
+      summary.failures++;
+      // Continue with other steps even if this one fails
+    }
 
     // Step 2: Ensure platform matches DB (auto-heal)
     if (notificationPermissionGranted || alarmPermissionAuthorized) {
-      const step2Result = await ensurePlatformMatchesDB(
-        dbScheduledParents,
-        notificationPermissionGranted,
-        alarmPermissionAuthorized
-      );
-      summary.rescheduledItems = step2Result.rescheduled;
-      summary.failures += step2Result.failures;
+      try {
+        const step2Result = await ensurePlatformMatchesDB(
+          dbScheduledParents,
+          notificationPermissionGranted,
+          alarmPermissionAuthorized
+        );
+        summary.rescheduledItems = step2Result.rescheduled;
+        summary.failures += step2Result.failures;
+      } catch (step2Error) {
+        logger.error(makeLogHeader(LOG_FILE, 'reconcileOrphansOnStartup'), 'Step 2 (ensure platform matches DB) failed:', step2Error);
+        summary.failures++;
+        // Continue with other steps even if this one fails
+      }
     }
 
     // Step 3: Cancel platform items that DB says shouldn't exist
-    const step3Result = await cancelDbRemovedItems(dbParentIds);
-    summary.cancelledDbRemovedItems = step3Result.cancelled;
-    summary.failures += step3Result.failures;
+    try {
+      const step3Result = await cancelDbRemovedItems(dbParentIds);
+      summary.cancelledDbRemovedItems = step3Result.cancelled;
+      summary.failures += step3Result.failures;
+    } catch (step3Error) {
+      logger.error(makeLogHeader(LOG_FILE, 'reconcileOrphansOnStartup'), 'Step 3 (cancel DB removed items) failed:', step3Error);
+      summary.failures++;
+      // Continue even if this step fails
+    }
 
     // Log summary
     logger.info(makeLogHeader(LOG_FILE, 'reconcileOrphansOnStartup'), 'Orphan reconciliation complete:', summary);

@@ -1,9 +1,11 @@
 import * as Crypto from 'expo-crypto';
 import * as Notifications from 'expo-notifications';
 import * as SQLite from 'expo-sqlite';
+import { NativeAlarmManager } from 'notifier-alarm-manager';
 import { Platform } from 'react-native';
 import { logger, makeLogHeader } from './logger';
 import { ANDROID_NOTIFICATION_CHANNEL_ID } from './notification-channel';
+import { getDailyRollingWindowSize } from './rolling-window-config';
 
 const LOG_FILE = 'utils/database.ts';
 
@@ -254,6 +256,7 @@ export const initDatabase = async () => {
         createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
         updatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
         cancelledAt TEXT DEFAULT NULL,
+        firedAt TEXT DEFAULT NULL,
         UNIQUE(notificationId, fireDateTime)
       );
     `);
@@ -401,6 +404,15 @@ export const initDatabase = async () => {
       } catch (error: any) {
         if (!error.message?.includes('duplicate column')) {
           logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: timeZoneMode column may already exist in archivedNotification');
+        }
+      }
+
+      // Add firedAt column to dailyAlarmInstance table (idempotent)
+      try {
+        await db.execAsync(`ALTER TABLE dailyAlarmInstance ADD COLUMN firedAt TEXT DEFAULT NULL;`);
+      } catch (error: any) {
+        if (!error.message?.includes('duplicate column')) {
+          logger.info(makeLogHeader(LOG_FILE, 'initDatabase'), 'Note: firedAt column may already exist in dailyAlarmInstance');
         }
       }
 
@@ -1370,6 +1382,170 @@ export const markDailyAlarmInstanceCancelled = async (alarmId: string): Promise<
   } catch (error: any) {
     logger.error(makeLogHeader(LOG_FILE, 'markDailyAlarmInstanceCancelled'), 'Failed to mark daily alarm instance as cancelled:', error);
     throw new Error(`Failed to mark daily alarm instance as cancelled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Check if an alarmId exists in dailyAlarmInstance table
+export const isDailyAlarmInstance = async (alarmId: string): Promise<boolean> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    const instance = await db.getFirstAsync<{ alarmId: string }>(
+      `SELECT alarmId FROM dailyAlarmInstance WHERE alarmId = '${escapeSql(alarmId)}';`
+    );
+    return !!instance;
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'isDailyAlarmInstance'), 'Failed to check if alarm is daily instance:', error);
+    return false; // Return false on error to be safe
+  }
+};
+
+// Mark a daily alarm instance as fired (not active, but not cancelled either)
+export const markDailyAlarmInstanceFired = async (alarmId: string): Promise<void> => {
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+    const escapeSql = (str: string) => str.replace(/'/g, "''");
+    await db.execAsync(
+      `UPDATE dailyAlarmInstance 
+       SET isActive = 0, firedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP 
+       WHERE alarmId = '${escapeSql(alarmId)}' AND isActive = 1;`
+    );
+    logger.info(makeLogHeader(LOG_FILE, 'markDailyAlarmInstanceFired'), `Marked daily alarm instance as fired: ${alarmId}`);
+  } catch (error: any) {
+    logger.error(makeLogHeader(LOG_FILE, 'markDailyAlarmInstanceFired'), 'Failed to mark daily alarm instance as fired:', error);
+    throw new Error(`Failed to mark daily alarm instance as fired: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+/**
+ * Clean up fired daily alarm instances from native storage
+ * This ensures fired alarms are removed even if user didn't tap the notification
+ */
+export const cleanupFiredDailyAlarmsFromNative = async (): Promise<void> => {
+  if (Platform.OS !== 'android') return;
+
+  try {
+    const db = await openDatabase();
+    await initDatabase();
+
+    // Get all fired daily alarm instances (isActive = 0, firedAt IS NOT NULL)
+    const firedInstances = await db.getAllAsync<{ alarmId: string }>(
+      `SELECT alarmId FROM dailyAlarmInstance WHERE isActive = 0 AND firedAt IS NOT NULL;`
+    );
+
+    if (firedInstances.length === 0) return;
+
+    logger.info(makeLogHeader(LOG_FILE, 'cleanupFiredDailyAlarmsFromNative'),
+      `[Android] Cleaning up ${firedInstances.length} fired alarms from native storage`);
+
+    // Clean up from native storage using cancelAlarm (more reliable than deleteAlarmFromStorage)
+    // cancelAlarm handles both AlarmManager cancellation and storage deletion
+    // For already-fired alarms, this is safe - cancelling an already-fired alarm is a no-op
+    for (const instance of firedInstances) {
+      try {
+        await NativeAlarmManager.cancelAlarm(instance.alarmId);
+        logger.info(makeLogHeader(LOG_FILE, 'cleanupFiredDailyAlarmsFromNative'),
+          `[Android] Cleaned up fired alarm from native: ${instance.alarmId}`);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        // Don't log "not found" errors as failures - alarm may have already been cleaned up
+        if (!errorMessage.includes('not found') && !errorMessage.includes('ALARM_NOT_FOUND')) {
+          logger.error(makeLogHeader(LOG_FILE, 'cleanupFiredDailyAlarmsFromNative'),
+            `[Android] Failed to clean up fired alarm from native: ${instance.alarmId}`, error);
+        } else {
+          logger.info(makeLogHeader(LOG_FILE, 'cleanupFiredDailyAlarmsFromNative'),
+            `[Android] Fired alarm already cleaned up: ${instance.alarmId}`);
+        }
+      }
+    }
+  } catch (error) {
+    logger.error(makeLogHeader(LOG_FILE, 'cleanupFiredDailyAlarmsFromNative'),
+      '[Android] Failed to clean up fired alarms:', error);
+  }
+};
+
+/**
+ * Clean up past-due one-time alarms from native storage
+ * One-time alarms that have fired should be removed from native storage
+ */
+export const cleanupPastDueOneTimeAlarms = async (): Promise<void> => {
+  if (Platform.OS !== 'android') return;
+
+  try {
+    const allAlarms = await NativeAlarmManager.getAllAlarms();
+    const now = new Date();
+    let cleanedCount = 0;
+
+    for (const alarm of allAlarms) {
+      // Only process one-time alarms (type === 'fixed')
+      if (alarm.schedule?.type !== 'fixed') continue;
+
+      // Check if alarm is past-due
+      if (alarm.nextFireDate) {
+        try {
+          // Handle both Date objects and string/number timestamps
+          let fireDate: Date;
+          if (alarm.nextFireDate instanceof Date) {
+            fireDate = alarm.nextFireDate;
+          } else if (typeof alarm.nextFireDate === 'string') {
+            // Try parsing as ISO string first, then as timestamp
+            fireDate = new Date(alarm.nextFireDate);
+            if (isNaN(fireDate.getTime())) {
+              // Might be a numeric string (timestamp in milliseconds)
+              const timestamp = parseFloat(alarm.nextFireDate);
+              fireDate = isNaN(timestamp) ? new Date() : new Date(timestamp);
+            }
+          } else if (typeof alarm.nextFireDate === 'number') {
+            // Timestamp - if it's a small number (< year 2000 in seconds), assume seconds, otherwise milliseconds
+            fireDate = alarm.nextFireDate < 946684800000 
+              ? new Date(alarm.nextFireDate * 1000) 
+              : new Date(alarm.nextFireDate);
+          } else {
+            fireDate = new Date();
+          }
+          
+          const nowTime = now.getTime();
+          const fireTime = fireDate.getTime();
+          
+          if (fireTime < nowTime) {
+            // Past-due one-time alarm - check if it's in dailyAlarmInstance (shouldn't be)
+            const isDailyInstance = await isDailyAlarmInstance(alarm.id);
+
+            if (!isDailyInstance) {
+              // This is a past-due one-time alarm, clean it up
+              try {
+                logger.info(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
+                  `[Android] Cleaning up past-due one-time alarm: ${alarm.id} (fired at ${fireDate.toISOString()}, now is ${now.toISOString()})`);
+                await NativeAlarmManager.deleteAlarmFromStorage?.(alarm.id);
+                logger.info(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
+                  `[Android] Successfully cleaned up past-due one-time alarm: ${alarm.id}`);
+                cleanedCount++;
+              } catch (error) {
+                logger.error(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
+                  `[Android] Failed to clean up past-due one-time alarm: ${alarm.id}`, error);
+              }
+            } else {
+              logger.info(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
+                `[Android] Skipping cleanup of ${alarm.id} - it's a daily alarm instance, not a one-time alarm`);
+            }
+          }
+        } catch (e) {
+          // Skip if we can't parse the date
+          logger.error(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
+            `[Android] Failed to parse nextFireDate for alarm: ${alarm.id}`, e);
+        }
+      }
+    }
+
+    if (cleanedCount > 0) {
+      logger.info(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
+        `[Android] Cleaned up ${cleanedCount} past-due one-time alarms`);
+    }
+  } catch (error) {
+    logger.error(makeLogHeader(LOG_FILE, 'cleanupPastDueOneTimeAlarms'),
+      '[Android] Failed to clean up past-due one-time alarms:', error);
   }
 };
 
@@ -2356,10 +2532,13 @@ export const ensureRollingWindowNotificationInstances = async (): Promise<void> 
         minute = startDate.getMinutes();
 
         // Find the latest scheduled date or use scheduleDateTime
+        // Get ALL active instances (not filtered by time) to find the true latest
+        // This prevents scheduling extra notifications when some instances are filtered out but still active
         let baseDate = new Date(notification.scheduleDateTime);
-        if (activeInstances.length > 0) {
-          // Use the latest scheduled instance date
-          const latestInstance = activeInstances[activeInstances.length - 1];
+        const allActiveInstances = await getAllActiveRepeatNotificationInstances(notification.notificationId);
+        if (allActiveInstances.length > 0) {
+          // Find the latest fireDateTime (allActiveInstances is already sorted ASC)
+          const latestInstance = allActiveInstances[allActiveInstances.length - 1];
           baseDate = new Date(latestInstance.fireDateTime);
           // Move to next occurrence based on repeat option
           if (repeatOption === 'daily') {
@@ -2416,21 +2595,22 @@ export const ensureRollingWindowNotificationInstances = async (): Promise<void> 
   }
 };
 
-// Higher-level orchestrator: Schedule daily alarm window (7 fixed alarms)
+// Higher-level orchestrator: Schedule daily alarm window (rolling window size fixed alarms)
 // This should be called from scheduleForm.tsx when scheduling a daily alarm
 export const scheduleDailyAlarmWindow = async (
   notificationId: string,
   baseDate: Date,
   time: { hour: number; minute: number },
   alarmConfig: { title: string; body?: string; sound?: string; color?: string; data?: any; actions?: any[] },
-  count: number = 7
+  count?: number
 ): Promise<void> => {
   const { NativeAlarmManager } = await import('notifier-alarm-manager');
 
+  const windowSize = count ?? getDailyRollingWindowSize();
   const now = new Date();
   const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
 
-  // Calculate dates for the next 7 occurrences
+  // Calculate dates for the next rolling window size occurrences
   // CRITICAL: First alarm must be exactly on baseDate (with hour/minute set)
   // This ensures daily alarms begin on the user-selected date
   const dates: Date[] = [];
@@ -2447,7 +2627,7 @@ export const scheduleDailyAlarmWindow = async (
   }
   // If baseDate is in the future, currentDate is already set correctly to baseDate
 
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < windowSize; i++) {
     const alarmDate = new Date(currentDate);
     alarmDate.setHours(time.hour, time.minute, 0, 0);
 
@@ -2462,22 +2642,77 @@ export const scheduleDailyAlarmWindow = async (
 
   // Schedule each alarm
   for (const alarmDate of dates) {
+    const fireDateTimeIso = alarmDate.toISOString();
+    const alarmId = Crypto.randomUUID();
+
     try {
-      const fireDateTimeIso = alarmDate.toISOString();
+      // Check if this alarm instance already exists in DB before scheduling
+      // Only check ACTIVE instances to allow rescheduling of cancelled/fired alarms
+      const activeInstances = await getAllActiveDailyAlarmInstances(notificationId);
+      const alreadyExistsInDb = activeInstances.some(inst => inst.fireDateTime === fireDateTimeIso);
 
-      // iOS-only: Check if this alarm instance already exists in DB before scheduling
-      // This prevents duplicate OS alarms when replenisher runs overlap or migration happens
-      if (Platform.OS === 'ios') {
-        const allInstances = await getAllDailyAlarmInstances(notificationId);
-        const alreadyExists = allInstances.some(inst => inst.fireDateTime === fireDateTimeIso);
-
-        if (alreadyExists) {
-          logger.info(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `[iOS] Skipping duplicate alarm instance for ${notificationId} at ${fireDateTimeIso}`);
-          continue;
+      // Android: Also check native storage to prevent duplicates
+      let alreadyExistsInNative = false;
+      if (Platform.OS === 'android') {
+        try {
+          const allNativeAlarms = await NativeAlarmManager.getAllAlarms();
+          const targetTime = alarmDate.getTime();
+          
+          alreadyExistsInNative = allNativeAlarms.some(alarm => {
+            // Check if alarm belongs to this notification
+            const alarmNotificationId = alarm.config?.data?.notificationId;
+            if (alarmNotificationId !== notificationId) return false;
+            
+            // Check if alarm fires at the same time (within 1 minute tolerance)
+            if (!alarm.nextFireDate) return false;
+            
+            try {
+              let fireDate: Date;
+              if (alarm.nextFireDate instanceof Date) {
+                fireDate = alarm.nextFireDate;
+              } else if (typeof alarm.nextFireDate === 'string') {
+                fireDate = new Date(alarm.nextFireDate);
+                if (isNaN(fireDate.getTime())) {
+                  const timestamp = parseFloat(alarm.nextFireDate);
+                  fireDate = isNaN(timestamp) ? new Date() : new Date(timestamp);
+                }
+              } else if (typeof alarm.nextFireDate === 'number') {
+                fireDate = alarm.nextFireDate < 946684800000 
+                  ? new Date(alarm.nextFireDate * 1000) 
+                  : new Date(alarm.nextFireDate);
+              } else {
+                return false;
+              }
+              
+              const fireTime = fireDate.getTime();
+              // Check if times match within 1 minute tolerance
+              return Math.abs(fireTime - targetTime) < 60000;
+            } catch {
+              return false;
+            }
+          });
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), 
+            `[Android] Failed to check native storage for duplicates:`, error);
         }
       }
 
-      const alarmId = Crypto.randomUUID();
+      if (alreadyExistsInDb || alreadyExistsInNative) {
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), 
+          `[${Platform.OS}] Skipping duplicate alarm instance for ${notificationId} at ${fireDateTimeIso} (inDb=${alreadyExistsInDb}, inNative=${alreadyExistsInNative})`);
+        continue;
+      }
+
+      // CRITICAL: Insert into database FIRST before scheduling to native
+      // This ensures we track the alarm even if scheduling succeeds but something fails after
+      await insertDailyAlarmInstance(
+        notificationId,
+        alarmId,
+        fireDateTimeIso
+      );
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `[${Platform.OS}] Inserted alarm instance into DB: ${alarmId} for ${notificationId} at ${fireDateTimeIso}`);
+
+      // Now schedule to native storage
       const alarmSchedule = {
         id: alarmId,
         type: 'fixed' as const,
@@ -2506,17 +2741,16 @@ export const scheduleDailyAlarmWindow = async (
           actions: alarmConfig.actions,
         }
       );
-
-      // Persist the alarm instance id for future cancellation.
-      // Use alarmResult.id (unprefixed logical id). Older builds may have stored platformAlarmId;
-      // cancellation code handles legacy rows, but new rows should store the canonical id.
-      await insertDailyAlarmInstance(
-        notificationId,
-        alarmResult.id || alarmId,
-        fireDateTimeIso
-      );
+      logger.info(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `[${Platform.OS}] Scheduled alarm to native: ${alarmResult.id || alarmId} for ${notificationId} at ${fireDateTimeIso}`);
     } catch (error) {
-      logger.error(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `Failed to schedule daily alarm instance for ${alarmDate.toISOString()}:`, error);
+      logger.error(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `[${Platform.OS}] Failed to schedule alarm for ${notificationId} at ${fireDateTimeIso}:`, error);
+      // If we inserted into DB but scheduling failed, mark as cancelled
+      try {
+        await markDailyAlarmInstanceCancelled(alarmId);
+        logger.info(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `[${Platform.OS}] Marked failed alarm instance as cancelled: ${alarmId}`);
+      } catch (cleanupError) {
+        logger.error(makeLogHeader(LOG_FILE, 'scheduleDailyAlarmWindow'), `[${Platform.OS}] Failed to mark alarm instance as cancelled:`, cleanupError);
+      }
       // Continue with other dates even if one fails
     }
   }
@@ -2525,9 +2759,12 @@ export const scheduleDailyAlarmWindow = async (
 // iOS-only mutex to prevent overlapping replenishment runs
 let iosReplenisherInFlight: Promise<void> | null = null;
 
+// Android mutex to prevent overlapping replenishment runs
+let androidReplenisherInFlight: Promise<void> | null = null;
+
 // Ensure daily alarm window for all daily notifications (replenisher)
 export const ensureDailyAlarmWindowForAllNotifications = async (): Promise<void> => {
-  // iOS-only: Prevent overlapping runs with a mutex
+  // iOS: Prevent overlapping runs with a mutex
   if (Platform.OS === 'ios') {
     if (iosReplenisherInFlight) {
       logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), '[iOS] Replenisher already in flight, waiting...');
@@ -2547,7 +2784,52 @@ export const ensureDailyAlarmWindowForAllNotifications = async (): Promise<void>
     return;
   }
 
-  // Android: Run directly without mutex
+  // Android: Use database semaphore to prevent overlapping runs (persists across app restarts)
+  if (Platform.OS === 'android') {
+    // Check if migration is already in flight using database semaphore
+    const semaphore = await getRollingWindowSemaphore();
+    if (semaphore?.activeAlarmMigration === 1) {
+      const lastRun = semaphore.lastAlarmMigrationAt ? new Date(semaphore.lastAlarmMigrationAt) : null;
+      const now = new Date();
+
+      // If last run was more than 30 seconds ago, assume it crashed and reset
+      if (lastRun && (now.getTime() - lastRun.getTime()) > 30000) {
+        logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'),
+          '[Android] Alarm replenisher appears stuck, resetting semaphore');
+        await updateRollingWindowAlarmSemaphore(0, null);
+      } else {
+        logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'),
+          '[Android] Alarm replenisher already in flight (database semaphore), skipping...');
+        return;
+      }
+    }
+
+    // Also check in-memory mutex as a fast-path check
+    if (androidReplenisherInFlight) {
+      logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), '[Android] Replenisher already in flight (in-memory mutex), waiting...');
+      await androidReplenisherInFlight;
+      return;
+    }
+
+    // Set semaphore to "in flight" in database
+    await updateRollingWindowAlarmSemaphore(1, new Date().toISOString());
+
+    // Also set in-memory mutex for fast-path checking
+    androidReplenisherInFlight = (async () => {
+      try {
+        await ensureDailyAlarmWindowForAllNotificationsInternal();
+      } finally {
+        androidReplenisherInFlight = null;
+        // Clear database semaphore
+        await updateRollingWindowAlarmSemaphore(0, new Date().toISOString());
+      }
+    })();
+
+    await androidReplenisherInFlight;
+    return;
+  }
+
+  // Fallback (shouldn't reach here)
   await ensureDailyAlarmWindowForAllNotificationsInternal();
 };
 
@@ -2558,6 +2840,16 @@ const ensureDailyAlarmWindowForAllNotificationsInternal = async (): Promise<void
   const now = new Date();
   const nowIso = now.toISOString();
   const oneMinuteFromNow = new Date(now.getTime() + 60 * 1000);
+
+  // Android: Clean up fired alarms from native storage before replenishing
+  if (Platform.OS === 'android') {
+    await cleanupFiredDailyAlarmsFromNative();
+    await cleanupPastDueOneTimeAlarms();
+    
+    // Small delay to ensure cleanup completes and storage is synced
+    // This prevents race conditions where replenisher reads stale data
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
 
   // Filter for daily notifications with alarms enabled AND still using rolling-window/window strategy
   // Once migrated to native daily repeat (repeatMethod === 'expo' or 'alarmNative'), we stop replenishing the alarm window
@@ -2577,60 +2869,146 @@ const ensureDailyAlarmWindowForAllNotificationsInternal = async (): Promise<void
     }
   );
 
+  const windowSize = getDailyRollingWindowSize();
+
   for (const notification of dailyNotifications) {
     try {
-      // Get current active future instances
+      // Get current active future instances from database
+      // Use nowIso (not oneMinuteFromNow) to count ALL future alarms, even if < 1 minute away
+      // The 1-minute threshold should only apply when scheduling new alarms, not when counting existing ones
       const activeInstances = await getActiveFutureDailyAlarmInstances(
         notification.notificationId,
-        oneMinuteFromNow.toISOString()
+        nowIso
       );
 
-      // If we have fewer than 7, schedule more
-      if (activeInstances.length < 7) {
-        const needed = 7 - activeInstances.length;
+      // Android: Also check native storage to ensure we don't schedule duplicates
+      // Count alarms in native storage that belong to this notification
+      let nativeAlarmCount = 0;
+      if (Platform.OS === 'android') {
+        try {
+          const allNativeAlarms = await NativeAlarmManager.getAllAlarms();
+          const nowTime = now.getTime();
+          
+          nativeAlarmCount = allNativeAlarms.filter(alarm => {
+            // Check if alarm belongs to this notification
+            const alarmNotificationId = alarm.config?.data?.notificationId;
+            if (alarmNotificationId !== notification.notificationId) return false;
+            
+            // Check if alarm is in the future
+            if (!alarm.nextFireDate) return false;
+            
+            try {
+              let fireDate: Date;
+              if (alarm.nextFireDate instanceof Date) {
+                fireDate = alarm.nextFireDate;
+              } else if (typeof alarm.nextFireDate === 'string') {
+                fireDate = new Date(alarm.nextFireDate);
+                if (isNaN(fireDate.getTime())) {
+                  const timestamp = parseFloat(alarm.nextFireDate);
+                  fireDate = isNaN(timestamp) ? new Date() : new Date(timestamp);
+                }
+              } else if (typeof alarm.nextFireDate === 'number') {
+                fireDate = alarm.nextFireDate < 946684800000 
+                  ? new Date(alarm.nextFireDate * 1000) 
+                  : new Date(alarm.nextFireDate);
+              } else {
+                return false;
+              }
+              
+              const fireTime = fireDate.getTime();
+              // Count all alarms in the future (even if < 1 minute away)
+              // The 1-minute threshold should only apply when scheduling new alarms, not when counting existing ones
+              return fireTime > nowTime;
+            } catch {
+              return false;
+            }
+          }).length;
+          
+          logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), 
+            `[Android] Found ${nativeAlarmCount} active alarms in native storage for ${notification.notificationId}, ${activeInstances.length} in database`);
+        } catch (error) {
+          logger.error(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), 
+            `[Android] Failed to check native alarms for ${notification.notificationId}:`, error);
+        }
+      }
+
+      // Use the maximum of database count and native count to prevent duplicates
+      // This handles cases where native storage has alarms not tracked in DB
+      const effectiveActiveCount = Platform.OS === 'android' 
+        ? Math.max(activeInstances.length, nativeAlarmCount)
+        : activeInstances.length;
+
+      // If we have fewer than rolling window size, schedule more
+      if (effectiveActiveCount < windowSize) {
+        const needed = windowSize - effectiveActiveCount;
 
         // Parse the notification trigger to get time
-        // iOS-only: If trigger lacks hour/minute (e.g., DATE_WINDOW), derive from scheduleDateTime
+        // For Android alarms, notificationTrigger may not exist or may not have hour/minute
+        // Always derive from scheduleDateTime for Android to ensure correct time
         let hour = 8;
         let minute = 0;
-        if (notification.notificationTrigger) {
-          const trigger = notification.notificationTrigger as any;
-          if (trigger.hour !== undefined) hour = trigger.hour;
-          if (trigger.minute !== undefined) minute = trigger.minute;
-        }
 
-        // iOS-only: If trigger doesn't have hour/minute (e.g., DATE_WINDOW), derive from scheduleDateTime
-        if (Platform.OS === 'ios' && (!notification.notificationTrigger ||
-          (notification.notificationTrigger as any).hour === undefined ||
-          (notification.notificationTrigger as any).minute === undefined)) {
+        if (Platform.OS === 'android') {
+          // Android: Always derive from scheduleDateTime for alarm-only daily repeats
           const scheduleDate = new Date(notification.scheduleDateTime);
           hour = scheduleDate.getHours();
           minute = scheduleDate.getMinutes();
-          logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), `[iOS] Derived hour=${hour}, minute=${minute} from scheduleDateTime for ${notification.notificationId}`);
+          logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), `[Android] Derived hour=${hour}, minute=${minute} from scheduleDateTime for ${notification.notificationId}`);
+        } else if (Platform.OS === 'ios') {
+          // iOS: Try to get from notificationTrigger first, fall back to scheduleDateTime
+          if (notification.notificationTrigger) {
+            const trigger = notification.notificationTrigger as any;
+            if (trigger.hour !== undefined) hour = trigger.hour;
+            if (trigger.minute !== undefined) minute = trigger.minute;
+          }
+
+          // If trigger doesn't have hour/minute (e.g., DATE_WINDOW), derive from scheduleDateTime
+          if (!notification.notificationTrigger ||
+            (notification.notificationTrigger as any).hour === undefined ||
+            (notification.notificationTrigger as any).minute === undefined) {
+            const scheduleDate = new Date(notification.scheduleDateTime);
+            hour = scheduleDate.getHours();
+            minute = scheduleDate.getMinutes();
+            logger.info(makeLogHeader(LOG_FILE, 'ensureDailyAlarmWindowForAllNotifications'), `[iOS] Derived hour=${hour}, minute=${minute} from scheduleDateTime for ${notification.notificationId}`);
+          }
         }
 
         // Find the latest scheduled date or use scheduleDateTime
+        // Get ALL active instances (not filtered by time) to find the true latest
+        // This prevents scheduling extra alarms when some alarms are filtered out but still active
         let baseDate = new Date(notification.scheduleDateTime);
-        if (activeInstances.length > 0) {
-          // Use the latest scheduled instance date
-          const latestInstance = activeInstances[activeInstances.length - 1];
+        const allActiveInstances = await getAllActiveDailyAlarmInstances(notification.notificationId);
+        if (allActiveInstances.length > 0) {
+          // Find the latest fireDateTime (allActiveInstances is already sorted ASC)
+          const latestInstance = allActiveInstances[allActiveInstances.length - 1];
           baseDate = new Date(latestInstance.fireDateTime);
           baseDate.setDate(baseDate.getDate() + 1); // Start from next day
         }
 
-        // Schedule the needed alarms with basic config (message will come from notification)
+        // Schedule the needed alarms with config matching the original notification
         await scheduleDailyAlarmWindow(
           notification.notificationId,
           baseDate,
           { hour, minute },
           {
-            title: notification.message || 'Daily Alarm',
+            title: notification.title,
+            body: notification.message,
+            sound: 'thenotifier',
             color: '#8ddaff',
             data: {
               notificationId: notification.notificationId,
+              title: notification.title,
+              message: notification.message,
               note: notification.note || '',
               link: notification.link || '',
+              // Pass calendar event data if this is a calendar event
+              ...(notification.calendarId ? { calendarId: notification.calendarId } : {}),
+              ...(notification.originalEventId ? { originalEventId: notification.originalEventId } : {}),
             },
+            actions: [
+              { icon: 'ic_cancel', behavior: 'dismiss', title: 'Dismiss', id: 'dismiss' },
+              { icon: 'ic_snooze', snoozeDuration: 5, behavior: 'snooze', title: 'Snooze 5m', id: 'snooze' },
+            ],
           },
           needed
         );
